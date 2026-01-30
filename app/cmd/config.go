@@ -129,10 +129,14 @@ Multi-queue format (existing deployment/ folder format):
 var configRemoveCmd = &cobra.Command{
 	Use:   "remove [queue_name]",
 	Short: "Remove a queue configuration",
-	Long: `Remove a queue configuration from the database.
+	Long: `Remove a queue configuration from the database and all associated Redis data.
+
+By default, removal fails if the queue has pending tasks.
+Use --force to remove even if tasks exist.
 
 Examples:
   runqy config remove myqueue
+  runqy config remove myqueue --force
   runqy config remove --name myqueue
 
 Remote mode:
@@ -141,6 +145,30 @@ Remote mode:
 	RunE: runConfigRemove,
 }
 
+// configSyncCmd syncs Redis with PostgreSQL
+var configSyncCmd = &cobra.Command{
+	Use:   "sync",
+	Short: "Sync Redis with PostgreSQL (find/remove orphaned queues)",
+	Long: `Audit Redis for queues not in PostgreSQL and optionally clean them up.
+
+By default, performs a dry-run showing orphaned queues.
+Use --clean to actually remove orphaned queue data from Redis.
+Use --force with --clean to remove even if queues have tasks.
+
+Examples:
+  runqy config sync                    # Dry-run: show orphaned queues
+  runqy config sync --clean            # Remove empty orphaned queues
+  runqy config sync --clean --force    # Remove all orphaned queues
+
+Note: This command is local-only and cannot be used in remote mode.`,
+	RunE: runConfigSync,
+}
+
+var (
+	syncClean bool
+	syncForce bool
+)
+
 func init() {
 	rootCmd.AddCommand(configCmd)
 	configCmd.AddCommand(configListCmd)
@@ -148,6 +176,7 @@ func init() {
 	configCmd.AddCommand(configValidateCmd)
 	configCmd.AddCommand(configCreateCmd)
 	configCmd.AddCommand(configRemoveCmd)
+	configCmd.AddCommand(configSyncCmd)
 
 	// Reload/Validate flags
 	configReloadCmd.Flags().StringVar(&configListDir, "dir", "", "Config directory (defaults to QUEUE_WORKERS_DIR)")
@@ -166,6 +195,11 @@ func init() {
 
 	// Remove flags
 	configRemoveCmd.Flags().StringVar(&removeName, "name", "", "Queue name to remove")
+	configRemoveCmd.Flags().BoolVar(&removeForce, "force", false, "Force removal even if queue has pending tasks")
+
+	// Sync flags
+	configSyncCmd.Flags().BoolVar(&syncClean, "clean", false, "Actually remove orphaned queues (default is dry-run)")
+	configSyncCmd.Flags().BoolVar(&syncForce, "force", false, "Force removal even if queues have tasks")
 }
 
 func runConfigList(cmd *cobra.Command, args []string) error {
@@ -381,9 +415,9 @@ func runConfigReloadRemote() error {
 }
 
 func runConfigValidate(cmd *cobra.Command, args []string) error {
-	// Validate is local-only
+	// Validate is local-only - always run locally regardless of saved credentials
 	if IsRemoteMode() {
-		return fmt.Errorf("config validate is local-only and cannot be used in remote mode")
+		fmt.Println("Note: config validate runs locally (ignoring remote server settings)")
 	}
 
 	cfg := GetConfig()
@@ -780,10 +814,10 @@ func runConfigRemoveLocal(queueName string) error {
 	}
 	defer redisAddr.RDB.Close()
 
-	store := queueworker.NewStore(pgDB, redisAddr.RDB)
+	store := queueworker.NewStoreWithAsynq(pgDB, redisAddr.RDB, redisAddr.AsynqOpt)
 	ctx := context.Background()
 
-	// Check if queue exists
+	// Check if queue exists in DB
 	exists, err := store.Exists(ctx, queueName)
 	if err != nil {
 		return fmt.Errorf("failed to check if queue exists: %w", err)
@@ -793,17 +827,21 @@ func runConfigRemoveLocal(queueName string) error {
 		return fmt.Errorf("queue '%s' not found", queueName)
 	}
 
-	// Delete the queue
-	if err := store.Delete(ctx, queueName); err != nil {
+	// Check if queue has tasks (unless --force)
+	if !removeForce {
+		stats, err := store.GetQueueStats(ctx, queueName)
+		if err == nil && stats != nil && !stats.IsEmpty {
+			return fmt.Errorf("queue '%s' has tasks (pending=%d, active=%d, scheduled=%d, retry=%d). Use --force to delete anyway",
+				queueName, stats.Pending, stats.Active, stats.Scheduled, stats.Retry)
+		}
+	}
+
+	// Delete the queue with full Redis cleanup
+	if err := store.DeleteQueueFull(ctx, queueName, removeForce); err != nil {
 		return fmt.Errorf("failed to delete queue: %w", err)
 	}
 
-	// Unregister from asynq
-	if err := store.UnregisterAsynqQueues(ctx, []string{queueName}); err != nil {
-		fmt.Printf("Warning: failed to unregister queue from asynq: %v\n", err)
-	}
-
-	fmt.Printf("Queue '%s' deleted successfully\n", queueName)
+	fmt.Printf("Queue '%s' deleted successfully (including all Redis data)\n", queueName)
 	return nil
 }
 
@@ -815,5 +853,98 @@ func runConfigRemoveRemote(queueName string) error {
 	}
 
 	fmt.Printf("Queue '%s' deleted successfully\n", queueName)
+	return nil
+}
+
+func runConfigSync(cmd *cobra.Command, args []string) error {
+	// Sync is local-only - always run locally regardless of saved credentials
+	if IsRemoteMode() {
+		fmt.Println("Note: config sync runs locally (ignoring remote server settings)")
+	}
+
+	// Build PostgreSQL connection
+	cfg := GetConfig()
+	pgDB, err := models.BuildPostgresDB(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+	defer pgDB.Close()
+
+	redisAddr, err := models.BuildRedisConns()
+	if err != nil {
+		return fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+	defer redisAddr.RDB.Close()
+
+	store := queueworker.NewStoreWithAsynq(pgDB, redisAddr.RDB, redisAddr.AsynqOpt)
+	ctx := context.Background()
+
+	if !syncClean {
+		// Dry-run: just list orphaned queues
+		orphaned, err := store.ListOrphanedQueues(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list orphaned queues: %w", err)
+		}
+
+		if len(orphaned) == 0 {
+			fmt.Println("No orphaned queues found. Redis and PostgreSQL are in sync.")
+			return nil
+		}
+
+		fmt.Printf("Found %d orphaned queue(s) in Redis (not in PostgreSQL):\n\n", len(orphaned))
+
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "QUEUE\tPENDING\tACTIVE\tSCHEDULED\tRETRY\tARCHIVED\tCOMPLETED")
+
+		for _, queueName := range orphaned {
+			stats, err := store.GetQueueStats(ctx, queueName)
+			if err != nil {
+				fmt.Fprintf(w, "%s\t-\t-\t-\t-\t-\t-\n", queueName)
+				continue
+			}
+			fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\n",
+				queueName, stats.Pending, stats.Active, stats.Scheduled, stats.Retry, stats.Archived, stats.Completed)
+		}
+		w.Flush()
+
+		fmt.Println()
+		fmt.Println("Use --clean to remove empty orphaned queues, or --clean --force to remove all.")
+		return nil
+	}
+
+	// Actually clean up orphaned queues
+	result, err := store.CleanupOrphanedQueues(ctx, syncForce)
+	if err != nil {
+		return fmt.Errorf("failed to cleanup orphaned queues: %w", err)
+	}
+
+	if len(result.Orphaned) == 0 {
+		fmt.Println("No orphaned queues found. Redis and PostgreSQL are in sync.")
+		return nil
+	}
+
+	fmt.Printf("Found %d orphaned queue(s):\n", len(result.Orphaned))
+
+	if len(result.Cleaned) > 0 {
+		fmt.Printf("\nCleaned %d queue(s):\n", len(result.Cleaned))
+		for _, q := range result.Cleaned {
+			fmt.Printf("  - %s\n", q)
+		}
+	}
+
+	if len(result.Skipped) > 0 {
+		fmt.Printf("\nSkipped %d non-empty queue(s):\n", len(result.Skipped))
+		for _, q := range result.Skipped {
+			fmt.Printf("  - %s (use --force to remove)\n", q)
+		}
+	}
+
+	if len(result.Errors) > 0 {
+		fmt.Printf("\nErrors (%d):\n", len(result.Errors))
+		for _, e := range result.Errors {
+			fmt.Printf("  - %s\n", e)
+		}
+	}
+
 	return nil
 }

@@ -143,7 +143,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	})
 
 	// Initialize queue worker store (database for configs, Redis for asynq)
-	qwStore := queueworker.NewStore(db, redisAddr.RDB)
+	qwStore := queueworker.NewStoreWithAsynq(db, redisAddr.RDB, redisAddr.AsynqOpt)
 
 	// Clean up stale workers from previous runs
 	ctx := context.Background()

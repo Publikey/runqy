@@ -434,11 +434,13 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 
 // DeleteQueueConfig deletes a queue configuration
 // @Summary Delete a queue configuration
-// @Description Delete a queue configuration by name
+// @Description Delete a queue configuration by name. By default fails if queue has pending tasks. Use force=true to delete anyway.
 // @Tags workers
 // @Produce json
 // @Param queue_name path string true "Queue name"
+// @Param force query bool false "Force deletion even if queue has pending tasks"
 // @Success 200 {object} map[string]string
+// @Failure 400 {object} map[string]string "Queue has pending tasks"
 // @Failure 404 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /workers/queues/{queue_name} [delete]
@@ -450,6 +452,7 @@ func DeleteQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 			return
 		}
 
+		force := c.Query("force") == "true"
 		ctx := c.Request.Context()
 
 		// Check if queue exists
@@ -464,19 +467,27 @@ func DeleteQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 			return
 		}
 
-		// Delete the queue
-		if err := store.Delete(ctx, queueName); err != nil {
+		// Check if queue has tasks (unless force)
+		if !force {
+			stats, err := store.GetQueueStats(ctx, queueName)
+			if err == nil && stats != nil && !stats.IsEmpty {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": fmt.Sprintf("queue '%s' has pending tasks", queueName),
+					"stats": stats,
+					"hint":  "Use ?force=true to delete anyway",
+				})
+				return
+			}
+		}
+
+		// Delete the queue with full Redis cleanup
+		if err := store.DeleteQueueFull(ctx, queueName, force); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		// Unregister from asynq
-		if err := store.UnregisterAsynqQueues(ctx, []string{queueName}); err != nil {
-			log.Printf("Warning: failed to unregister queue from asynq: %v", err)
-		}
-
 		c.JSON(http.StatusOK, gin.H{
-			"message": fmt.Sprintf("Queue '%s' deleted successfully", queueName),
+			"message": fmt.Sprintf("Queue '%s' deleted successfully (including all Redis data)", queueName),
 		})
 	}
 }
