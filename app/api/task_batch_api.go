@@ -10,6 +10,8 @@ import (
 	queueworker "github.com/Publikey/runqy/queues"
 	t "github.com/Publikey/runqy/tasks"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/redis/go-redis/v9"
 )
@@ -21,10 +23,21 @@ type BatchTaskRequest struct {
 	Jobs    []json.RawMessage `json:"jobs" binding:"required" swaggertype:"array,object"`
 }
 
+// BatchJobWithDeps represents a single job in a batch that may have dependencies
+type BatchJobWithDeps struct {
+	Data                json.RawMessage `json:"data,omitempty"`
+	Ref                 string          `json:"_ref,omitempty"`
+	DependsOn           []string        `json:"depends_on,omitempty"`
+	DependsOnRef        []string        `json:"depends_on_ref,omitempty"`
+	OnParentFailure     string          `json:"on_parent_failure,omitempty"`
+	InjectParentResults bool            `json:"inject_parent_results,omitempty"`
+}
+
 // BatchTaskResponse contains the results of batch enqueue
 type BatchTaskResponse struct {
 	Enqueued int      `json:"enqueued"`
 	Failed   int      `json:"failed"`
+	Waiting  int      `json:"waiting,omitempty"`
 	TaskIDs  []string `json:"task_ids"`
 	Errors   []string `json:"errors,omitempty"`
 }
@@ -114,50 +127,172 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 		}
 		var taskEntries []taskEntry
 
-		for i, jobData := range req.Jobs {
-			payload := json.RawMessage(jobData)
-
-			// Create task
-			task, err := t.NewGenericTask(queue, payload)
-			if err != nil {
-				response.Failed++
-				response.Errors = append(response.Errors, err.Error())
-				continue
-			}
-
-			// Enqueue task
-			opts := []asynq.Option{
-				asynq.Timeout(time.Duration(timeout) * time.Second),
-				asynq.Queue(queue),
-				asynq.MaxRetry(3),
-				asynq.Retention(24 * time.Hour),
-			}
-
-			taskInfo, err := asynqClient.Enqueue(task, opts...)
-			if err != nil {
-				response.Failed++
-				response.Errors = append(response.Errors, err.Error())
-				continue
-			}
-
-			// Queue metadata update in pipeline (non-blocking)
-			pipe.HSet(ctx, "asynq:t:"+taskInfo.ID, "queue", queue)
-			taskEntries = append(taskEntries, taskEntry{taskID: taskInfo.ID, queue: queue})
-
-			response.TaskIDs = append(response.TaskIDs, taskInfo.ID)
-			response.Enqueued++
-
-			// Flush pipeline every 100 jobs to prevent memory buildup
-			if (i+1)%100 == 0 {
-				if _, err := pipe.Exec(ctx); err != nil {
-					response.Errors = append(response.Errors, fmt.Sprintf("pipeline flush error at job %d: %v", i+1, err))
+		// First pass: check if any jobs have dependency fields
+		hasDeps := false
+		var parsedJobs []BatchJobWithDeps
+		for _, jobData := range req.Jobs {
+			var job BatchJobWithDeps
+			if err := json.Unmarshal(jobData, &job); err == nil {
+				if len(job.DependsOn) > 0 || len(job.DependsOnRef) > 0 || job.Ref != "" {
+					hasDeps = true
 				}
-				pipe = rdb.Pipeline()
+			}
+			parsedJobs = append(parsedJobs, job)
+		}
+
+		// If no deps, use fast path (original logic)
+		if !hasDeps {
+			for i, jobData := range req.Jobs {
+				payload := json.RawMessage(jobData)
+
+				task, err := t.NewGenericTask(queue, payload)
+				if err != nil {
+					response.Failed++
+					response.Errors = append(response.Errors, err.Error())
+					continue
+				}
+
+				opts := []asynq.Option{
+					asynq.Timeout(time.Duration(timeout) * time.Second),
+					asynq.Queue(queue),
+					asynq.MaxRetry(3),
+					asynq.Retention(24 * time.Hour),
+				}
+
+				taskInfo, err := asynqClient.Enqueue(task, opts...)
+				if err != nil {
+					response.Failed++
+					response.Errors = append(response.Errors, err.Error())
+					continue
+				}
+
+				pipe.HSet(ctx, "asynq:t:"+taskInfo.ID, "queue", queue)
+				taskEntries = append(taskEntries, taskEntry{taskID: taskInfo.ID, queue: queue})
+				response.TaskIDs = append(response.TaskIDs, taskInfo.ID)
+				response.Enqueued++
+
+				if (i+1)%100 == 0 {
+					if _, err := pipe.Exec(ctx); err != nil {
+						response.Errors = append(response.Errors, fmt.Sprintf("pipeline flush error at job %d: %v", i+1, err))
+					}
+					pipe = rdb.Pipeline()
+				}
+			}
+		} else {
+			// Dependency-aware path
+			var db *sqlx.DB
+			if dbVal, ok := c.Get("db"); ok {
+				db, _ = dbVal.(*sqlx.DB)
+			}
+			if db == nil {
+				c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{"database not available for dependency tracking"}})
+				return
+			}
+
+			// Build ref → taskID map (pre-generate IDs for jobs with _ref)
+			refMap := make(map[string]string)
+			jobIDs := make([]string, len(parsedJobs))
+			for i, job := range parsedJobs {
+				id := uuid.New().String()
+				jobIDs[i] = id
+				if job.Ref != "" {
+					refMap[job.Ref] = id
+				}
+			}
+
+			now := time.Now().Unix()
+
+			for i, job := range parsedJobs {
+				taskID := jobIDs[i]
+
+				// Determine payload
+				var payload json.RawMessage
+				if job.Data != nil {
+					payload = job.Data
+				} else {
+					payload = req.Jobs[i]
+				}
+
+				// Resolve depends_on_ref to real IDs
+				allDeps := make([]string, 0, len(job.DependsOn)+len(job.DependsOnRef))
+				allDeps = append(allDeps, job.DependsOn...)
+				for _, ref := range job.DependsOnRef {
+					if realID, ok := refMap[ref]; ok {
+						allDeps = append(allDeps, realID)
+					} else {
+						response.Failed++
+						response.Errors = append(response.Errors, fmt.Sprintf("job %d: unknown _ref '%s'", i, ref))
+						response.TaskIDs = append(response.TaskIDs, "")
+						continue
+					}
+				}
+
+				onParentFailure := job.OnParentFailure
+				if onParentFailure == "" {
+					onParentFailure = "fail"
+				}
+
+				if len(allDeps) == 0 {
+					// No deps — enqueue immediately
+					task, err := t.NewGenericTask(queue, payload)
+					if err != nil {
+						response.Failed++
+						response.Errors = append(response.Errors, err.Error())
+						response.TaskIDs = append(response.TaskIDs, "")
+						continue
+					}
+
+					opts := []asynq.Option{
+						asynq.Timeout(time.Duration(timeout) * time.Second),
+						asynq.Queue(queue),
+						asynq.MaxRetry(3),
+						asynq.Retention(24 * time.Hour),
+						asynq.TaskID(taskID),
+					}
+
+					_, err = asynqClient.Enqueue(task, opts...)
+					if err != nil {
+						response.Failed++
+						response.Errors = append(response.Errors, err.Error())
+						response.TaskIDs = append(response.TaskIDs, "")
+						continue
+					}
+
+					pipe.HSet(ctx, "asynq:t:"+taskID, "queue", queue)
+					taskEntries = append(taskEntries, taskEntry{taskID: taskID, queue: queue})
+					response.TaskIDs = append(response.TaskIDs, taskID)
+					response.Enqueued++
+				} else {
+					// Has deps — store as waiting task
+					_, err := db.Exec(
+						`INSERT INTO waiting_tasks (task_id, queue, payload, on_parent_failure, inject_parent_results, timeout, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+						taskID, queue, []byte(payload), onParentFailure, job.InjectParentResults, timeout, now,
+					)
+					if err != nil {
+						response.Failed++
+						response.Errors = append(response.Errors, fmt.Sprintf("job %d: failed to store waiting task: %v", i, err))
+						response.TaskIDs = append(response.TaskIDs, "")
+						continue
+					}
+
+					// Store queue metadata in Redis
+					pipe.HSet(ctx, "asynq:t:"+taskID, "queue", queue)
+
+					for _, depID := range allDeps {
+						db.Exec(
+							`INSERT INTO task_dependencies (child_id, parent_id, parent_state, created_at) VALUES ($1, $2, 'pending', $3) ON CONFLICT (child_id, parent_id) DO NOTHING`,
+							taskID, depID, now,
+						)
+					}
+
+					response.TaskIDs = append(response.TaskIDs, taskID)
+					response.Waiting++
+				}
 			}
 		}
 
 		// Execute remaining pipeline commands
-		if len(taskEntries) > 0 {
+		if len(taskEntries) > 0 || hasDeps {
 			pipe.SAdd(ctx, "asynq:queues", queue)
 			if _, err := pipe.Exec(ctx); err != nil {
 				response.Errors = append(response.Errors, fmt.Sprintf("final pipeline error: %v", err))

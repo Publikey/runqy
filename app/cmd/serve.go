@@ -16,6 +16,7 @@ import (
 	"github.com/Publikey/runqy/models"
 	"github.com/Publikey/runqy/monitoring"
 	queueworker "github.com/Publikey/runqy/queues"
+	"github.com/Publikey/runqy/tasks"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/Publikey/runqy/watcher"
 
@@ -413,8 +414,12 @@ func runServe(cmd *cobra.Command, args []string) {
 		})
 	})
 
-	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt)
+	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt, db)
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
+
+	// Start background dependency resolver
+	resolverCtx, resolverCancel := context.WithCancel(context.Background())
+	go tasks.StartDependencyResolver(resolverCtx, db, redisClient, redisAddr.RDB, debugMode)
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.StaticFile("/swagger.yaml", "./docs/swagger.yaml")
@@ -457,6 +462,9 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	sig := <-quit
 	log.Printf("Received %v, shutting down...", sig)
+
+	// Stop dependency resolver
+	resolverCancel()
 
 	// Stop watchers with timeout to prevent blocking forever
 	watcherDone := make(chan struct{})

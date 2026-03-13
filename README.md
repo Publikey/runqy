@@ -40,6 +40,8 @@
 🐍 **Go server + Python SDK** — Robust Go server, familiar Python developer experience. [Learn more →](https://docs.runqy.com/python-sdk/)  
 📊 **Web monitoring UI** — Real-time dashboard with Prometheus metrics. [Learn more →](https://docs.runqy.com/guides/monitoring/)  
 
+🔗 **Task Dependencies** — Build multi-step workflows with fan-out/fan-in patterns. Chain tasks, run them in parallel, and aggregate results — all with simple dependency declarations. [Learn more →](docs/task-dependencies.md)
+
 ### Feature Comparison
 
 | Feature | Runqy | Celery | Temporal | Modal | BullMQ | Inngest |
@@ -50,6 +52,7 @@
 | **Deployment YAML** | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
 | **Built-in secrets** | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
 | **Monitoring UI** | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ |
+| **Task Dependencies** | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
 
 ---
 

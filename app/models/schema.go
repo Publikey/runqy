@@ -125,6 +125,56 @@ CREATE INDEX IF NOT EXISTS idx_vault_entries_vault_id ON vault_entries(vault_id)
 CREATE INDEX IF NOT EXISTS idx_vault_entries_key ON vault_entries(vault_id, key);
 `
 
+// PostgreSQL schema for task dependencies
+const postgresTaskDepsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id            SERIAL PRIMARY KEY,
+    child_id      TEXT NOT NULL,
+    parent_id     TEXT NOT NULL,
+    parent_state  TEXT NOT NULL DEFAULT 'pending',
+    created_at    BIGINT NOT NULL,
+    UNIQUE(child_id, parent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_deps_parent ON task_dependencies(parent_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_child ON task_dependencies(child_id);
+
+CREATE TABLE IF NOT EXISTS waiting_tasks (
+    id                      SERIAL PRIMARY KEY,
+    task_id                 TEXT NOT NULL UNIQUE,
+    queue                   TEXT NOT NULL,
+    payload                 JSONB NOT NULL,
+    on_parent_failure       TEXT NOT NULL DEFAULT 'fail',
+    inject_parent_results   BOOLEAN NOT NULL DEFAULT false,
+    timeout                 BIGINT NOT NULL DEFAULT 0,
+    created_at              BIGINT NOT NULL
+);
+`
+
+// SQLite schema for task dependencies
+const sqliteTaskDepsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id      TEXT NOT NULL,
+    parent_id     TEXT NOT NULL,
+    parent_state  TEXT NOT NULL DEFAULT 'pending',
+    created_at    BIGINT NOT NULL,
+    UNIQUE(child_id, parent_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_deps_parent ON task_dependencies(parent_id);
+CREATE INDEX IF NOT EXISTS idx_task_deps_child ON task_dependencies(child_id);
+
+CREATE TABLE IF NOT EXISTS waiting_tasks (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id                 TEXT NOT NULL UNIQUE,
+    queue                   TEXT NOT NULL,
+    payload                 TEXT NOT NULL,
+    on_parent_failure       TEXT NOT NULL DEFAULT 'fail',
+    inject_parent_results   INTEGER NOT NULL DEFAULT 0,
+    timeout                 BIGINT NOT NULL DEFAULT 0,
+    created_at              BIGINT NOT NULL
+);
+`
+
 // PostgreSQL schema for admin_user (authentication)
 const postgresAdminUserSchemaSQL = `
 CREATE TABLE IF NOT EXISTS admin_user (
@@ -240,6 +290,28 @@ func EnsureSchema(db *sqlx.DB, debug bool) error {
 		}
 		if debug {
 			log.Println("[SCHEMA] Admin user table created successfully")
+		}
+	}
+
+	// Check and create task_dependencies tables
+	taskDepsExist, err := tableExists(db, "task_dependencies")
+	if err != nil {
+		return fmt.Errorf("failed to check task_dependencies table existence: %w", err)
+	}
+
+	if taskDepsExist {
+		if debug {
+			log.Println("[SCHEMA] Task dependencies tables already exist")
+		}
+	} else {
+		if debug {
+			log.Println("[SCHEMA] Creating task dependencies tables...")
+		}
+		if err := createTaskDepsSchema(db); err != nil {
+			return fmt.Errorf("failed to create task dependencies schema: %w", err)
+		}
+		if debug {
+			log.Println("[SCHEMA] Task dependencies tables created successfully")
 		}
 	}
 
@@ -376,4 +448,19 @@ func migrateSubQueuesEnabled(db *sqlx.DB, debug bool) error {
 		log.Println("[SCHEMA] Added 'enabled' column to sub_queues table")
 	}
 	return nil
+}
+
+// createTaskDepsSchema creates the task_dependencies and waiting_tasks tables
+func createTaskDepsSchema(db *sqlx.DB) error {
+	driverName := db.DriverName()
+
+	var schemaSQL string
+	if driverName == "sqlite" {
+		schemaSQL = sqliteTaskDepsSchemaSQL
+	} else {
+		schemaSQL = postgresTaskDepsSchemaSQL
+	}
+
+	_, err := db.Exec(schemaSQL)
+	return err
 }

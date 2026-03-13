@@ -14,6 +14,8 @@ import (
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/utilities"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/redis/go-redis/v9"
 )
@@ -70,20 +72,67 @@ func GetTaskStatus(c *gin.Context) {
 	inspector := asynq.NewInspector(redisOpt)
 	defer inspector.Close()
 
-	var resp *asynq.TaskInfo
+	// Helper to fetch dependency info if DB is available
+	fetchDeps := func(taskID string) ([]models.DependencyInfo, string, bool) {
+		dbVal, ok := c.Get("db")
+		if !ok {
+			return nil, "", false
+		}
+		db, ok := dbVal.(*sqlx.DB)
+		if !ok {
+			return nil, "", false
+		}
+		var deps []models.TaskDependency
+		if err := db.Select(&deps, `SELECT * FROM task_dependencies WHERE child_id = $1`, taskID); err != nil || len(deps) == 0 {
+			return nil, "", false
+		}
+		infos := make([]models.DependencyInfo, len(deps))
+		for i, d := range deps {
+			infos[i] = models.DependencyInfo{ID: d.ParentID, State: d.ParentState}
+		}
+		// Get waiting task settings
+		var wt models.WaitingTask
+		if err := db.Get(&wt, `SELECT * FROM waiting_tasks WHERE task_id = $1`, taskID); err == nil {
+			return infos, wt.OnParentFailure, wt.InjectParentResults
+		}
+		return infos, "", false
+	}
 
-	if c.Query("wait") == "true" {
+	// Check if task is in waiting_tasks (not yet in asynq)
+	var resp *asynq.TaskInfo
+	resp, err = inspector.GetTaskInfo(queue, uuid)
+	if err != nil {
+		// Task might be in waiting state (not yet enqueued to asynq)
+		dbVal, ok := c.Get("db")
+		if ok {
+			db, ok := dbVal.(*sqlx.DB)
+			if ok {
+				var wt models.WaitingTask
+				if dbErr := db.Get(&wt, `SELECT * FROM waiting_tasks WHERE task_id = $1`, uuid); dbErr == nil {
+					depInfos, opf, ipr := fetchDeps(uuid)
+					taskDoc := models.GetTaskInfoDoc{
+						ID:                  wt.TaskID,
+						Payload:             string(wt.Payload),
+						State:               "waiting",
+						Queue:               wt.Queue,
+						DependsOn:           depInfos,
+						OnParentFailure:     opf,
+						InjectParentResults: ipr,
+					}
+					c.JSON(http.StatusOK, models.ResponseGet{Info: taskDoc})
+					return
+				}
+			}
+		}
+		c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{err.Error()}})
+		return
+	}
+
+	if c.Query("wait") == "true" && resp.State != asynq.TaskStateCompleted && resp.State != asynq.TaskStateArchived {
 		// Long poll: wait up to 30s for completed/archived
 		resp, err = waitForResult(c.Request.Context(), inspector, queue, uuid)
 		if err != nil {
 			c.JSON(http.StatusRequestTimeout, models.APIErrorResponse{Errors: []string{err.Error()}})
-			return
-		}
-	} else {
-		// Instant: return current state immediately
-		resp, err = inspector.GetTaskInfo(queue, uuid)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{err.Error()}})
 			return
 		}
 	}
@@ -105,6 +154,14 @@ func GetTaskStatus(c *gin.Context) {
 		CompletedAt:   resp.CompletedAt,
 		Result:        utilities.DecodeBase64OrReturnRaw(resp.Result),
 	}
+
+	// Attach dependency info if available
+	if depInfos, opf, ipr := fetchDeps(uuid); depInfos != nil {
+		taskDoc.DependsOn = depInfos
+		taskDoc.OnParentFailure = opf
+		taskDoc.InjectParentResults = ipr
+	}
+
 	response := models.ResponseGet{
 		Info: taskDoc,
 	}
@@ -170,16 +227,46 @@ func AddTask(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFunc {
             }
         }
 
+        // Extract optional dependency fields
+        var dependsOn []string
+        if depRaw, ok := rawBody["depends_on"]; ok {
+            if err := json.Unmarshal(depRaw, &dependsOn); err != nil {
+                c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{"invalid depends_on field: " + err.Error()}})
+                return
+            }
+        }
+        var onParentFailure string
+        if opfRaw, ok := rawBody["on_parent_failure"]; ok {
+            if err := json.Unmarshal(opfRaw, &onParentFailure); err != nil {
+                c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{"invalid on_parent_failure field: " + err.Error()}})
+                return
+            }
+        }
+        if onParentFailure == "" {
+            onParentFailure = "fail"
+        }
+        if onParentFailure != "fail" && onParentFailure != "ignore" {
+            c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{"on_parent_failure must be 'fail' or 'ignore'"}})
+            return
+        }
+        var injectParentResults bool
+        if iprRaw, ok := rawBody["inject_parent_results"]; ok {
+            if err := json.Unmarshal(iprRaw, &injectParentResults); err != nil {
+                c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{"invalid inject_parent_results field: " + err.Error()}})
+                return
+            }
+        }
+
         // Determine the data payload
         var dataBytes json.RawMessage
         if dataRaw, ok := rawBody["data"]; ok {
             // Nested format: use "data" field directly
             dataBytes = dataRaw
         } else {
-            // Flat format: collect all fields except queue and timeout
+            // Flat format: collect all fields except queue, timeout, and dependency fields
             flatData := make(map[string]json.RawMessage)
             for k, v := range rawBody {
-                if k != "queue" && k != "timeout" {
+                if k != "queue" && k != "timeout" && k != "depends_on" && k != "on_parent_failure" && k != "inject_parent_results" {
                     flatData[k] = v
                 }
             }
@@ -285,6 +372,24 @@ func AddTask(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFunc {
 			return
 		}
 
+		// Handle task dependencies
+		if len(dependsOn) > 0 {
+			dbVal, ok := c.Get("db")
+			if !ok {
+				c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{"database not available for dependency tracking"}})
+				return
+			}
+			db, ok := dbVal.(*sqlx.DB)
+			if !ok {
+				c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{"invalid database type"}})
+				return
+			}
+
+			resp, statusCode := handleDependentTask(c.Request.Context(), db, asynqClient, rdb, query, dependsOn, onParentFailure, injectParentResults, payloadToSend)
+			c.JSON(statusCode, resp)
+			return
+		}
+
 		info, err := _client.EnqueueGenericTask(asynqClient, rdb, query.Queue, query.Timeout, payloadToSend)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
@@ -315,6 +420,166 @@ func AddTask(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFunc {
 		c.JSON(http.StatusOK, response)
 	}
 
+}
+
+// handleDependentTask processes a task that has dependencies.
+// It validates parents, checks their states, and either enqueues immediately
+// or stores the task in waiting_tasks.
+func handleDependentTask(
+	ctx context.Context,
+	db *sqlx.DB,
+	asynqClient *asynq.Client,
+	rdb *redis.Client,
+	query models.GenericTask,
+	dependsOn []string,
+	onParentFailure string,
+	injectParentResults bool,
+	payloadToSend interface{},
+) (interface{}, int) {
+	now := time.Now().Unix()
+
+	// Marshal the payload for storage
+	var payloadBytes []byte
+	switch p := payloadToSend.(type) {
+	case json.RawMessage:
+		payloadBytes = p
+	default:
+		b, err := json.Marshal(p)
+		if err != nil {
+			return models.APIErrorResponse{Errors: []string{"failed to marshal payload: " + err.Error()}}, http.StatusInternalServerError
+		}
+		payloadBytes = b
+	}
+
+	// Generate a task ID for the waiting task
+	taskID := fmt.Sprintf("%s:%d:%d", query.Queue, now, time.Now().UnixNano())
+	// Use a UUID-style ID by hashing
+	taskID = generateTaskID()
+
+	// Validate each parent and check states
+	depInfos := make([]models.DependencyInfo, 0, len(dependsOn))
+	allResolved := true
+	hasFailed := false
+
+	for _, parentID := range dependsOn {
+		// Validate parent exists in Redis
+		taskKey := fmt.Sprintf("asynq:t:%s", parentID)
+		parentQueue, err := rdb.HGet(ctx, taskKey, "queue").Result()
+		if err == redis.Nil {
+			return models.APIErrorResponse{Errors: []string{fmt.Sprintf("parent task %s not found", parentID)}}, http.StatusBadRequest
+		}
+		if err != nil {
+			return models.APIErrorResponse{Errors: []string{fmt.Sprintf("failed to check parent task %s: %v", parentID, err)}}, http.StatusInternalServerError
+		}
+
+		// Check parent state via inspector
+		inspector := asynq.NewInspector(asynq.RedisClientOpt{
+			Addr:     rdb.Options().Addr,
+			Password: rdb.Options().Password,
+			DB:       rdb.Options().DB,
+		})
+		taskInfo, err := inspector.GetTaskInfo(parentQueue, parentID)
+		inspector.Close()
+
+		parentState := "pending"
+		if err == nil {
+			stateStr := taskInfo.State.String()
+			if stateStr == "completed" {
+				parentState = "completed"
+			} else if stateStr == "archived" || stateStr == "failed" {
+				parentState = stateStr
+				hasFailed = true
+			}
+		}
+
+		if parentState == "pending" || parentState == "active" {
+			allResolved = false
+		}
+
+		depInfos = append(depInfos, models.DependencyInfo{
+			ID:    parentID,
+			State: parentState,
+		})
+	}
+
+	// If a parent has failed and policy is "fail", reject
+	if hasFailed && onParentFailure == "fail" {
+		return models.APIErrorResponse{Errors: []string{"one or more parent tasks have failed"}}, http.StatusBadRequest
+	}
+
+	// If all deps already resolved, enqueue immediately
+	if allResolved {
+		info, err := _client.EnqueueGenericTask(asynqClient, rdb, query.Queue, query.Timeout, payloadToSend)
+		if err != nil {
+			return models.APIErrorResponse{Errors: []string{err.Error()}}, http.StatusBadRequest
+		}
+
+		// Still store dependency records for tracking
+		for _, dep := range depInfos {
+			db.Exec(
+				`INSERT INTO task_dependencies (child_id, parent_id, parent_state, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (child_id, parent_id) DO NOTHING`,
+				info.ID, dep.ID, dep.State, now,
+			)
+		}
+
+		taskDoc := models.AddTaskInfoDoc{
+			ID:      info.ID,
+			Type:    info.Type,
+			Payload: info.Payload,
+			State:   info.State.String(),
+			Queue:   info.Queue,
+		}
+		response := models.GenericResponsePost{
+			Info:                taskDoc,
+			Data:                query.Data,
+			DependsOn:           depInfos,
+			OnParentFailure:     onParentFailure,
+			InjectParentResults: injectParentResults,
+		}
+		return response, http.StatusOK
+	}
+
+	// Store in waiting_tasks and task_dependencies
+	_, err := db.Exec(
+		`INSERT INTO waiting_tasks (task_id, queue, payload, on_parent_failure, inject_parent_results, timeout, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		taskID, query.Queue, payloadBytes, onParentFailure, injectParentResults, query.Timeout, now,
+	)
+	if err != nil {
+		return models.APIErrorResponse{Errors: []string{"failed to store waiting task: " + err.Error()}}, http.StatusInternalServerError
+	}
+
+	// Store queue metadata in Redis for the waiting task too
+	rdb.HSet(ctx, "asynq:t:"+taskID, "queue", query.Queue)
+
+	for _, dep := range depInfos {
+		_, err := db.Exec(
+			`INSERT INTO task_dependencies (child_id, parent_id, parent_state, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT (child_id, parent_id) DO NOTHING`,
+			taskID, dep.ID, dep.State, now,
+		)
+		if err != nil {
+			return models.APIErrorResponse{Errors: []string{"failed to store dependency: " + err.Error()}}, http.StatusInternalServerError
+		}
+	}
+
+	taskDoc := models.AddTaskInfoDoc{
+		ID:      taskID,
+		State:   "waiting",
+		Queue:   query.Queue,
+		Payload: payloadBytes,
+	}
+	response := models.GenericResponsePost{
+		Info:                taskDoc,
+		Data:                query.Data,
+		DependsOn:           depInfos,
+		OnParentFailure:     onParentFailure,
+		InjectParentResults: injectParentResults,
+	}
+	return response, http.StatusOK
+}
+
+// generateTaskID creates a unique task ID using UUID
+func generateTaskID() string {
+	return uuid.New().String()
 }
 
 func waitForResult(ctx context.Context, i *asynq.Inspector, queue, taskID string) (*asynq.TaskInfo, error) {

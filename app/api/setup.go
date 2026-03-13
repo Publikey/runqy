@@ -7,6 +7,7 @@ import (
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/gin-gonic/gin"
+	"github.com/jmoiron/sqlx"
 	"github.com/Publikey/runqy/third_party/asynq"
 )
 
@@ -23,7 +24,15 @@ func GetVaultStore() *vaults.Store {
 	return globalVaultStore
 }
 
-func SetupAPI(r *gin.Engine, qwStore *queueworker.Store, qwConfigDir string, cfg *config.Config, redisOpt asynq.RedisClientOpt) {
+func SetupAPI(r *gin.Engine, qwStore *queueworker.Store, qwConfigDir string, cfg *config.Config, redisOpt asynq.RedisClientOpt, db ...*sqlx.DB) {
+	// If db is provided, inject it into gin context for dependency resolution
+	if len(db) > 0 && db[0] != nil {
+		r.Use(func(c *gin.Context) {
+			c.Set("db", db[0])
+			c.Next()
+		})
+	}
+
 	adminKey  := cfg.APIKey
 	workerKey := cfg.WorkerAPIKey
 	clientKey := cfg.ClientAPIKey
