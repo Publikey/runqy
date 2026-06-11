@@ -101,17 +101,30 @@ type SubQueueYAML struct {
 	Priority int    `yaml:"priority"`
 }
 
+// LimitsConfig holds per-queue task lifecycle overrides (resolved at enqueue and stamped onto
+// each task). Empty/nil fields fall back to the server-global defaults. Durations are Go
+// duration strings ("24h", "90s"); "0" explicitly disables (no expiry / no timeout).
+// Override applies at the parent-queue level; sub-queues inherit.
+type LimitsConfig struct {
+	MaxRetry       *int   `yaml:"max_retry,omitempty" json:"max_retry,omitempty"`
+	TTLCompleted   string `yaml:"ttl_completed,omitempty" json:"ttl_completed,omitempty"`
+	TTLArchived    string `yaml:"ttl_archived,omitempty" json:"ttl_archived,omitempty"`
+	PendingTimeout string `yaml:"pending_timeout,omitempty" json:"pending_timeout,omitempty"`
+	ActiveTimeout  string `yaml:"active_timeout,omitempty" json:"active_timeout,omitempty"`
+}
+
 // DeploymentYAML holds deployment configuration for external workers
 type DeploymentYAML struct {
-	GitURL             string   `yaml:"git_url"`
-	Branch             string   `yaml:"branch"`
-	CodePath           string   `yaml:"code_path,omitempty"` // Path within the repo to the code
-	StartupCmd         string   `yaml:"startup_cmd"`
-	Mode               string   `yaml:"mode,omitempty"` // "long_running" or "one_shot"
-	StartupTimeoutSecs int      `yaml:"startup_timeout_secs"`
-	RedisStorage       *bool    `yaml:"redis_storage,omitempty"`
-	Vaults             []string `yaml:"vaults,omitempty"`    // List of vault names to inject as env vars
-	GitToken           string   `yaml:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
+	GitURL             string        `yaml:"git_url"`
+	Branch             string        `yaml:"branch"`
+	CodePath           string        `yaml:"code_path,omitempty"` // Path within the repo to the code
+	StartupCmd         string        `yaml:"startup_cmd"`
+	Mode               string        `yaml:"mode,omitempty"` // "long_running" or "one_shot"
+	StartupTimeoutSecs int           `yaml:"startup_timeout_secs"`
+	RedisStorage       *bool         `yaml:"redis_storage,omitempty"`
+	Vaults             []string      `yaml:"vaults,omitempty"`    // List of vault names to inject as env vars
+	GitToken           string        `yaml:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
+	Limits             *LimitsConfig `yaml:"limits,omitempty"`    // Per-queue task lifecycle overrides
 }
 
 // Queue represents a parent queue with deployment configuration (stored in 'queues' table)
@@ -156,15 +169,16 @@ type QueueConfig struct {
 
 // DeploymentConfig is the runtime deployment configuration
 type DeploymentConfig struct {
-	GitURL             string   `json:"git_url"`
-	Branch             string   `json:"branch"`
-	CodePath           string   `json:"code_path,omitempty"`
-	StartupCmd         string   `json:"startup_cmd"`
-	Mode               string   `json:"mode,omitempty"`
-	StartupTimeoutSecs int      `json:"startup_timeout_secs"`
-	RedisStorage       *bool    `json:"redis_storage,omitempty"`
-	Vaults             []string `json:"vaults,omitempty"`    // List of vault names to inject as env vars
-	GitToken           string   `json:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
+	GitURL             string        `json:"git_url"`
+	Branch             string        `json:"branch"`
+	CodePath           string        `json:"code_path,omitempty"`
+	StartupCmd         string        `json:"startup_cmd"`
+	Mode               string        `json:"mode,omitempty"`
+	StartupTimeoutSecs int           `json:"startup_timeout_secs"`
+	RedisStorage       *bool         `json:"redis_storage,omitempty"`
+	Vaults             []string      `json:"vaults,omitempty"`    // List of vault names to inject as env vars
+	GitToken           string        `json:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
+	Limits             *LimitsConfig `json:"limits,omitempty"`    // Per-queue task lifecycle overrides (stored in deployment JSONB)
 }
 
 // QueueSummary is a lightweight version for listing queues

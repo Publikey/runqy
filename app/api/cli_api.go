@@ -10,6 +10,7 @@ import (
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/gin-gonic/gin"
 	"github.com/Publikey/runqy/third_party/asynq"
+	"github.com/redis/go-redis/v9"
 )
 
 // QueueInfoResponse represents queue information for CLI
@@ -351,6 +352,14 @@ func deleteTaskHandler(inspector *asynq.Inspector) gin.HandlerFunc {
 		if err := inspector.DeleteTask(queueName, taskID); err != nil {
 			c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{err.Error()}})
 			return
+		}
+
+		// Also remove the reverse-lookup key (asynq:t:<id>): it is not queue-scoped,
+		// so inspector.DeleteTask (which only touches asynq:{queue}:t:<id>) leaves it behind.
+		if rdb, ok := c.Get("rdb"); ok {
+			if redisClient, ok := rdb.(*redis.Client); ok {
+				redisClient.Del(c, "asynq:t:"+taskID)
+			}
 		}
 
 		c.JSON(http.StatusOK, gin.H{"message": "task deleted", "task_id": taskID})

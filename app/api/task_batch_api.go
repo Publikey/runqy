@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Publikey/runqy/client"
 	"github.com/Publikey/runqy/models"
 	queueworker "github.com/Publikey/runqy/queues"
 	t "github.com/Publikey/runqy/tasks"
@@ -69,10 +70,18 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 			return
 		}
 
-		// Get timeout (default 30s)
-		timeout := req.Timeout
-		if timeout == 0 {
-			timeout = 30
+		// Resolve task lifecycle limits from the parent queue config (server defaults ⊕ override).
+		parentQueue, _, _ := queueworker.ParseQueueName(queue)
+		limits := queueworker.DefaultLimits()
+		if pq, gerr := qwStore.GetQueue(c.Request.Context(), parentQueue); gerr == nil && pq != nil {
+			limits = queueworker.ResolveQueueLimits(pq)
+		}
+		// Active execution timeout the worker enforces: an explicit per-request timeout overrides
+		// the queue default. Note: unlike the old code we do NOT default this to 30s, so existing
+		// batches without an explicit timeout keep their (disabled-by-default) behaviour.
+		activeTimeout := limits.ActiveTimeout
+		if req.Timeout > 0 {
+			activeTimeout = time.Duration(req.Timeout) * time.Second
 		}
 
 		// Get asynq client and redis client (safe assertions)
@@ -127,10 +136,12 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 
 			// Enqueue task
 			opts := []asynq.Option{
-				asynq.Timeout(time.Duration(timeout) * time.Second),
 				asynq.Queue(queue),
-				asynq.MaxRetry(3),
-				asynq.Retention(24 * time.Hour),
+				asynq.MaxRetry(limits.MaxRetry),
+				asynq.Retention(limits.TTLCompleted), // inspector consistency; worker TTL is authoritative
+			}
+			if activeTimeout > 0 {
+				opts = append(opts, asynq.Timeout(activeTimeout))
 			}
 
 			taskInfo, err := asynqClient.Enqueue(task, opts...)
@@ -140,8 +151,17 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 				continue
 			}
 
-			// Queue metadata update in pipeline (non-blocking)
-			pipe.HSet(ctx, "asynq:t:"+taskInfo.ID, "queue", queue)
+			// Stamp resolved lifecycle values + reverse-lookup in the pipeline (non-blocking).
+			taskKey := "asynq:{" + queue + "}:t:" + taskInfo.ID
+			pipe.HSet(ctx, taskKey,
+				"ttl_completed", int64(limits.TTLCompleted.Seconds()),
+				"ttl_archived", int64(limits.TTLArchived.Seconds()),
+				"pending_timeout", int64(limits.PendingTimeout.Seconds()),
+				"active_timeout", int64(activeTimeout.Seconds()),
+			)
+			reverseKey := "asynq:t:" + taskInfo.ID
+			pipe.HSet(ctx, reverseKey, "queue", queue)
+			pipe.Expire(ctx, reverseKey, client.ReverseLookupTTL)
 			taskEntries = append(taskEntries, taskEntry{taskID: taskInfo.ID, queue: queue})
 
 			response.TaskIDs = append(response.TaskIDs, taskInfo.ID)

@@ -166,6 +166,10 @@ func (c *QueueWorkersYAML) Validate() error {
 		if q.Deployment.StartupCmd == "" {
 			return fmt.Errorf("queue '%s': deployment.startup_cmd is required", queueName)
 		}
+		// Reject malformed task lifecycle limits rather than silently ignoring them.
+		if err := q.Deployment.Limits.Validate(); err != nil {
+			return fmt.Errorf("queue '%s': deployment.%w", queueName, err)
+		}
 	}
 	return nil
 }
@@ -187,6 +191,7 @@ func (q *QueueYAML) ToQueueAndSubQueues(baseName string) (*Queue, []SubQueue) {
 			RedisStorage:       q.Deployment.RedisStorage,
 			Vaults:             q.Deployment.Vaults,
 			GitToken:           q.Deployment.GitToken,
+			Limits:             q.Deployment.Limits,
 		}
 	}
 
@@ -241,6 +246,7 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 			RedisStorage:       q.Deployment.RedisStorage,
 			Vaults:             q.Deployment.Vaults,
 			GitToken:           q.Deployment.GitToken,
+			Limits:             q.Deployment.Limits,
 		}
 	}
 

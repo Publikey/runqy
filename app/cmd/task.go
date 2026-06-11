@@ -9,6 +9,7 @@ import (
 
 	"github.com/Publikey/runqy/client"
 	"github.com/Publikey/runqy/models"
+	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/spf13/cobra"
 )
@@ -143,7 +144,9 @@ func runTaskEnqueue(cmd *cobra.Command, args []string) error {
 	asynqClient := asynq.NewClient(redisAddr.AsynqOpt)
 	defer asynqClient.Close()
 
-	taskInfo, err := client.EnqueueGenericTask(asynqClient, redisAddr.RDB, taskQueue, taskTimeout, payload)
+	// Local CLI enqueue uses server-default limits (env-driven); the server API path resolves
+	// per-queue overrides from the queue config.
+	taskInfo, err := client.EnqueueGenericTask(asynqClient, redisAddr.RDB, taskQueue, taskTimeout, payload, queueworker.DefaultLimits())
 	if err != nil {
 		return fmt.Errorf("failed to enqueue task: %w", err)
 	}

@@ -285,7 +285,14 @@ func AddTask(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFunc {
 			return
 		}
 
-		info, err := _client.EnqueueGenericTask(asynqClient, rdb, query.Queue, query.Timeout, payloadToSend)
+		// Resolve task lifecycle limits from the parent queue config (server defaults ⊕ override).
+		parentQueue, _, _ := queueworker.ParseQueueName(query.Queue)
+		limits := queueworker.DefaultLimits()
+		if pq, gerr := qwStore.GetQueue(c.Request.Context(), parentQueue); gerr == nil && pq != nil {
+			limits = queueworker.ResolveQueueLimits(pq)
+		}
+
+		info, err := _client.EnqueueGenericTask(asynqClient, rdb, query.Queue, query.Timeout, payloadToSend, limits)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
 			return
