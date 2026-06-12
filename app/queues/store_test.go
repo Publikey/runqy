@@ -295,3 +295,45 @@ func TestToQueueAndSubQueues_SetsEnabledTrue(t *testing.T) {
 	assert.Equal(t, DefaultSubQueueName, subQueues2[0].Name)
 	assert.True(t, subQueues2[0].Enabled, "default sub-queue should have Enabled=true")
 }
+
+// TestSave_PreservesSchemasAndDescription verifies that Save (used by the
+// dashboard, public API and CLI create/update paths, whose requests carry no
+// input/output schemas) does not wipe input_schema/output_schema/description
+// previously loaded from YAML. Regression test: every dashboard config edit
+// used to null these columns.
+func TestSave_PreservesSchemasAndDescription(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	required := true
+	queue := &Queue{
+		Name:         "sdxl",
+		InputSchema:  []FieldSchema{{Name: "prompt", Type: []string{"string"}, Required: &required}},
+		OutputSchema: []FieldSchema{{Name: "data", Type: []string{"array"}}},
+		Description:  "image generation",
+		Enabled:      true,
+	}
+	_, err := store.SaveQueue(ctx, queue)
+	require.NoError(t, err)
+
+	// Update via Save, as the dashboard "Edit Config" does (priority + deployment only).
+	err = store.Save(ctx, &QueueConfig{
+		Name:     "sdxl.priority",
+		Priority: 6,
+		Deployment: &DeploymentConfig{
+			GitURL:     "https://github.com/test/repo",
+			StartupCmd: "python main.py",
+		},
+	})
+	require.NoError(t, err)
+
+	got, err := store.GetQueue(ctx, "sdxl")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.Len(t, got.InputSchema, 1, "input_schema must survive a dashboard config edit")
+	assert.Equal(t, "prompt", got.InputSchema[0].Name)
+	require.Len(t, got.OutputSchema, 1, "output_schema must survive a dashboard config edit")
+	assert.Equal(t, "image generation", got.Description)
+	require.NotNil(t, got.Deployment, "deployment must be updated by Save")
+	assert.Equal(t, "https://github.com/test/repo", got.Deployment.GitURL)
+}

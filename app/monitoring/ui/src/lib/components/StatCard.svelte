@@ -23,22 +23,14 @@
 		error: 'text-error-500',
 		primary: 'text-primary-500'
 	};
-
-	const tintClasses: Record<Variant, string> = {
-		default: '',
-		success: 'rq-tint-success',
-		warning: 'rq-tint-warning',
-		error: 'rq-tint-error',
-		primary: 'rq-tint-primary'
-	};
 </script>
 
 {#if fullHref}
-<a href={fullHref} class="rq-card rq-card-interactive p-5 block {tintClasses[variant]}">
+<a href={fullHref} class="rq-card rq-card-interactive p-5 block">
 	<div class="flex items-start justify-between">
 		<div>
 			<p class="text-xs font-medium uppercase tracking-wider text-surface-400">{label}</p>
-			<p class="text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
+			<p class="text-xl md:text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
 		</div>
 		{#if icon}
 			<div class="p-2 rounded-lg" style="background: rgba(255,255,255,0.04);">
@@ -48,11 +40,11 @@
 	</div>
 </a>
 {:else}
-<div class="rq-card p-5 {tintClasses[variant]}">
+<div class="rq-card p-5">
 	<div class="flex items-start justify-between">
 		<div>
 			<p class="text-xs font-medium uppercase tracking-wider text-surface-400">{label}</p>
-			<p class="text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
+			<p class="text-xl md:text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
 		</div>
 		{#if icon}
 			<div class="p-2 rounded-lg" style="background: rgba(255,255,255,0.04);">

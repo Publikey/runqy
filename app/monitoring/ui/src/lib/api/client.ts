@@ -12,12 +12,14 @@ import type {
 	RedisInfo,
 	DailyStats,
 	DatabaseInfo,
+	SystemEnvInfo,
 	VaultSummary,
 	VaultDetail,
 	MetricsResponse,
 	QueueStatsResponse,
 	QueueConfigDetail,
-	DeploymentConfig
+	DeploymentConfig,
+	PlaygroundEnqueueResponse
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -109,8 +111,16 @@ export async function getTasks(
 	page: number = 1,
 	pageSize: number = 20
 ): Promise<TaskListResponse> {
+	// NB: the backend reads `size` (getPageOptions), not `page_size`.
 	return fetchJson(
-		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks?page_size=${pageSize}&page=${page}`
+		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks?size=${pageSize}&page=${page}`
+	);
+}
+
+// Fetch a single task directly (any state)
+export async function getTask(qname: string, taskId: string): Promise<Task> {
+	return fetchJson(
+		`${BASE_URL}/queues/${encodeURIComponent(qname)}/tasks/${encodeURIComponent(taskId)}`
 	);
 }
 
@@ -218,6 +228,11 @@ export async function getRedisInfo(): Promise<RedisInfo> {
 // Database API
 export async function getDatabaseInfo(): Promise<DatabaseInfo> {
 	return fetchJson(`${BASE_URL}/database_info`);
+}
+
+// System environment variables (read-only, secrets masked)
+export async function getSystemEnv(): Promise<SystemEnvInfo> {
+	return fetchJson(`${BASE_URL}/system/env`);
 }
 
 // Stats API
@@ -384,5 +399,18 @@ export async function deleteQueueConfig(name: string): Promise<{ message: string
 export async function restoreQueueConfig(name: string): Promise<{ message: string }> {
 	return fetchJson(`${BASE_URL}/queue_configs/${encodeURIComponent(name)}:restore`, {
 		method: 'POST'
+	});
+}
+
+// Playground API
+export async function playgroundEnqueue(
+	queue: string,
+	payload: unknown,
+	count: number = 1,
+	timeout: number = 0
+): Promise<PlaygroundEnqueueResponse> {
+	return fetchJson(`${BASE_URL}/playground/enqueue`, {
+		method: 'POST',
+		body: JSON.stringify({ queue, payload, count, timeout })
 	});
 }

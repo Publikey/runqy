@@ -292,15 +292,18 @@
 						{#if expandedId === task.id}
 							<tr class="bg-surface-100 dark:bg-surface-800">
 								<td colspan="7" class="p-4">
-									<div class="grid grid-cols-2 gap-4">
+									<!-- The table can scroll horizontally (min-width); keep the expanded
+									     detail pinned to the visible viewport so it reads without scrolling. -->
+									<div class="sticky left-0 max-w-[calc(100vw-3rem)] md:max-w-full space-y-4">
+									<div class="space-y-4">
 										<div>
 											<h4 class="text-sm font-semibold mb-2">Payload</h4>
-											<JsonViewer data={task.payload} collapsed={false} maxHeight="200px" />
+											<JsonViewer data={task.payload} collapsed={false} maxHeight="240px" />
 										</div>
 										{#if task.result}
 											<div>
 												<h4 class="text-sm font-semibold mb-2">Result</h4>
-												<JsonViewer data={task.result} collapsed={false} maxHeight="200px" />
+												<JsonViewer data={task.result} collapsed={false} maxHeight="240px" />
 											</div>
 										{/if}
 									</div>
@@ -311,7 +314,7 @@
 												class="p-3 rounded bg-error-100 dark:bg-error-900/30 text-error-700 dark:text-error-300 text-sm whitespace-pre-wrap">{task.error_message}</pre>
 										</div>
 									{/if}
-									<div class="mt-4 grid grid-cols-4 gap-4 text-sm">
+									<div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
 										<div>
 											<span class="text-surface-500">Timeout:</span>
 											<span class="font-mono ml-2">{task.timeout_seconds}s</span>
@@ -330,6 +333,7 @@
 												<span class="font-mono ml-2">{task.group}</span>
 											</div>
 										{/if}
+									</div>
 									</div>
 								</td>
 							</tr>

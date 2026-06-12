@@ -407,6 +407,11 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{"startup_cmd is required for deployment"}})
 				return
 			}
+			// Reject malformed task lifecycle limits.
+			if err := req.Deployment.Limits.Validate(); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
+				return
+			}
 		}
 
 		ctx := c.Request.Context()

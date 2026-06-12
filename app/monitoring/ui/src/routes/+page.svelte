@@ -85,7 +85,7 @@
 
 <div class="rq-page space-y-8">
 	<!-- Header -->
-	<div class="flex items-center justify-between">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="rq-page-title">Dashboard</h1>
 			<p class="text-surface-500">
@@ -96,7 +96,7 @@
 				{/if}
 			</p>
 		</div>
-		<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+		<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 			<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path
 					stroke-linecap="round"
@@ -209,25 +209,25 @@
 			</div>
 
 			<!-- Worker Stats -->
-			<div class="grid grid-cols-5 gap-4 mb-4">
+			<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-4">
 				<div class="rq-card p-3 text-center">
-					<div class="text-2xl font-bold text-primary-500">{$workerStats.processing}</div>
+					<div class="text-xl md:text-2xl font-bold text-primary-500">{$workerStats.processing}</div>
 					<div class="text-xs text-surface-500">Processing</div>
 				</div>
 				<div class="rq-card p-3 text-center">
-					<div class="text-2xl font-bold text-success-500">{$workerStats.idle}</div>
+					<div class="text-xl md:text-2xl font-bold text-success-500">{$workerStats.idle}</div>
 					<div class="text-xs text-surface-500">Idle</div>
 				</div>
 				<div class="rq-card p-3 text-center">
-					<div class="text-2xl font-bold text-secondary-500">{$workerStats.bootstrapping}</div>
+					<div class="text-xl md:text-2xl font-bold text-secondary-500">{$workerStats.bootstrapping}</div>
 					<div class="text-xs text-surface-500">Bootstrapping</div>
 				</div>
 				<div class="rq-card p-3 text-center">
-					<div class="text-2xl font-bold text-warning-500">{$workerStats.stale}</div>
+					<div class="text-xl md:text-2xl font-bold text-warning-500">{$workerStats.stale}</div>
 					<div class="text-xs text-surface-500">Stale</div>
 				</div>
 				<div class="rq-card p-3 text-center">
-					<div class="text-2xl font-bold text-surface-500">{$workerStats.stopped}</div>
+					<div class="text-xl md:text-2xl font-bold text-surface-500">{$workerStats.stopped}</div>
 					<div class="text-xs text-surface-500">Stopped</div>
 				</div>
 			</div>

@@ -667,8 +667,14 @@ local data = {}
 for _, id in ipairs(ids) do
 	local key = ARGV[3] .. id
 	local msg, result = unpack(redis.call("HMGET", key, "msg","result"))
-	table.insert(data, msg)
-	table.insert(data, result)
+	if msg then
+		table.insert(data, msg)
+		table.insert(data, result)
+	else
+		-- Orphan: task hash is gone (expired TTL). Lazily remove the dangling id
+		-- so it stops polluting listings and counts.
+		redis.call("LREM", KEYS[1], 1, id)
+	end
 end
 return data
 `)
@@ -734,7 +740,7 @@ func (r *RDB) ListScheduled(qname string, pgn Pagination) ([]*base.TaskInfo, err
 	if !exists {
 		return nil, errors.E(op, errors.NotFound, &errors.QueueNotFoundError{Queue: qname})
 	}
-	res, err := r.listZSetEntries(qname, base.TaskStateScheduled, base.ScheduledKey(qname), pgn)
+	res, err := r.listZSetEntries(qname, base.TaskStateScheduled, base.ScheduledKey(qname), pgn, false)
 	if err != nil {
 		return nil, errors.E(op, errors.CanonicalCode(err), err)
 	}
@@ -752,7 +758,7 @@ func (r *RDB) ListRetry(qname string, pgn Pagination) ([]*base.TaskInfo, error) 
 	if !exists {
 		return nil, errors.E(op, errors.NotFound, &errors.QueueNotFoundError{Queue: qname})
 	}
-	res, err := r.listZSetEntries(qname, base.TaskStateRetry, base.RetryKey(qname), pgn)
+	res, err := r.listZSetEntries(qname, base.TaskStateRetry, base.RetryKey(qname), pgn, false)
 	if err != nil {
 		return nil, errors.E(op, errors.CanonicalCode(err), err)
 	}
@@ -769,7 +775,8 @@ func (r *RDB) ListArchived(qname string, pgn Pagination) ([]*base.TaskInfo, erro
 	if !exists {
 		return nil, errors.E(op, errors.NotFound, &errors.QueueNotFoundError{Queue: qname})
 	}
-	zs, err := r.listZSetEntries(qname, base.TaskStateArchived, base.ArchivedKey(qname), pgn)
+	// Newest first: the ZSet score is the expiry timestamp (archived_at + ttl).
+	zs, err := r.listZSetEntries(qname, base.TaskStateArchived, base.ArchivedKey(qname), pgn, true)
 	if err != nil {
 		return nil, errors.E(op, errors.CanonicalCode(err), err)
 	}
@@ -786,7 +793,8 @@ func (r *RDB) ListCompleted(qname string, pgn Pagination) ([]*base.TaskInfo, err
 	if !exists {
 		return nil, errors.E(op, errors.NotFound, &errors.QueueNotFoundError{Queue: qname})
 	}
-	zs, err := r.listZSetEntries(qname, base.TaskStateCompleted, base.CompletedKey(qname), pgn)
+	// Newest first: the ZSet score is the expiry timestamp (completed_at + ttl).
+	zs, err := r.listZSetEntries(qname, base.TaskStateCompleted, base.CompletedKey(qname), pgn, true)
 	if err != nil {
 		return nil, errors.E(op, errors.CanonicalCode(err), err)
 	}
@@ -803,7 +811,7 @@ func (r *RDB) ListAggregating(qname, gname string, pgn Pagination) ([]*base.Task
 	if !exists {
 		return nil, errors.E(op, errors.NotFound, &errors.QueueNotFoundError{Queue: qname})
 	}
-	zs, err := r.listZSetEntries(qname, base.TaskStateAggregating, base.GroupKey(qname, gname), pgn)
+	zs, err := r.listZSetEntries(qname, base.TaskStateAggregating, base.GroupKey(qname, gname), pgn, false)
 	if err != nil {
 		return nil, errors.E(op, errors.CanonicalCode(err), err)
 	}
@@ -819,29 +827,47 @@ func (r *RDB) queueExists(qname string) (bool, error) {
 // ARGV[1] -> min
 // ARGV[2] -> max
 // ARGV[3] -> task key prefix
+// ARGV[4] -> "1" to list in descending score order (newest first), "0" for ascending
+//
+// A member whose task hash no longer exists (expired TTL, not yet purged by the
+// janitor) is lazily removed from the set instead of producing an empty entry —
+// listings self-heal as they are browsed and counts converge to reality.
 //
 // Returns an array populated with
 // [msg1, score1, result1, msg2, score2, result2, ..., msgN, scoreN, resultN]
 var listZSetEntriesCmd = redis.NewScript(`
 local data = {}
-local id_score_pairs = redis.call("ZRANGE", KEYS[1], ARGV[1], ARGV[2], "WITHSCORES")
+local cmd = "ZRANGE"
+if ARGV[4] == "1" then
+	cmd = "ZREVRANGE"
+end
+local id_score_pairs = redis.call(cmd, KEYS[1], ARGV[1], ARGV[2], "WITHSCORES")
 for i = 1, table.getn(id_score_pairs), 2 do
 	local id = id_score_pairs[i]
 	local score = id_score_pairs[i+1]
 	local key = ARGV[3] .. id
 	local msg, res = unpack(redis.call("HMGET", key, "msg", "result"))
-	table.insert(data, msg)
-	table.insert(data, score)
-	table.insert(data, res)
+	if msg then
+		table.insert(data, msg)
+		table.insert(data, score)
+		table.insert(data, res)
+	else
+		redis.call("ZREM", KEYS[1], id)
+	end
 end
 return data
 `)
 
 // listZSetEntries returns a list of message and score pairs in Redis sorted-set
-// with the given key.
-func (r *RDB) listZSetEntries(qname string, state base.TaskState, key string, pgn Pagination) ([]*base.TaskInfo, error) {
+// with the given key. If desc is true, entries are returned in descending score
+// order (e.g. most recently completed/archived first).
+func (r *RDB) listZSetEntries(qname string, state base.TaskState, key string, pgn Pagination, desc bool) ([]*base.TaskInfo, error) {
+	descArg := "0"
+	if desc {
+		descArg = "1"
+	}
 	res, err := listZSetEntriesCmd.Run(context.Background(), r.client, []string{key},
-		pgn.start(), pgn.stop(), base.TaskKeyPrefix(qname)).Result()
+		pgn.start(), pgn.stop(), base.TaskKeyPrefix(qname), descArg).Result()
 	if err != nil {
 		return nil, errors.E(errors.Unknown, err)
 	}

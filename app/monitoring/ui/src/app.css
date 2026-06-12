@@ -2,6 +2,17 @@
 @import '@skeletonlabs/skeleton/themes/cerberus';
 @import '@skeletonlabs/skeleton';
 
+/* Key the `dark:` variant (and Skeleton's @variant dark blocks, e.g. color-scheme for
+   light-dark() pairings) to the .dark class instead of the OS preference. The class is
+   hardcoded on <html> in app.html — the dashboard is dark-only. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Fonts loaded in app.html (Google Fonts) — referenced by Tailwind utilities and theme tokens. */
+@theme {
+	--font-sans: 'Inter', system-ui, sans-serif;
+	--font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+}
+
 /* ============================================
    Runqy Brand Tokens
    ============================================ */
@@ -9,17 +20,33 @@
 	--runqy-primary: #3B82F6;
 	--runqy-accent: #3DCFBC;
 	--runqy-bg-dark: #0a0a0f;
-	--runqy-border-subtle: rgba(255,255,255,0.06);
-	--runqy-border-default: rgba(255,255,255,0.08);
+	--runqy-border-subtle: rgba(255,255,255,0.09);
+	--runqy-border-default: rgba(255,255,255,0.12);
+
+	/* Skeleton (Cerberus) theme overrides */
+	--base-font-family: var(--font-sans);
+	--heading-font-family: var(--font-sans);
+	--text-scaling: 1;
+	--radius-base: 0.375rem;
+	--radius-container: 0.75rem;
 }
 
 /* ============================================
    Dark Theme Surface Overrides
-   ============================================ */
+   ============================================
+   Page background stays near-black (#0a0a0f); cards sit on surface-800,
+   lifted well above it. 400/500 are text grays — 400 = secondary text
+   (labels, subtitles), 500 = muted text (hints, timestamps) only. */
 .dark {
 	--color-surface-900: #0a0a0f;
-	--color-surface-800: #111118;
-	--color-surface-700: #16161f;
+	--color-surface-800: #15151d;
+	--color-surface-700: #1d1d27;
+	--color-surface-500: #7e7e8f;
+	--color-surface-400: #a5a5b5;
+}
+
+body {
+	font-variant-numeric: tabular-nums;
 }
 
 /* ============================================
@@ -30,9 +57,15 @@
 }
 
 .rq-page {
-	padding: 2rem 2.5rem;
+	padding: 1rem;
 	max-width: 1440px;
 	margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+	.rq-page {
+		padding: 2rem 2.5rem;
+	}
 }
 
 .rq-page-header {
@@ -42,9 +75,37 @@
 }
 
 .rq-page-title {
-	font-size: 1.5rem;
+	font-size: 1.25rem;
 	font-weight: 700;
 	letter-spacing: -0.01em;
+}
+
+@media (min-width: 768px) {
+	.rq-page-title {
+		font-size: 1.5rem;
+	}
+}
+
+/* Card headings (text-lg utilities on h2/h3/h4) are oversized on phones —
+   this unlayered rule wins over Tailwind's layered utilities. */
+@media (max-width: 767px) {
+	.rq-card h2,
+	.rq-card h3 {
+		font-size: 1rem;
+	}
+}
+
+/* iOS auto-zooms any focused field with a font-size below 16px — keep form
+   controls at 16px on small screens to prevent the viewport from jumping. */
+@media (max-width: 767px) {
+	input,
+	select,
+	textarea,
+	.input,
+	.select,
+	.textarea {
+		font-size: 16px;
+	}
 }
 
 .rq-page-subtitle {
@@ -60,7 +121,8 @@
 	background: var(--color-surface-800);
 	border: 1px solid var(--runqy-border-subtle);
 	border-radius: 0.75rem;
-	box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+	/* Inset top highlight simulates elevation on dark backgrounds. */
+	box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 3px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.25);
 }
 
 .rq-card-interactive {
@@ -71,23 +133,6 @@
 .rq-card-interactive:hover {
 	border-color: rgba(59,130,246,0.35);
 	box-shadow: 0 4px 12px rgba(59,130,246,0.08), 0 1px 3px rgba(0,0,0,0.3);
-}
-
-/* Tinted stat card backgrounds */
-.rq-tint-primary {
-	background: linear-gradient(135deg, rgba(59,130,246,0.06) 0%, var(--color-surface-800) 100%);
-}
-
-.rq-tint-success {
-	background: linear-gradient(135deg, rgba(34,197,94,0.06) 0%, var(--color-surface-800) 100%);
-}
-
-.rq-tint-warning {
-	background: linear-gradient(135deg, rgba(234,179,8,0.06) 0%, var(--color-surface-800) 100%);
-}
-
-.rq-tint-error {
-	background: linear-gradient(135deg, rgba(239,68,68,0.06) 0%, var(--color-surface-800) 100%);
 }
 
 /* Metric sub-boxes inside cards */
@@ -167,26 +212,6 @@
 	box-shadow: 0 2px 8px rgba(59,130,246,0.25);
 }
 
-.rq-btn-success {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	padding: 0.5rem 1rem;
-	font-size: 0.875rem;
-	font-weight: 500;
-	border-radius: 0.5rem;
-	background: rgb(34, 197, 94);
-	color: white;
-	border: none;
-	cursor: pointer;
-	transition: background 150ms ease, box-shadow 150ms ease;
-}
-
-.rq-btn-success:hover {
-	background: rgb(22, 163, 74);
-	box-shadow: 0 2px 8px rgba(34, 197, 94, 0.25);
-}
-
 .rq-btn-ghost {
 	display: inline-flex;
 	align-items: center;
@@ -208,9 +233,26 @@
 	background: rgba(255,255,255,0.03);
 }
 
+.rq-btn-ghost:disabled {
+	opacity: 0.4;
+	pointer-events: none;
+}
+
 /* ============================================
    Tables
    ============================================ */
+/* Every table sits in a .table-container: scroll horizontally inside the card
+   instead of overflowing the page on narrow screens. */
+.table-container {
+	overflow-x: auto;
+	scrollbar-width: thin;
+	-webkit-overflow-scrolling: touch;
+}
+
+.table-container > table {
+	min-width: 640px;
+}
+
 .rq-table {
 	width: 100%;
 	border-collapse: collapse;
@@ -234,15 +276,7 @@
 }
 
 .rq-table tbody tr:hover {
-	background: rgba(255,255,255,0.02);
-}
-
-.rq-table tbody tr:nth-child(even) {
-	background: rgba(255,255,255,0.01);
-}
-
-.rq-table tbody tr:nth-child(even):hover {
-	background: rgba(255,255,255,0.03);
+	background: rgba(255,255,255,0.04);
 }
 
 /* ============================================
@@ -341,26 +375,21 @@
 	border-radius: 3px;
 }
 
-/* Sidebar transition */
-.sidebar-transition {
-	transition: width 200ms ease-in-out;
-}
-
-/* JSON Viewer */
+/* JSON Viewer — two hues max: keys in accent blue, literals in brand teal, strings neutral. */
 .json-key {
-	color: var(--color-primary-500);
+	color: var(--color-primary-400);
 }
 
 .json-string {
-	color: var(--color-success-500);
+	color: var(--color-surface-200);
 }
 
 .json-number {
-	color: var(--color-warning-500);
+	color: var(--runqy-accent);
 }
 
 .json-boolean {
-	color: var(--color-tertiary-500);
+	color: var(--runqy-accent);
 }
 
 .json-null {

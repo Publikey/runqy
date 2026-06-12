@@ -107,30 +107,30 @@
 		<!-- Aggregated Stats -->
 		<div class="grid grid-cols-3 gap-3 text-center">
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-warning-500">{formatNumber(group.pending)}</div>
+				<div class="text-lg md:text-xl font-bold text-warning-500">{formatNumber(group.pending)}</div>
 				<div class="text-xs text-surface-500 mt-1">Pending</div>
 			</div>
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-success-500">{formatNumber(group.active)}</div>
+				<div class="text-lg md:text-xl font-bold text-success-500">{formatNumber(group.active)}</div>
 				<div class="text-xs text-surface-500 mt-1">Active</div>
 			</div>
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-tertiary-500">{formatNumber(group.completed)}</div>
+				<div class="text-lg md:text-xl font-bold text-tertiary-500">{formatNumber(group.completed)}</div>
 				<div class="text-xs text-surface-500 mt-1">Completed</div>
 			</div>
 		</div>
 
 		<div class="grid grid-cols-3 gap-3 text-center mt-4">
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-orange-500">{formatNumber(group.retry)}</div>
+				<div class="text-lg md:text-xl font-bold text-orange-500">{formatNumber(group.retry)}</div>
 				<div class="text-xs text-surface-500 mt-1">Retry</div>
 			</div>
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-surface-500">{formatNumber(group.archived)}</div>
+				<div class="text-lg md:text-xl font-bold text-surface-500">{formatNumber(group.archived)}</div>
 				<div class="text-xs text-surface-500 mt-1">Archived</div>
 			</div>
 			<div class="rq-metric-box">
-				<div class="text-xl font-bold text-error-500">{formatNumber(group.failed)}</div>
+				<div class="text-lg md:text-xl font-bold text-error-500">{formatNumber(group.failed)}</div>
 				<div class="text-xs text-surface-500 mt-1">Failed</div>
 			</div>
 		</div>

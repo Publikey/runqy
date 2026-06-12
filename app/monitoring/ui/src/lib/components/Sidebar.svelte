@@ -5,6 +5,8 @@
 	import { settings } from '$lib/stores/settings';
 	import { authStore } from '$lib/stores/auth';
 
+	let { mobileOpen = false }: { mobileOpen?: boolean } = $props();
+
 	async function handleLogout() {
 		await authStore.logout();
 		goto(`${base}/login`);
@@ -36,6 +38,15 @@
 			group: 'core'
 		},
 		{
+			label: 'Playground',
+			href: '/playground',
+			icon: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
+				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+			</svg>`,
+			group: 'core'
+		},
+		{
 			label: 'Vaults',
 			href: '/vaults',
 			icon: `<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -63,6 +74,8 @@
 	];
 
 	let collapsed = $derived($settings.sidebarCollapsed);
+	// Icon-only mode is a desktop feature; the mobile drawer always shows labels.
+	let iconOnly = $derived(collapsed && !mobileOpen);
 
 	function isActive(href: string): boolean {
 		const fullPath = base + href;
@@ -92,12 +105,14 @@
 </script>
 
 <aside
-	class="rq-sidebar h-screen sidebar-transition"
-	style="display: flex; flex-direction: column; width: {collapsed ? '5rem' : '240px'};"
+	class="rq-sidebar h-screen flex flex-col transition-[width,transform] duration-200 ease-in-out
+		fixed inset-y-0 left-0 z-40 w-[240px] {mobileOpen ? 'translate-x-0' : '-translate-x-full'}
+		md:static md:translate-x-0 {collapsed ? 'md:w-20' : 'md:w-[240px]'}"
+	style="padding-top: env(safe-area-inset-top);"
 >
 	<!-- Logo / Header -->
 	<div class="p-5 mt-2 ml-2" style="border-bottom: 1px solid var(--runqy-border-subtle);">
-		<div class="flex items-center gap-3 {collapsed ? 'justify-center' : ''}">
+		<div class="flex items-center gap-3 {iconOnly ? 'justify-center' : ''}">
 			<!-- Logo SVG -->
 			<svg viewBox="0 0 100 100" class="w-8 h-8 flex-shrink-0">
 				<line x1="32" y1="50" x2="72" y2="22" stroke="#64748B" stroke-width="5" stroke-linecap="round" />
@@ -108,7 +123,7 @@
 				<circle cx="78" cy="50" r="11" fill="#E2E8F0" />
 				<circle cx="72" cy="78" r="11" fill="#E2E8F0" />
 			</svg>
-			{#if !collapsed}
+			{#if !iconOnly}
 				<div>
 					<span class="font-bold text-2xl">runqy</span>
 					<span class="text-base text-[#3DCFBC] block">Monitor</span>
@@ -127,11 +142,11 @@
 				{#each group.items as item}
 					<a
 						href="{base}{item.href}"
-						class="{isActive(item.href) ? 'rq-sidebar-nav-item-active' : 'rq-sidebar-nav-item'} {collapsed ? 'justify-center' : ''}"
-						title={collapsed ? item.label : undefined}
+						class="{isActive(item.href) ? 'rq-sidebar-nav-item-active' : 'rq-sidebar-nav-item'} {iconOnly ? 'justify-center' : ''}"
+						title={iconOnly ? item.label : undefined}
 					>
 						<span class="[&>svg]:w-5 [&>svg]:h-5 flex-shrink-0">{@html item.icon}</span>
-						{#if !collapsed}
+						{#if !iconOnly}
 							<span>{item.label}</span>
 						{/if}
 					</a>
@@ -143,11 +158,11 @@
 	<!-- User section -->
 	{#if $authStore.email}
 		<div class="p-3" style="border-top: 1px solid var(--runqy-border-subtle);">
-			<div class="flex items-center gap-3 px-4 py-2 {collapsed ? 'justify-center' : ''}">
+			<div class="flex items-center gap-3 px-4 py-2 {iconOnly ? 'justify-center' : ''}">
 				<div class="w-8 h-8 rounded-full bg-primary-500 flex items-center justify-center text-white text-sm font-medium flex-shrink-0">
 					{$authStore.email.charAt(0).toUpperCase()}
 				</div>
-				{#if !collapsed}
+				{#if !iconOnly}
 					<div class="flex-1 min-w-0">
 						<p class="text-sm font-medium truncate">{$authStore.email}</p>
 						<p class="text-xs text-surface-500">Admin</p>
@@ -156,9 +171,9 @@
 			</div>
 			<button
 				type="button"
-				class="rq-sidebar-nav-item w-full {collapsed ? 'justify-center' : ''}"
+				class="rq-sidebar-nav-item w-full {iconOnly ? 'justify-center' : ''}"
 				onclick={handleLogout}
-				title={collapsed ? 'Logout' : undefined}
+				title={iconOnly ? 'Logout' : undefined}
 			>
 				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 					<path
@@ -168,7 +183,7 @@
 						d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
 					/>
 				</svg>
-				{#if !collapsed}
+				{#if !iconOnly}
 					<span class="text-sm">Logout</span>
 				{/if}
 			</button>
@@ -179,7 +194,7 @@
 	<div class="p-3" style="border-top: 1px solid var(--runqy-border-subtle);">
 		<button
 			type="button"
-			class="rq-sidebar-nav-item w-full {collapsed ? 'justify-center' : ''}"
+			class="rq-sidebar-nav-item w-full {iconOnly ? 'justify-center' : ''}"
 			onclick={() => settings.toggleSidebar()}
 		>
 			<svg
@@ -195,7 +210,7 @@
 					d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
 				/>
 			</svg>
-			{#if !collapsed}
+			{#if !iconOnly}
 				<span class="text-sm">Collapse</span>
 			{/if}
 		</button>

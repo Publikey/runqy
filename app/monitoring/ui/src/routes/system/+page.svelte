@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
-	import type { RedisInfo, DatabaseInfo } from '$lib/api/types';
-	import { getRedisInfo, getDatabaseInfo } from '$lib/api/client';
+	import type { RedisInfo, DatabaseInfo, SystemEnvInfo } from '$lib/api/types';
+	import { getRedisInfo, getDatabaseInfo, getSystemEnv } from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
 
 	let redisInfo = $state<RedisInfo | null>(null);
 	let dbInfo = $state<DatabaseInfo | null>(null);
+	let envVars = $state<SystemEnvInfo | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -28,12 +29,25 @@
 		}
 	}
 
+	async function loadEnvVars() {
+		try {
+			envVars = await getSystemEnv();
+		} catch (e) {
+			// Environment endpoint might not be available yet
+			console.warn('Failed to load environment variables:', e);
+		}
+	}
+
 	async function loadData() {
 		loading = true;
 		error = null;
-		await Promise.all([loadRedisInfo(), loadDatabaseInfo()]);
+		await Promise.all([loadRedisInfo(), loadDatabaseInfo(), loadEnvVars()]);
 		loading = false;
 	}
+
+	let envText = $derived(
+		envVars ? envVars.vars.map((v) => `${v.name}=${v.value}`).join('\n') : ''
+	);
 
 	async function handleRefresh() {
 		refreshing = true;
@@ -57,12 +71,12 @@
 
 <div class="rq-page space-y-8">
 	<!-- Header -->
-	<div class="flex items-center justify-between">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="rq-page-title">System</h1>
 			<p class="text-surface-500">Infrastructure and connection status</p>
 		</div>
-		<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+		<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 			<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path
 					stroke-linecap="round"
@@ -283,4 +297,33 @@
 			</details>
 		</div>
 	{/if}
+
+	<!-- Environment Variables (read-only, secrets masked) -->
+	<div class="rq-card p-6">
+		<h3 class="text-lg font-semibold mb-2 flex items-center gap-2">
+			<svg class="w-5 h-5 text-tertiary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					stroke-width="2"
+					d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+				/>
+			</svg>
+			Environment Variables
+		</h3>
+		<p class="text-surface-500 text-sm mb-4">
+			Read-only view of the server's runqy configuration (effective values, defaults included).
+			Secrets are masked.
+		</p>
+		{#if envVars}
+			<textarea
+				readonly
+				rows="24"
+				class="textarea w-full p-4 rounded text-sm font-mono leading-relaxed scrollbar-thin bg-surface-900 text-surface-100"
+				value={envText}
+			></textarea>
+		{:else}
+			<p class="text-surface-500 text-sm">Environment information is not available.</p>
+		{/if}
+	</div>
 </div>

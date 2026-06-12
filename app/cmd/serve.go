@@ -236,6 +236,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		log.Fatalf("Failed to initialize database schema: %v", err)
 	}
 
+	// Reject malformed task-lifecycle default env vars (RUNQY_DEFAULT_*) at startup.
+	if err := queueworker.ValidateDefaultLimitsEnv(); err != nil {
+		log.Fatalf("Invalid task lifecycle default: %v", err)
+	}
+
 	redisClient := asynq.NewClient(redisAddr.AsynqOpt)
 	defer redisClient.Close()
 

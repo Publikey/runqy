@@ -1,1 +1,0 @@
-import{aa as y,i as o,ab as _,h as t,C as g,m as i,ac as l,q as d,l as m,u as p}from"./Cp4TLO2j.js";function E(n,r){let a=null,f=t;var s;if(t){a=m;for(var e=p(document.head);e!==null&&(e.nodeType!==g||e.data!==n);)e=i(e);if(e===null)l(!1);else{var u=i(e);e.remove(),d(u)}}t||(s=document.head.appendChild(y()));try{o(()=>r(s),_)}finally{f&&(l(!0),d(a))}}export{E as h};

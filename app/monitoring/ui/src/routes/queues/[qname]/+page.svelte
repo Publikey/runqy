@@ -3,9 +3,10 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import type { Task, TaskState } from '$lib/api/types';
+	import type { Task, TaskState, QueueConfigDetail } from '$lib/api/types';
 	import {
 		getQueueInfo,
+		getQueueConfig,
 		getTasks,
 		pauseQueue,
 		resumeQueue,
@@ -22,7 +23,7 @@
 		batchRunTasks
 	} from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
-	import { formatNumber, formatBytes, formatDuration } from '$lib/utils/format';
+	import { formatNumber, formatBytes, formatDuration, formatDateTime } from '$lib/utils/format';
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
@@ -39,6 +40,8 @@
 
 	let activeTab = $state<TabState>('active');
 	let queueInfo = $state<Awaited<ReturnType<typeof getQueueInfo>> | null>(null);
+	let queueConfig = $state<QueueConfigDetail | null>(null);
+	let configOpen = $state(false);
 	let tasks = $state<Task[]>([]);
 	let taskCounts = $state<Record<TabState, number>>({
 		active: 0,
@@ -51,6 +54,10 @@
 	let error = $state<string | null>(null);
 	let selectedIds = $state(new Set<string>());
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+	const PAGE_SIZE = 20;
+	let currentPage = $state(1);
+	let totalPages = $derived(Math.max(1, Math.ceil((taskCounts[activeTab] ?? 0) / PAGE_SIZE)));
 
 	let confirmDialog = $state({
 		open: false,
@@ -75,7 +82,7 @@
 		loading = true;
 		error = null;
 		try {
-			const response = await getTasks(qname, activeTab, 1, 100);
+			const response = await getTasks(qname, activeTab, currentPage, PAGE_SIZE);
 			tasks = response.tasks || [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load tasks';
@@ -83,6 +90,13 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function goToPage(page: number) {
+		if (page < 1 || page > totalPages || page === currentPage) return;
+		currentPage = page;
+		selectedIds = new Set();
+		loadTasks();
 	}
 
 	function updateCountsFromQueueInfo() {
@@ -103,18 +117,28 @@
 
 	async function pollData() {
 		await loadData();
-		// Silently refresh tasks without showing loading skeleton
+		// Silently refresh the current page without showing loading skeleton
 		try {
-			const response = await getTasks(qname, activeTab, 1, 100);
+			const response = await getTasks(qname, activeTab, currentPage, PAGE_SIZE);
 			tasks = response.tasks || [];
 		} catch {
 			// Silently ignore poll errors to avoid flashing error messages
 		}
 	}
 
+	async function loadQueueConfig() {
+		try {
+			queueConfig = await getQueueConfig(qname);
+		} catch {
+			// No config for this queue (e.g. created directly in Redis) — hide the panel.
+			queueConfig = null;
+		}
+	}
+
 	onMount(() => {
 		loadData();
 		loadTasks();
+		loadQueueConfig();
 		pollInterval = setInterval(pollData, $settings.pollInterval * 1000);
 	});
 
@@ -127,8 +151,16 @@
 	$effect(() => {
 		if (activeTab && activeTab !== previousTab) {
 			previousTab = activeTab;
+			currentPage = 1;
 			loadTasks();
 			selectedIds = new Set();
+		}
+	});
+
+	// Clamp the page if the task count shrinks below the current page (e.g. bulk delete).
+	$effect(() => {
+		if (currentPage > totalPages) {
+			goToPage(totalPages);
 		}
 	});
 
@@ -282,7 +314,7 @@
 	<title>{qname} - Queues - runqy</title>
 </svelte:head>
 
-<div class="p-6 space-y-6">
+<div class="p-4 md:p-6 space-y-6">
 	<!-- Breadcrumb -->
 	<nav class="flex items-center gap-2 text-sm">
 		<a href="{base}/queues" class="text-surface-500 hover:text-primary-500">Queues</a>
@@ -291,7 +323,7 @@
 	</nav>
 
 	<!-- Header -->
-	<div class="flex items-start justify-between">
+	<div class="flex flex-wrap items-start justify-between gap-y-3">
 		<div>
 			<div class="flex items-center gap-3">
 				<h1 class="text-2xl font-bold">{qname}</h1>
@@ -316,7 +348,7 @@
 
 		<div class="flex items-center gap-2">
 			{#if queueInfo?.paused}
-				<button type="button" class="btn preset-filled-success-500" onclick={handleResume}>
+				<button type="button" class="rq-btn-primary" onclick={handleResume}>
 					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path
 							stroke-linecap="round"
@@ -360,12 +392,126 @@
 		</div>
 	</div>
 
+	<!-- Queue Configuration (read-only, collapsible) -->
+	{#if queueConfig}
+		<div>
+			<button type="button" class="rq-btn-ghost" onclick={() => (configOpen = !configOpen)}>
+				<svg
+					class="w-4 h-4 transition-transform duration-150 {configOpen ? 'rotate-90' : ''}"
+					fill="none"
+					stroke="currentColor"
+					viewBox="0 0 24 24"
+				>
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+				</svg>
+				Configuration
+				{#if queueConfig.deployment?.mode}
+					<span class="badge preset-outlined-surface-500 text-xs">{queueConfig.deployment.mode}</span>
+				{/if}
+				<span class="text-xs text-surface-500">Priority {queueConfig.priority}</span>
+			</button>
+			{#if configOpen}
+				<div class="rq-card p-6 mt-3 space-y-4">
+					{#if queueConfig.deployment}
+						{@const d = queueConfig.deployment}
+						<div>
+							<h4 class="rq-section-title mb-2">Deployment</h4>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+								<div>
+									<div class="text-xs text-surface-400">Git URL</div>
+									<div class="text-sm font-mono break-all">{d.git_url || '—'}</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Branch</div>
+									<div class="text-sm font-mono">{d.branch || '—'}</div>
+								</div>
+								{#if d.code_path}
+									<div>
+										<div class="text-xs text-surface-400">Code path</div>
+										<div class="text-sm font-mono">{d.code_path}</div>
+									</div>
+								{/if}
+								<div>
+									<div class="text-xs text-surface-400">Startup command</div>
+									<div class="text-sm font-mono break-all">{d.startup_cmd || '—'}</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Startup timeout</div>
+									<div class="text-sm">{d.startup_timeout_secs}s</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Redis storage</div>
+									<div class="text-sm">
+										{#if d.redis_storage}
+											<span class="badge preset-filled-success-500 text-xs">Enabled</span>
+										{:else}
+											<span class="text-surface-500">Disabled</span>
+										{/if}
+									</div>
+								</div>
+								{#if d.git_token}
+									<div>
+										<div class="text-xs text-surface-400">Git token</div>
+										<div class="text-sm font-mono break-all">{d.git_token}</div>
+									</div>
+								{/if}
+								<div>
+									<div class="text-xs text-surface-400">Vaults</div>
+									<div class="text-sm">
+										{#if d.vaults?.length}
+											<div class="flex items-center gap-1 flex-wrap">
+												{#each d.vaults as vault (vault)}
+													<span class="badge preset-outlined-primary-500 text-xs">{vault}</span>
+												{/each}
+											</div>
+										{:else}
+											<span class="text-surface-500">None</span>
+										{/if}
+									</div>
+								</div>
+							</div>
+						</div>
+						<div>
+							<h4 class="rq-section-title mb-2">Task Lifecycle Limits</h4>
+							<div class="grid grid-cols-2 md:grid-cols-5 gap-x-8 gap-y-2">
+								{#each [
+									{ label: 'Max retry', value: d.limits?.max_retry },
+									{ label: 'TTL completed', value: d.limits?.ttl_completed },
+									{ label: 'TTL archived', value: d.limits?.ttl_archived },
+									{ label: 'Pending timeout', value: d.limits?.pending_timeout },
+									{ label: 'Active timeout', value: d.limits?.active_timeout }
+								] as limit (limit.label)}
+									<div>
+										<div class="text-xs text-surface-400">{limit.label}</div>
+										<div class="text-sm font-mono">
+											{#if limit.value !== undefined && limit.value !== ''}
+												{limit.value}
+											{:else}
+												<span class="text-surface-500 font-sans">server default</span>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{:else}
+						<p class="text-sm text-surface-500">No deployment configured.</p>
+					{/if}
+					<div class="flex items-center gap-6 pt-2 border-t border-surface-700 text-xs text-surface-500">
+						<span>Created {formatDateTime(new Date(queueConfig.created_at * 1000))}</span>
+						<span>Updated {formatDateTime(new Date(queueConfig.updated_at * 1000))}</span>
+					</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
+
 	<!-- Tabs -->
-	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600">
+	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600 overflow-x-auto scrollbar-thin">
 		{#each tabs as tab}
 			<button
 				type="button"
-				class="px-4 py-2 font-medium text-sm border-b-2 transition-colors {activeTab === tab.state
+				class="shrink-0 whitespace-nowrap px-4 py-2 font-medium text-sm border-b-2 transition-colors {activeTab === tab.state
 					? 'border-primary-500 text-primary-500'
 					: 'border-transparent text-surface-500 hover:text-surface-900 dark:hover:text-surface-100'}"
 				onclick={() => (activeTab = tab.state)}
@@ -439,6 +585,33 @@
 		onselectall={handleSelectAll}
 		onaction={handleTaskAction}
 	/>
+
+	<!-- Pagination -->
+	{#if totalPages > 1}
+		<div class="flex items-center justify-between">
+			<span class="text-sm text-surface-400">
+				Page {currentPage} of {totalPages} &middot; {taskCounts[activeTab]} tasks
+			</span>
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					class="rq-btn-ghost"
+					disabled={currentPage <= 1}
+					onclick={() => goToPage(currentPage - 1)}
+				>
+					&larr; Previous
+				</button>
+				<button
+					type="button"
+					class="rq-btn-ghost"
+					disabled={currentPage >= totalPages}
+					onclick={() => goToPage(currentPage + 1)}
+				>
+					Next &rarr;
+				</button>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <ConfirmDialog

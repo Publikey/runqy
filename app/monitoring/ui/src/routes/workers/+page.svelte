@@ -101,7 +101,7 @@
 
 <div class="rq-page space-y-8">
 	<!-- Header -->
-	<div class="flex items-center justify-between">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="rq-page-title">Workers</h1>
 			<p class="text-surface-500">
@@ -112,7 +112,7 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+			<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 					<path
 						stroke-linecap="round"

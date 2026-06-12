@@ -256,6 +256,16 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/database_info", newDatabaseInfoHandlerFunc(db, opts.Config)).Methods("GET")
 	}
 
+	// System environment variables (read-only, secrets masked).
+	api.HandleFunc("/system/env", newSystemEnvHandlerFunc(opts.Config)).Methods("GET")
+
+	// Playground: manual task enqueue from the dashboard. Requires a plain
+	// *redis.Client (EnqueueGenericTask stamps task-hash fields directly).
+	if rdbClient, ok := rc.(*redis.Client); ok {
+		asynqClient := asynq.NewClient(opts.RedisConnOpt)
+		api.HandleFunc("/playground/enqueue", newPlaygroundEnqueueHandlerFunc(asynqClient, rdbClient, opts.QueueStore)).Methods("POST")
+	}
+
 	// Vaults endpoints.
 	if opts.VaultStore != nil {
 		api.HandleFunc("/vaults", newListVaultsHandlerFunc(opts.VaultStore)).Methods("GET")
