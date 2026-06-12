@@ -110,8 +110,9 @@ export async function getTasks(
 	page: number = 1,
 	pageSize: number = 20
 ): Promise<TaskListResponse> {
+	// NB: the backend reads `size` (getPageOptions), not `page_size`.
 	return fetchJson(
-		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks?page_size=${pageSize}&page=${page}`
+		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks?size=${pageSize}&page=${page}`
 	);
 }
 

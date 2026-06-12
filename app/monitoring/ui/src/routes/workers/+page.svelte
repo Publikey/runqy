@@ -112,7 +112,7 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+			<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 					<path
 						stroke-linecap="round"

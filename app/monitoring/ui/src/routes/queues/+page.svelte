@@ -267,7 +267,7 @@
 			<p class="text-surface-500">{filteredQueues.length} queue{filteredQueues.length !== 1 ? 's' : ''}</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+			<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 					<path
 						stroke-linecap="round"
@@ -278,7 +278,7 @@
 				</svg>
 				Refresh
 			</button>
-			<button type="button" class="rq-btn-success" onclick={openCreateQueueConfig}>
+			<button type="button" class="rq-btn-primary" onclick={openCreateQueueConfig}>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
 				</svg>
@@ -527,7 +527,31 @@
 									{/if}
 								</td>
 								<td>
-									<span class="text-xs text-surface-500">—</span>
+									{#if !hasSubQueues}
+										<!-- Single .default queue: the group row IS the queue row, show its workers -->
+										{@const queueWorkers = getWorkersForQueue(group.queues[0].queue)}
+										{#if queueWorkers.length === 0}
+											<span class="warning-badge text-xs px-2 py-1 rounded inline-flex items-center gap-1">
+												<svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+												</svg>
+												None
+											</span>
+										{:else}
+											<div class="flex items-center gap-1 flex-wrap">
+												{#each queueWorkers.slice(0, 2) as worker (worker.worker_id)}
+													<span class="badge preset-outlined-primary-500 text-xs" title={worker.worker_id}>
+														{truncateId(worker.worker_id, 10)}
+													</span>
+												{/each}
+												{#if queueWorkers.length > 2}
+													<span class="text-xs text-surface-500">+{queueWorkers.length - 2}</span>
+												{/if}
+											</div>
+										{/if}
+									{:else}
+										<span class="text-xs text-surface-500">—</span>
+									{/if}
 								</td>
 								<td class="text-right font-mono text-warning-500 font-semibold">{formatNumber(group.pending)}</td>
 								<td class="text-right font-mono text-success-500 font-semibold">{formatNumber(group.active)}</td>

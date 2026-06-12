@@ -52,6 +52,10 @@
 	let selectedIds = $state(new Set<string>());
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
+	const PAGE_SIZE = 20;
+	let currentPage = $state(1);
+	let totalPages = $derived(Math.max(1, Math.ceil((taskCounts[activeTab] ?? 0) / PAGE_SIZE)));
+
 	let confirmDialog = $state({
 		open: false,
 		title: '',
@@ -75,7 +79,7 @@
 		loading = true;
 		error = null;
 		try {
-			const response = await getTasks(qname, activeTab, 1, 100);
+			const response = await getTasks(qname, activeTab, currentPage, PAGE_SIZE);
 			tasks = response.tasks || [];
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load tasks';
@@ -83,6 +87,13 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function goToPage(page: number) {
+		if (page < 1 || page > totalPages || page === currentPage) return;
+		currentPage = page;
+		selectedIds = new Set();
+		loadTasks();
 	}
 
 	function updateCountsFromQueueInfo() {
@@ -103,9 +114,9 @@
 
 	async function pollData() {
 		await loadData();
-		// Silently refresh tasks without showing loading skeleton
+		// Silently refresh the current page without showing loading skeleton
 		try {
-			const response = await getTasks(qname, activeTab, 1, 100);
+			const response = await getTasks(qname, activeTab, currentPage, PAGE_SIZE);
 			tasks = response.tasks || [];
 		} catch {
 			// Silently ignore poll errors to avoid flashing error messages
@@ -127,8 +138,16 @@
 	$effect(() => {
 		if (activeTab && activeTab !== previousTab) {
 			previousTab = activeTab;
+			currentPage = 1;
 			loadTasks();
 			selectedIds = new Set();
+		}
+	});
+
+	// Clamp the page if the task count shrinks below the current page (e.g. bulk delete).
+	$effect(() => {
+		if (currentPage > totalPages) {
+			goToPage(totalPages);
 		}
 	});
 
@@ -316,7 +335,7 @@
 
 		<div class="flex items-center gap-2">
 			{#if queueInfo?.paused}
-				<button type="button" class="btn preset-filled-success-500" onclick={handleResume}>
+				<button type="button" class="rq-btn-primary" onclick={handleResume}>
 					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 						<path
 							stroke-linecap="round"
@@ -439,6 +458,33 @@
 		onselectall={handleSelectAll}
 		onaction={handleTaskAction}
 	/>
+
+	<!-- Pagination -->
+	{#if totalPages > 1}
+		<div class="flex items-center justify-between">
+			<span class="text-sm text-surface-400">
+				Page {currentPage} of {totalPages} &middot; {taskCounts[activeTab]} tasks
+			</span>
+			<div class="flex items-center gap-2">
+				<button
+					type="button"
+					class="rq-btn-ghost"
+					disabled={currentPage <= 1}
+					onclick={() => goToPage(currentPage - 1)}
+				>
+					&larr; Previous
+				</button>
+				<button
+					type="button"
+					class="rq-btn-ghost"
+					disabled={currentPage >= totalPages}
+					onclick={() => goToPage(currentPage + 1)}
+				>
+					Next &rarr;
+				</button>
+			</div>
+		</div>
+	{/if}
 </div>
 
 <ConfirmDialog

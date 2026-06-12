@@ -7,7 +7,6 @@
 	import '../app.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
-	import { settings, effectiveTheme } from '$lib/stores/settings';
 	import { authStore } from '$lib/stores/auth';
 
 	let { children } = $props();
@@ -19,12 +18,6 @@
 		const path = pathname.replace(base, '');
 		return publicRoutes.some((route) => path === route || path.startsWith(route + '/'));
 	}
-
-	$effect(() => {
-		if (browser) {
-			document.documentElement.classList.toggle('dark', $effectiveTheme === 'dark');
-		}
-	});
 
 	// Auth guard effect
 	$effect(() => {
@@ -59,16 +52,7 @@
 		};
 		window.addEventListener('auth:unauthorized', handleUnauthorized);
 
-		const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-		const handleChange = () => {
-			if ($settings.theme === 'system') {
-				document.documentElement.classList.toggle('dark', mediaQuery.matches);
-			}
-		};
-
-		mediaQuery.addEventListener('change', handleChange);
 		return () => {
-			mediaQuery.removeEventListener('change', handleChange);
 			window.removeEventListener('auth:unauthorized', handleUnauthorized);
 		};
 	});

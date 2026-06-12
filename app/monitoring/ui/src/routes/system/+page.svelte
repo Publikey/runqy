@@ -76,7 +76,7 @@
 			<h1 class="rq-page-title">System</h1>
 			<p class="text-surface-500">Infrastructure and connection status</p>
 		</div>
-		<button type="button" class="rq-btn-primary {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
+		<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
 			<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 				<path
 					stroke-linecap="round"

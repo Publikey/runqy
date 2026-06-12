@@ -165,7 +165,7 @@
 		<div class="flex items-center gap-2">
 			<button
 				type="button"
-				class="btn preset-outlined-surface-500 {refreshing ? 'refresh-spinning' : ''}"
+				class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}"
 				onclick={handleRefresh}
 			>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -180,7 +180,7 @@
 			</button>
 			<button
 				type="button"
-				class="btn preset-filled-success-500"
+				class="rq-btn-primary"
 				onclick={openAddEntry}
 			>
 				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
