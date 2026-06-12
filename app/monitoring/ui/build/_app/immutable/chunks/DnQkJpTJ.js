@@ -1,0 +1,1 @@
+import{ae as u,l as g,af as o,j as t,C as _,D as l,ag as i,G as d,B as p,I as m}from"./LaurbvgF.js";function E(n,r){let a=null,f=t;var s;if(t){a=p;for(var e=m(document.head);e!==null&&(e.nodeType!==_||e.data!==n);)e=l(e);if(e===null)i(!1);else{var y=l(e);e.remove(),d(y)}}t||(s=document.head.appendChild(u()));try{g(()=>r(s),o)}finally{f&&(i(!0),d(a))}}export{E as h};

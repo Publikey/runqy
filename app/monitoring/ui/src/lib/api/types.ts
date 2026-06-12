@@ -246,6 +246,14 @@ export interface QueueConfigSummary {
 	priority: number;
 }
 
+export interface QueueLimitsConfig {
+	max_retry?: number;
+	ttl_completed?: string;
+	ttl_archived?: string;
+	pending_timeout?: string;
+	active_timeout?: string;
+}
+
 export interface DeploymentConfig {
 	git_url: string;
 	branch: string;
@@ -256,12 +264,29 @@ export interface DeploymentConfig {
 	redis_storage?: boolean;
 	vaults?: string[];
 	git_token?: string;
+	limits?: QueueLimitsConfig;
+}
+
+export interface FieldSchema {
+	name: string;
+	type: string[];
+	required?: boolean;
+	default?: unknown;
+	description?: string;
 }
 
 export interface QueueConfigDetail {
 	name: string;
 	priority: number;
 	deployment?: DeploymentConfig;
+	input?: FieldSchema[];
+	output?: FieldSchema[];
 	created_at: number;
 	updated_at: number;
+}
+
+// Playground types
+export interface PlaygroundEnqueueResponse {
+	tasks: { id: string; queue: string }[];
+	count: number;
 }

@@ -18,7 +18,8 @@ import type {
 	MetricsResponse,
 	QueueStatsResponse,
 	QueueConfigDetail,
-	DeploymentConfig
+	DeploymentConfig,
+	PlaygroundEnqueueResponse
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -113,6 +114,13 @@ export async function getTasks(
 	// NB: the backend reads `size` (getPageOptions), not `page_size`.
 	return fetchJson(
 		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks?size=${pageSize}&page=${page}`
+	);
+}
+
+// Fetch a single task directly (any state)
+export async function getTask(qname: string, taskId: string): Promise<Task> {
+	return fetchJson(
+		`${BASE_URL}/queues/${encodeURIComponent(qname)}/tasks/${encodeURIComponent(taskId)}`
 	);
 }
 
@@ -391,5 +399,18 @@ export async function deleteQueueConfig(name: string): Promise<{ message: string
 export async function restoreQueueConfig(name: string): Promise<{ message: string }> {
 	return fetchJson(`${BASE_URL}/queue_configs/${encodeURIComponent(name)}:restore`, {
 		method: 'POST'
+	});
+}
+
+// Playground API
+export async function playgroundEnqueue(
+	queue: string,
+	payload: unknown,
+	count: number = 1,
+	timeout: number = 0
+): Promise<PlaygroundEnqueueResponse> {
+	return fetchJson(`${BASE_URL}/playground/enqueue`, {
+		method: 'POST',
+		body: JSON.stringify({ queue, payload, count, timeout })
 	});
 }

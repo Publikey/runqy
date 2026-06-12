@@ -3,9 +3,10 @@
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import type { Task, TaskState } from '$lib/api/types';
+	import type { Task, TaskState, QueueConfigDetail } from '$lib/api/types';
 	import {
 		getQueueInfo,
+		getQueueConfig,
 		getTasks,
 		pauseQueue,
 		resumeQueue,
@@ -22,7 +23,7 @@
 		batchRunTasks
 	} from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
-	import { formatNumber, formatBytes, formatDuration } from '$lib/utils/format';
+	import { formatNumber, formatBytes, formatDuration, formatDateTime } from '$lib/utils/format';
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
@@ -39,6 +40,8 @@
 
 	let activeTab = $state<TabState>('active');
 	let queueInfo = $state<Awaited<ReturnType<typeof getQueueInfo>> | null>(null);
+	let queueConfig = $state<QueueConfigDetail | null>(null);
+	let configOpen = $state(false);
 	let tasks = $state<Task[]>([]);
 	let taskCounts = $state<Record<TabState, number>>({
 		active: 0,
@@ -123,9 +126,19 @@
 		}
 	}
 
+	async function loadQueueConfig() {
+		try {
+			queueConfig = await getQueueConfig(qname);
+		} catch {
+			// No config for this queue (e.g. created directly in Redis) — hide the panel.
+			queueConfig = null;
+		}
+	}
+
 	onMount(() => {
 		loadData();
 		loadTasks();
+		loadQueueConfig();
 		pollInterval = setInterval(pollData, $settings.pollInterval * 1000);
 	});
 
@@ -378,6 +391,120 @@
 			</button>
 		</div>
 	</div>
+
+	<!-- Queue Configuration (read-only, collapsible) -->
+	{#if queueConfig}
+		<div>
+			<button type="button" class="rq-btn-ghost" onclick={() => (configOpen = !configOpen)}>
+				<svg
+					class="w-4 h-4 transition-transform duration-150 {configOpen ? 'rotate-90' : ''}"
+					fill="none"
+					stroke="currentColor"
+					viewBox="0 0 24 24"
+				>
+					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+				</svg>
+				Configuration
+				{#if queueConfig.deployment?.mode}
+					<span class="badge preset-outlined-surface-500 text-xs">{queueConfig.deployment.mode}</span>
+				{/if}
+				<span class="text-xs text-surface-500">Priority {queueConfig.priority}</span>
+			</button>
+			{#if configOpen}
+				<div class="rq-card p-6 mt-3 space-y-4">
+					{#if queueConfig.deployment}
+						{@const d = queueConfig.deployment}
+						<div>
+							<h4 class="rq-section-title mb-2">Deployment</h4>
+							<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+								<div>
+									<div class="text-xs text-surface-400">Git URL</div>
+									<div class="text-sm font-mono break-all">{d.git_url || '—'}</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Branch</div>
+									<div class="text-sm font-mono">{d.branch || '—'}</div>
+								</div>
+								{#if d.code_path}
+									<div>
+										<div class="text-xs text-surface-400">Code path</div>
+										<div class="text-sm font-mono">{d.code_path}</div>
+									</div>
+								{/if}
+								<div>
+									<div class="text-xs text-surface-400">Startup command</div>
+									<div class="text-sm font-mono break-all">{d.startup_cmd || '—'}</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Startup timeout</div>
+									<div class="text-sm">{d.startup_timeout_secs}s</div>
+								</div>
+								<div>
+									<div class="text-xs text-surface-400">Redis storage</div>
+									<div class="text-sm">
+										{#if d.redis_storage}
+											<span class="badge preset-filled-success-500 text-xs">Enabled</span>
+										{:else}
+											<span class="text-surface-500">Disabled</span>
+										{/if}
+									</div>
+								</div>
+								{#if d.git_token}
+									<div>
+										<div class="text-xs text-surface-400">Git token</div>
+										<div class="text-sm font-mono break-all">{d.git_token}</div>
+									</div>
+								{/if}
+								<div>
+									<div class="text-xs text-surface-400">Vaults</div>
+									<div class="text-sm">
+										{#if d.vaults?.length}
+											<div class="flex items-center gap-1 flex-wrap">
+												{#each d.vaults as vault (vault)}
+													<span class="badge preset-outlined-primary-500 text-xs">{vault}</span>
+												{/each}
+											</div>
+										{:else}
+											<span class="text-surface-500">None</span>
+										{/if}
+									</div>
+								</div>
+							</div>
+						</div>
+						<div>
+							<h4 class="rq-section-title mb-2">Task Lifecycle Limits</h4>
+							<div class="grid grid-cols-2 md:grid-cols-5 gap-x-8 gap-y-2">
+								{#each [
+									{ label: 'Max retry', value: d.limits?.max_retry },
+									{ label: 'TTL completed', value: d.limits?.ttl_completed },
+									{ label: 'TTL archived', value: d.limits?.ttl_archived },
+									{ label: 'Pending timeout', value: d.limits?.pending_timeout },
+									{ label: 'Active timeout', value: d.limits?.active_timeout }
+								] as limit (limit.label)}
+									<div>
+										<div class="text-xs text-surface-400">{limit.label}</div>
+										<div class="text-sm font-mono">
+											{#if limit.value !== undefined && limit.value !== ''}
+												{limit.value}
+											{:else}
+												<span class="text-surface-500 font-sans">server default</span>
+											{/if}
+										</div>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{:else}
+						<p class="text-sm text-surface-500">No deployment configured.</p>
+					{/if}
+					<div class="flex items-center gap-6 pt-2 border-t border-surface-700 text-xs text-surface-500">
+						<span>Created {formatDateTime(new Date(queueConfig.created_at * 1000))}</span>
+						<span>Updated {formatDateTime(new Date(queueConfig.updated_at * 1000))}</span>
+					</div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Tabs -->
 	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600">

@@ -201,6 +201,16 @@ func (s *Store) Save(ctx context.Context, cfg *QueueConfig) error {
 		Description: "",
 	}
 
+	// QueueConfig carries no input/output schemas or description (they are only
+	// settable via the YAML config). Preserve the existing values, otherwise the
+	// upsert in SaveQueue would wipe them on every create/update from the
+	// dashboard, the public API, or the CLI.
+	if existing, err := s.GetQueue(ctx, parent); err == nil && existing != nil {
+		queue.InputSchema = existing.InputSchema
+		queue.OutputSchema = existing.OutputSchema
+		queue.Description = existing.Description
+	}
+
 	queueID, err := s.SaveQueue(ctx, queue)
 	if err != nil {
 		return err

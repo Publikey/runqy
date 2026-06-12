@@ -26,11 +26,13 @@ type CreateQueueConfigRequest struct {
 
 // QueueConfigDetailResponse is the full queue config response
 type QueueConfigDetailResponse struct {
-	Name       string                       `json:"name"`
-	Priority   int                          `json:"priority"`
+	Name       string                        `json:"name"`
+	Priority   int                           `json:"priority"`
 	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
-	CreatedAt  int64                        `json:"created_at"`
-	UpdatedAt  int64                        `json:"updated_at"`
+	Input      []queueworker.FieldSchema     `json:"input,omitempty"`
+	Output     []queueworker.FieldSchema     `json:"output,omitempty"`
+	CreatedAt  int64                         `json:"created_at"`
+	UpdatedAt  int64                         `json:"updated_at"`
 }
 
 func newListQueueConfigsHandlerFunc(store *queueworker.Store) http.HandlerFunc {
@@ -63,6 +65,8 @@ func newListQueueConfigsHandlerFunc(store *queueworker.Store) http.HandlerFunc {
 					Name:       queueworker.BuildFullQueueName(parentName, queueworker.DefaultSubQueueName),
 					Priority:   0,
 					Deployment: queue.Deployment,
+					Input:      queue.InputSchema,
+					Output:     queue.OutputSchema,
 					CreatedAt:  queue.CreatedAt,
 					UpdatedAt:  queue.UpdatedAt,
 				})
@@ -73,6 +77,8 @@ func newListQueueConfigsHandlerFunc(store *queueworker.Store) http.HandlerFunc {
 						Name:       fullName,
 						Priority:   sq.Priority,
 						Deployment: queue.Deployment,
+						Input:      queue.InputSchema,
+						Output:     queue.OutputSchema,
 						CreatedAt:  queue.CreatedAt,
 						UpdatedAt:  queue.UpdatedAt,
 					})
@@ -109,6 +115,13 @@ func newGetQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc {
 			Deployment: cfg.Deployment,
 			CreatedAt:  cfg.CreatedAt,
 			UpdatedAt:  cfg.UpdatedAt,
+		}
+
+		// Input/output schemas live on the parent queue (QueueConfig doesn't carry them).
+		parentName, _, _ := queueworker.ParseQueueName(name)
+		if parent, err := store.GetQueue(r.Context(), parentName); err == nil && parent != nil {
+			resp.Input = parent.InputSchema
+			resp.Output = parent.OutputSchema
 		}
 
 		w.Header().Set("Content-Type", "application/json")
