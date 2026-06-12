@@ -12,6 +12,7 @@ import type {
 	RedisInfo,
 	DailyStats,
 	DatabaseInfo,
+	SystemEnvInfo,
 	VaultSummary,
 	VaultDetail,
 	MetricsResponse,
@@ -218,6 +219,11 @@ export async function getRedisInfo(): Promise<RedisInfo> {
 // Database API
 export async function getDatabaseInfo(): Promise<DatabaseInfo> {
 	return fetchJson(`${BASE_URL}/database_info`);
+}
+
+// System environment variables (read-only, secrets masked)
+export async function getSystemEnv(): Promise<SystemEnvInfo> {
+	return fetchJson(`${BASE_URL}/system/env`);
 }
 
 // Stats API

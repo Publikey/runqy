@@ -256,6 +256,9 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/database_info", newDatabaseInfoHandlerFunc(db, opts.Config)).Methods("GET")
 	}
 
+	// System environment variables (read-only, secrets masked).
+	api.HandleFunc("/system/env", newSystemEnvHandlerFunc(opts.Config)).Methods("GET")
+
 	// Vaults endpoints.
 	if opts.VaultStore != nil {
 		api.HandleFunc("/vaults", newListVaultsHandlerFunc(opts.VaultStore)).Methods("GET")

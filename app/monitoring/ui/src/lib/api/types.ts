@@ -166,6 +166,15 @@ export interface DatabaseStats {
 	idle: number;
 }
 
+export interface EnvVar {
+	name: string;
+	value: string;
+}
+
+export interface SystemEnvInfo {
+	vars: EnvVar[];
+}
+
 // Metrics types (Prometheus data)
 export interface PrometheusResult {
 	status: string;
