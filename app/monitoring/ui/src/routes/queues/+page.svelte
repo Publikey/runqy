@@ -20,7 +20,10 @@
 	let searchQuery = $state('');
 	let showPaused: boolean | null = $state(null);
 	let refreshing = $state(false);
-	let viewMode = $state<'cards' | 'table'>('table');
+	// Cards read far better than the 11-column table on small screens.
+	let viewMode = $state<'cards' | 'table'>(
+		typeof window !== 'undefined' && window.innerWidth < 768 ? 'cards' : 'table'
+	);
 	let actionLoading = $state<string | null>(null);
 	let groupQueuesEnabled = $state(true);
 	let expandedGroups = $state<Set<string>>(new Set());
@@ -261,7 +264,7 @@
 
 <div class="rq-page space-y-8">
 	<!-- Header -->
-	<div class="flex items-center justify-between">
+	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 		<div>
 			<h1 class="rq-page-title">Queues</h1>
 			<p class="text-surface-500">{filteredQueues.length} queue{filteredQueues.length !== 1 ? 's' : ''}</p>

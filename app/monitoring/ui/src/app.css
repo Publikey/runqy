@@ -57,9 +57,15 @@ body {
 }
 
 .rq-page {
-	padding: 2rem 2.5rem;
+	padding: 1rem;
 	max-width: 1440px;
 	margin: 0 auto;
+}
+
+@media (min-width: 768px) {
+	.rq-page {
+		padding: 2rem 2.5rem;
+	}
 }
 
 .rq-page-header {
@@ -69,9 +75,37 @@ body {
 }
 
 .rq-page-title {
-	font-size: 1.5rem;
+	font-size: 1.25rem;
 	font-weight: 700;
 	letter-spacing: -0.01em;
+}
+
+@media (min-width: 768px) {
+	.rq-page-title {
+		font-size: 1.5rem;
+	}
+}
+
+/* Card headings (text-lg utilities on h2/h3/h4) are oversized on phones —
+   this unlayered rule wins over Tailwind's layered utilities. */
+@media (max-width: 767px) {
+	.rq-card h2,
+	.rq-card h3 {
+		font-size: 1rem;
+	}
+}
+
+/* iOS auto-zooms any focused field with a font-size below 16px — keep form
+   controls at 16px on small screens to prevent the viewport from jumping. */
+@media (max-width: 767px) {
+	input,
+	select,
+	textarea,
+	.input,
+	.select,
+	.textarea {
+		font-size: 16px;
+	}
 }
 
 .rq-page-subtitle {
@@ -207,6 +241,18 @@ body {
 /* ============================================
    Tables
    ============================================ */
+/* Every table sits in a .table-container: scroll horizontally inside the card
+   instead of overflowing the page on narrow screens. */
+.table-container {
+	overflow-x: auto;
+	scrollbar-width: thin;
+	-webkit-overflow-scrolling: touch;
+}
+
+.table-container > table {
+	min-width: 640px;
+}
+
 .rq-table {
 	width: 100%;
 	border-collapse: collapse;
@@ -327,11 +373,6 @@ body {
 .scrollbar-thin::-webkit-scrollbar-thumb {
 	background-color: var(--color-surface-400);
 	border-radius: 3px;
-}
-
-/* Sidebar transition */
-.sidebar-transition {
-	transition: width 200ms ease-in-out;
 }
 
 /* JSON Viewer — two hues max: keys in accent blue, literals in brand teal, strings neutral. */

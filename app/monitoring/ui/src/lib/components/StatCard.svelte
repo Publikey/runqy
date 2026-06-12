@@ -30,7 +30,7 @@
 	<div class="flex items-start justify-between">
 		<div>
 			<p class="text-xs font-medium uppercase tracking-wider text-surface-400">{label}</p>
-			<p class="text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
+			<p class="text-xl md:text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
 		</div>
 		{#if icon}
 			<div class="p-2 rounded-lg" style="background: rgba(255,255,255,0.04);">
@@ -44,7 +44,7 @@
 	<div class="flex items-start justify-between">
 		<div>
 			<p class="text-xs font-medium uppercase tracking-wider text-surface-400">{label}</p>
-			<p class="text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
+			<p class="text-xl md:text-2xl font-semibold tracking-tight mt-1 {variantClasses[variant]}">{formatNumber(value)}</p>
 		</div>
 		{#if icon}
 			<div class="p-2 rounded-lg" style="background: rgba(255,255,255,0.04);">

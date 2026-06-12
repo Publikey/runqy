@@ -314,7 +314,7 @@
 	<title>{qname} - Queues - runqy</title>
 </svelte:head>
 
-<div class="p-6 space-y-6">
+<div class="p-4 md:p-6 space-y-6">
 	<!-- Breadcrumb -->
 	<nav class="flex items-center gap-2 text-sm">
 		<a href="{base}/queues" class="text-surface-500 hover:text-primary-500">Queues</a>
@@ -323,7 +323,7 @@
 	</nav>
 
 	<!-- Header -->
-	<div class="flex items-start justify-between">
+	<div class="flex flex-wrap items-start justify-between gap-y-3">
 		<div>
 			<div class="flex items-center gap-3">
 				<h1 class="text-2xl font-bold">{qname}</h1>
@@ -507,11 +507,11 @@
 	{/if}
 
 	<!-- Tabs -->
-	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600">
+	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600 overflow-x-auto scrollbar-thin">
 		{#each tabs as tab}
 			<button
 				type="button"
-				class="px-4 py-2 font-medium text-sm border-b-2 transition-colors {activeTab === tab.state
+				class="shrink-0 whitespace-nowrap px-4 py-2 font-medium text-sm border-b-2 transition-colors {activeTab === tab.state
 					? 'border-primary-500 text-primary-500'
 					: 'border-transparent text-surface-500 hover:text-surface-900 dark:hover:text-surface-100'}"
 				onclick={() => (activeTab = tab.state)}

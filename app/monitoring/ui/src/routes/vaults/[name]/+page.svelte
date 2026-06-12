@@ -132,7 +132,7 @@
 	<title>{vaultName} - Vaults - runqy Monitor</title>
 </svelte:head>
 
-<div class="p-6 space-y-6">
+<div class="p-4 md:p-6 space-y-6">
 	<!-- Back Link -->
 	<a
 		href="{base}/vaults"
@@ -145,7 +145,7 @@
 	</a>
 
 	<!-- Header -->
-	<div class="flex items-start justify-between">
+	<div class="flex flex-wrap items-start justify-between gap-y-3">
 		<div>
 			<div class="flex items-center gap-3 mb-2">
 				<svg class="w-8 h-8 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
