@@ -1,7 +1,15 @@
 <script lang="ts">
 	import { SegmentedControl } from '@skeletonlabs/skeleton-svelte';
-	import type { QueueConfigDetail, DeploymentConfig, VaultSummary } from '$lib/api/types';
-	import { getVaults, getVault } from '$lib/api/client';
+	import type {
+		QueueConfigDetail,
+		DeploymentConfig,
+		VaultSummary,
+		AutoscaleConfig,
+		AutoscaleProvider,
+		ScaleTrigger,
+		ScaleTriggerType
+	} from '$lib/api/types';
+	import { getVaults, getVault, getAutoscaleProviders } from '$lib/api/client';
 
 	interface SubQueue {
 		name: string;
@@ -57,6 +65,53 @@
 	let loadingVaults = $state(false);
 	let loadingEntries = $state(false);
 	let error = $state('');
+
+	// Autoscaling state
+	let autoscaleEnabled = $state(false);
+	let autoscaleProvider = $state('');
+	let autoscaleMinWorkers = $state(0);
+	let autoscaleMaxWorkers = $state(1);
+	let autoscalePollInterval = $state('30s');
+	let scaleUp = $state<ScaleTrigger[]>([]);
+	let scaleDown = $state<ScaleTrigger[]>([]);
+	let instanceGpu = $state('');
+	let instanceImage = $state('');
+	let instanceDiskGb = $state<number | undefined>(undefined);
+	let instanceMaxPrice = $state<number | undefined>(undefined);
+	let availableProviders = $state<AutoscaleProvider[]>([]);
+	let loadingProviders = $state(false);
+
+	const scaleUpTypes: ScaleTriggerType[] = ['no_workers', 'queue_depth', 'schedule'];
+	const scaleDownTypes: ScaleTriggerType[] = ['idle', 'queue_depth', 'schedule'];
+
+	async function loadProviders() {
+		loadingProviders = true;
+		try {
+			const response = await getAutoscaleProviders();
+			availableProviders = response.providers || [];
+		} catch (e) {
+			console.error('Failed to load providers:', e);
+			availableProviders = [];
+		} finally {
+			loadingProviders = false;
+		}
+	}
+
+	function addScaleUp() {
+		scaleUp = [...scaleUp, { trigger: 'no_workers' }];
+	}
+
+	function removeScaleUp(index: number) {
+		scaleUp = scaleUp.filter((_, i) => i !== index);
+	}
+
+	function addScaleDown() {
+		scaleDown = [...scaleDown, { trigger: 'idle' }];
+	}
+
+	function removeScaleDown(index: number) {
+		scaleDown = scaleDown.filter((_, i) => i !== index);
+	}
 
 	let parentQueues = $derived(() => {
 		const parents = new Set<string>();
@@ -201,6 +256,85 @@
 			}
 		}
 
+		// Autoscaling: only include when enabled. Validate trigger rows.
+		if (autoscaleEnabled) {
+			if (!deployment) {
+				error = 'Autoscaling requires a deployment configuration (Git URL and startup command)';
+				return;
+			}
+			if (!autoscaleProvider) {
+				error = 'Autoscaling requires a provider';
+				return;
+			}
+			if (autoscaleMaxWorkers < 1) {
+				error = 'Autoscaling max workers must be at least 1';
+				return;
+			}
+			if (autoscaleMinWorkers < 0 || autoscaleMinWorkers > autoscaleMaxWorkers) {
+				error = 'Autoscaling min workers must be between 0 and max workers';
+				return;
+			}
+
+			for (const t of scaleUp) {
+				if (t.trigger === 'queue_depth' && (t.threshold === undefined || t.threshold === null)) {
+					error = 'queue_depth scale-up triggers require a threshold';
+					return;
+				}
+				if (t.trigger === 'schedule') {
+					if (!t.cron?.trim()) {
+						error = 'schedule scale-up triggers require a cron expression';
+						return;
+					}
+					if (t.workers === undefined || t.workers === null) {
+						error = 'schedule scale-up triggers require workers';
+						return;
+					}
+				}
+			}
+			for (const t of scaleDown) {
+				if (t.trigger === 'queue_depth' && (t.threshold === undefined || t.threshold === null)) {
+					error = 'queue_depth scale-down triggers require a threshold';
+					return;
+				}
+				if (t.trigger === 'schedule' && !t.cron?.trim()) {
+					error = 'schedule scale-down triggers require a cron expression';
+					return;
+				}
+				if (t.trigger === 'idle' && !t.timeout?.trim()) {
+					error = 'idle scale-down triggers require a timeout';
+					return;
+				}
+			}
+
+			const cleanTrigger = (t: ScaleTrigger): ScaleTrigger => {
+				const out: ScaleTrigger = { trigger: t.trigger };
+				if (t.trigger === 'queue_depth') out.threshold = t.threshold;
+				if (t.trigger === 'schedule') {
+					out.cron = t.cron?.trim();
+					if (t.workers !== undefined && t.workers !== null) out.workers = t.workers;
+				}
+				if (t.trigger === 'idle') out.timeout = t.timeout?.trim();
+				return out;
+			};
+
+			const autoscale: AutoscaleConfig = {
+				enabled: true,
+				provider: autoscaleProvider,
+				min_workers: autoscaleMinWorkers,
+				max_workers: autoscaleMaxWorkers,
+				poll_interval: autoscalePollInterval.trim() || '30s',
+				scale_up: scaleUp.map(cleanTrigger),
+				scale_down: scaleDown.map(cleanTrigger),
+				instance: {
+					gpu: instanceGpu.trim() || undefined,
+					image: instanceImage.trim() || undefined,
+					disk_gb: instanceDiskGb,
+					max_price_per_hour: instanceMaxPrice
+				}
+			};
+			deployment.autoscale = autoscale;
+		}
+
 		const queuesToCreate: QueueToCreate[] = [];
 
 		if (subQueues.length === 0) {
@@ -251,12 +385,24 @@
 		selectedVaults = new Set();
 		gitTokenVault = '';
 		gitTokenKey = '';
+		autoscaleEnabled = false;
+		autoscaleProvider = '';
+		autoscaleMinWorkers = 0;
+		autoscaleMaxWorkers = 1;
+		autoscalePollInterval = '30s';
+		scaleUp = [];
+		scaleDown = [];
+		instanceGpu = '';
+		instanceImage = '';
+		instanceDiskGb = undefined;
+		instanceMaxPrice = undefined;
 		error = '';
 	}
 
 	$effect(() => {
 		if (open) {
 			loadVaults();
+			loadProviders();
 			if (config && mode === 'edit') {
 				const dotIndex = config.name.lastIndexOf('.');
 				if (dotIndex > 0) {
@@ -285,6 +431,20 @@
 							gitTokenKey = parts.slice(1).join('/');
 							loadVaultEntries(gitTokenVault);
 						}
+					}
+					const as = config.deployment.autoscale;
+					if (as) {
+						autoscaleEnabled = as.enabled ?? false;
+						autoscaleProvider = as.provider || '';
+						autoscaleMinWorkers = as.min_workers ?? 0;
+						autoscaleMaxWorkers = as.max_workers ?? 1;
+						autoscalePollInterval = as.poll_interval || '30s';
+						scaleUp = (as.scale_up || []).map((t) => ({ ...t }));
+						scaleDown = (as.scale_down || []).map((t) => ({ ...t }));
+						instanceGpu = as.instance?.gpu || '';
+						instanceImage = as.instance?.image || '';
+						instanceDiskGb = as.instance?.disk_gb;
+						instanceMaxPrice = as.instance?.max_price_per_hour;
 					}
 				}
 			}
@@ -481,6 +641,177 @@
 									{/if}
 								</div>
 							</div>
+
+							<hr class="hr" />
+
+							<div>
+								<div class="flex items-center justify-between">
+									<div>
+										<h5 class="h5 mb-1">Autoscaling</h5>
+										<p class="text-sm text-surface-500">Automatically provision GPU workers for this queue</p>
+									</div>
+									<label class="flex items-center gap-3 cursor-pointer">
+										<input type="checkbox" bind:checked={autoscaleEnabled} class="checkbox" disabled={loading} />
+										<span class="text-sm">Enabled</span>
+									</label>
+								</div>
+							</div>
+
+							{#if autoscaleEnabled}
+								<div class="space-y-4">
+									<label class="label">
+										<span class="label-text">Provider</span>
+										{#if loadingProviders}
+											<p class="text-sm text-surface-500">Loading providers...</p>
+										{:else}
+											<select bind:value={autoscaleProvider} class="select" disabled={loading}>
+												<option value="">Select provider...</option>
+												{#each availableProviders as provider}
+													<option value={provider.name}>{provider.name}</option>
+												{/each}
+											</select>
+											{#if availableProviders.length === 0}
+												<span class="label-text text-surface-500">No providers configured. Add one on the Autoscaling page.</span>
+											{/if}
+										{/if}
+									</label>
+
+									<div class="grid grid-cols-3 gap-4">
+										<label class="label">
+											<span class="label-text">Min Workers</span>
+											<input type="number" bind:value={autoscaleMinWorkers} min="0" class="input" disabled={loading} />
+										</label>
+										<label class="label">
+											<span class="label-text">Max Workers</span>
+											<input type="number" bind:value={autoscaleMaxWorkers} min="1" class="input" disabled={loading} />
+										</label>
+										<label class="label">
+											<span class="label-text">Poll Interval</span>
+											<input type="text" bind:value={autoscalePollInterval} placeholder="30s" class="input" disabled={loading} />
+										</label>
+									</div>
+
+									<!-- Scale Up Triggers -->
+									<div>
+										<div class="flex items-center justify-between mb-2">
+											<span class="label-text">Scale Up Triggers</span>
+											<button type="button" class="btn btn-sm preset-tonal" onclick={addScaleUp} disabled={loading}>
+												+ Add Trigger
+											</button>
+										</div>
+										{#if scaleUp.length === 0}
+											<p class="text-sm text-surface-500">No scale-up triggers defined.</p>
+										{:else}
+											<div class="card preset-outlined p-3 space-y-3">
+												{#each scaleUp as trigger, index}
+													<div class="flex flex-wrap items-end gap-2">
+														<label class="label flex-1 min-w-[140px]">
+															<span class="label-text text-xs">Type</span>
+															<select bind:value={trigger.trigger} class="select" disabled={loading}>
+																{#each scaleUpTypes as t}
+																	<option value={t}>{t}</option>
+																{/each}
+															</select>
+														</label>
+														{#if trigger.trigger === 'queue_depth'}
+															<label class="label w-28">
+																<span class="label-text text-xs">Threshold</span>
+																<input type="number" bind:value={trigger.threshold} min="0" class="input" disabled={loading} />
+															</label>
+														{:else if trigger.trigger === 'schedule'}
+															<label class="label flex-1 min-w-[120px]">
+																<span class="label-text text-xs">Cron</span>
+																<input type="text" bind:value={trigger.cron} placeholder="0 9 * * *" class="input font-mono text-sm" disabled={loading} />
+															</label>
+															<label class="label w-24">
+																<span class="label-text text-xs">Workers</span>
+																<input type="number" bind:value={trigger.workers} min="0" class="input" disabled={loading} />
+															</label>
+														{/if}
+														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleUp(index)} disabled={loading}>
+															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+															</svg>
+														</button>
+													</div>
+												{/each}
+											</div>
+										{/if}
+									</div>
+
+									<!-- Scale Down Triggers -->
+									<div>
+										<div class="flex items-center justify-between mb-2">
+											<span class="label-text">Scale Down Triggers</span>
+											<button type="button" class="btn btn-sm preset-tonal" onclick={addScaleDown} disabled={loading}>
+												+ Add Trigger
+											</button>
+										</div>
+										{#if scaleDown.length === 0}
+											<p class="text-sm text-surface-500">No scale-down triggers defined.</p>
+										{:else}
+											<div class="card preset-outlined p-3 space-y-3">
+												{#each scaleDown as trigger, index}
+													<div class="flex flex-wrap items-end gap-2">
+														<label class="label flex-1 min-w-[140px]">
+															<span class="label-text text-xs">Type</span>
+															<select bind:value={trigger.trigger} class="select" disabled={loading}>
+																{#each scaleDownTypes as t}
+																	<option value={t}>{t}</option>
+																{/each}
+															</select>
+														</label>
+														{#if trigger.trigger === 'queue_depth'}
+															<label class="label w-28">
+																<span class="label-text text-xs">Threshold</span>
+																<input type="number" bind:value={trigger.threshold} min="0" class="input" disabled={loading} />
+															</label>
+														{:else if trigger.trigger === 'schedule'}
+															<label class="label flex-1 min-w-[120px]">
+																<span class="label-text text-xs">Cron</span>
+																<input type="text" bind:value={trigger.cron} placeholder="0 18 * * *" class="input font-mono text-sm" disabled={loading} />
+															</label>
+														{:else if trigger.trigger === 'idle'}
+															<label class="label w-28">
+																<span class="label-text text-xs">Timeout</span>
+																<input type="text" bind:value={trigger.timeout} placeholder="10m" class="input" disabled={loading} />
+															</label>
+														{/if}
+														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleDown(index)} disabled={loading}>
+															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+															</svg>
+														</button>
+													</div>
+												{/each}
+											</div>
+										{/if}
+									</div>
+
+									<!-- Instance Spec -->
+									<div>
+										<span class="label-text">Instance Spec</span>
+										<div class="grid grid-cols-2 gap-4 mt-1">
+											<label class="label">
+												<span class="label-text text-xs">GPU <span class="text-surface-500">(optional)</span></span>
+												<input type="text" bind:value={instanceGpu} placeholder="A100" class="input" disabled={loading} />
+											</label>
+											<label class="label">
+												<span class="label-text text-xs">Image <span class="text-surface-500">(optional)</span></span>
+												<input type="text" bind:value={instanceImage} placeholder="nvidia/cuda:12" class="input font-mono text-sm" disabled={loading} />
+											</label>
+											<label class="label">
+												<span class="label-text text-xs">Disk (GB) <span class="text-surface-500">(optional)</span></span>
+												<input type="number" bind:value={instanceDiskGb} min="0" class="input" disabled={loading} />
+											</label>
+											<label class="label">
+												<span class="label-text text-xs">Max Price/hr <span class="text-surface-500">(optional)</span></span>
+												<input type="number" step="0.01" bind:value={instanceMaxPrice} min="0" class="input" disabled={loading} />
+											</label>
+										</div>
+									</div>
+								</div>
+							{/if}
 						</div>
 					{/if}
 

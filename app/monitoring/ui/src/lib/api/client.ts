@@ -19,7 +19,9 @@ import type {
 	QueueStatsResponse,
 	QueueConfigDetail,
 	DeploymentConfig,
-	PlaygroundEnqueueResponse
+	PlaygroundEnqueueResponse,
+	AutoscaleStatus,
+	AutoscaleProvider
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -399,6 +401,67 @@ export async function deleteQueueConfig(name: string): Promise<{ message: string
 export async function restoreQueueConfig(name: string): Promise<{ message: string }> {
 	return fetchJson(`${BASE_URL}/queue_configs/${encodeURIComponent(name)}:restore`, {
 		method: 'POST'
+	});
+}
+
+// Autoscale API
+export async function getAutoscaleStatus(): Promise<AutoscaleStatus> {
+	return fetchJson(`${BASE_URL}/autoscale/status`);
+}
+
+export async function protectInstance(id: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/protect`, {
+		method: 'POST'
+	});
+}
+
+export async function unprotectInstance(id: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/unprotect`, {
+		method: 'POST'
+	});
+}
+
+export async function getAutoscaleProviderTypes(): Promise<{ types: string[] }> {
+	return fetchJson(`${BASE_URL}/autoscale/provider-types`);
+}
+
+export async function getAutoscaleProviders(): Promise<{ providers: AutoscaleProvider[]; count: number }> {
+	return fetchJson(`${BASE_URL}/autoscale/providers`);
+}
+
+export async function getAutoscaleProvider(name: string): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`);
+}
+
+export async function createAutoscaleProvider(body: {
+	name: string;
+	provider_type: string;
+	config: Record<string, unknown>;
+	enabled?: boolean;
+}): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers`, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function updateAutoscaleProvider(
+	name: string,
+	body: {
+		provider_type: string;
+		config: Record<string, unknown>;
+		enabled: boolean;
+	}
+): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteAutoscaleProvider(name: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`, {
+		method: 'DELETE'
 	});
 }
 

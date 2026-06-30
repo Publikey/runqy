@@ -265,6 +265,73 @@ export interface DeploymentConfig {
 	vaults?: string[];
 	git_token?: string;
 	limits?: QueueLimitsConfig;
+	autoscale?: AutoscaleConfig;
+}
+
+// Autoscaling types
+export type AutoscaleInstanceStatus =
+	| 'provisioning'
+	| 'running'
+	| 'draining'
+	| 'destroying'
+	| 'terminated'
+	| 'failed';
+
+export interface AutoscaleInstance {
+	instance_id: string;
+	provider: string;
+	queue: string;
+	status: AutoscaleInstanceStatus | string;
+	worker_id: string;
+	protected: boolean;
+	price_per_hour: number;
+	cost_accumulated: number;
+	created_at: string;
+	last_job_at?: string;
+	updated_at: string;
+}
+
+export interface AutoscaleStatus {
+	instances: AutoscaleInstance[];
+	count: number;
+	total_cost: number;
+}
+
+export interface AutoscaleProvider {
+	name: string;
+	provider_type: string;
+	config: Record<string, unknown>;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export type ScaleTriggerType = 'no_workers' | 'queue_depth' | 'schedule' | 'idle';
+
+export interface ScaleTrigger {
+	trigger: ScaleTriggerType;
+	threshold?: number;
+	cron?: string;
+	workers?: number;
+	timeout?: string;
+}
+
+export interface AutoscaleInstanceSpec {
+	gpu?: string;
+	image?: string;
+	disk_gb?: number;
+	max_price_per_hour?: number;
+}
+
+export interface AutoscaleConfig {
+	enabled: boolean;
+	provider: string;
+	min_workers: number;
+	max_workers: number;
+	poll_interval: string;
+	scale_up: ScaleTrigger[];
+	scale_down: ScaleTrigger[];
+	instance: AutoscaleInstanceSpec;
 }
 
 export interface FieldSchema {
