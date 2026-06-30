@@ -84,6 +84,11 @@ func (c *APIClient) DELETE(path string) ([]byte, error) {
 	return c.request("DELETE", path, nil)
 }
 
+// PUT makes a PUT request
+func (c *APIClient) PUT(path string, body interface{}) ([]byte, error) {
+	return c.request("PUT", path, body)
+}
+
 // --- Queue API Types ---
 
 // QueueInfo represents queue information from the API
@@ -534,5 +539,113 @@ func (c *APIClient) GetEntriesAPI(vaultName string) ([]VaultEntryViewAPI, error)
 // DeleteEntryAPI deletes a vault entry
 func (c *APIClient) DeleteEntryAPI(vaultName, key string) error {
 	_, err := c.DELETE("/api/vaults/" + vaultName + "/entries/" + key)
+	return err
+}
+
+// --- Autoscale API Types ---
+
+// AutoscaleInstanceAPI represents a tracked autoscaler instance from the API.
+type AutoscaleInstanceAPI struct {
+	InstanceID      string  `json:"instance_id"`
+	Provider        string  `json:"provider"`
+	Queue           string  `json:"queue"`
+	Status          string  `json:"status"`
+	WorkerID        string  `json:"worker_id"`
+	Protected       bool    `json:"protected"`
+	PricePerHour    float64 `json:"price_per_hour"`
+	CostAccumulated float64 `json:"cost_accumulated"`
+}
+
+// AutoscaleStatusResponseAPI is the response for GET /api/autoscale/status.
+type AutoscaleStatusResponseAPI struct {
+	Instances []AutoscaleInstanceAPI `json:"instances"`
+	Count     int                    `json:"count"`
+	TotalCost float64                `json:"total_cost"`
+}
+
+// AutoscaleProviderAPI represents a provider config from the API (config masked).
+type AutoscaleProviderAPI struct {
+	Name         string          `json:"name"`
+	ProviderType string          `json:"provider_type"`
+	Config       json.RawMessage `json:"config"`
+	Enabled      bool            `json:"enabled"`
+	CreatedAt    string          `json:"created_at,omitempty"`
+	UpdatedAt    string          `json:"updated_at,omitempty"`
+}
+
+// AutoscaleProviderRequestAPI is the create/update body for a provider config.
+type AutoscaleProviderRequestAPI struct {
+	Name         string          `json:"name,omitempty"`
+	ProviderType string          `json:"provider_type,omitempty"`
+	Config       json.RawMessage `json:"config,omitempty"`
+	Enabled      *bool           `json:"enabled,omitempty"`
+}
+
+// AutoscaleStatusAPI fetches the autoscaling status.
+func (c *APIClient) AutoscaleStatusAPI() (*AutoscaleStatusResponseAPI, error) {
+	data, err := c.GET("/api/autoscale/status")
+	if err != nil {
+		return nil, err
+	}
+	var resp AutoscaleStatusResponseAPI
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+// SetInstanceProtectedAPI toggles instance protection.
+func (c *APIClient) SetInstanceProtectedAPI(instanceID string, protected bool) error {
+	action := "unprotect"
+	if protected {
+		action = "protect"
+	}
+	_, err := c.POST("/api/autoscale/instances/"+instanceID+"/"+action, nil)
+	return err
+}
+
+// ListAutoscaleProvidersAPI lists provider configs.
+func (c *APIClient) ListAutoscaleProvidersAPI() ([]AutoscaleProviderAPI, error) {
+	data, err := c.GET("/api/autoscale/providers")
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Providers []AutoscaleProviderAPI `json:"providers"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return resp.Providers, nil
+}
+
+// GetAutoscaleProviderAPI fetches a provider config.
+func (c *APIClient) GetAutoscaleProviderAPI(name string) (*AutoscaleProviderAPI, error) {
+	data, err := c.GET("/api/autoscale/providers/" + name)
+	if err != nil {
+		return nil, err
+	}
+	var p AutoscaleProviderAPI
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &p, nil
+}
+
+// CreateAutoscaleProviderAPI creates a provider config.
+func (c *APIClient) CreateAutoscaleProviderAPI(req AutoscaleProviderRequestAPI) error {
+	_, err := c.POST("/api/autoscale/providers", req)
+	return err
+}
+
+// UpdateAutoscaleProviderAPI updates a provider config.
+func (c *APIClient) UpdateAutoscaleProviderAPI(name string, req AutoscaleProviderRequestAPI) error {
+	_, err := c.PUT("/api/autoscale/providers/"+name, req)
+	return err
+}
+
+// DeleteAutoscaleProviderAPI deletes a provider config.
+func (c *APIClient) DeleteAutoscaleProviderAPI(name string) error {
+	_, err := c.DELETE("/api/autoscale/providers/" + name)
 	return err
 }

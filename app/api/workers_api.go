@@ -24,7 +24,9 @@ type WorkerInfo struct {
 	Concurrency int    `json:"concurrency"`
 	Queues      string `json:"queues"`
 	Status      string `json:"status"`
-	IsStale     bool   `json:"is_stale"` // True if last_beat > 30s ago
+	IsStale     bool   `json:"is_stale"`              // True if last_beat > 30s ago
+	InstanceID  string `json:"instance_id,omitempty"` // autoscaler correlation id (if autoscaler-managed)
+	Protected   bool   `json:"protected"`             // worker self-declared protection from autoscaling
 }
 
 // WorkersResponse is the API response for listing workers
@@ -88,9 +90,11 @@ func ListWorkers(c *gin.Context) {
 		workerID := strings.TrimPrefix(workerKey, "asynq:workers:")
 
 		worker := WorkerInfo{
-			WorkerID: workerID,
-			Status:   data["status"],
-			Queues:   data["queues"],
+			WorkerID:   workerID,
+			Status:     data["status"],
+			Queues:     data["queues"],
+			InstanceID: data["instance_id"],
+			Protected:  strings.EqualFold(data["protected"], "true"),
 		}
 
 		if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil {
@@ -153,9 +157,11 @@ func GetWorker(c *gin.Context) {
 
 	now := time.Now().Unix()
 	worker := WorkerInfo{
-		WorkerID: workerID,
-		Status:   data["status"],
-		Queues:   data["queues"],
+		WorkerID:   workerID,
+		Status:     data["status"],
+		Queues:     data["queues"],
+		InstanceID: data["instance_id"],
+		Protected:  strings.EqualFold(data["protected"], "true"),
 	}
 
 	if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil {

@@ -125,6 +125,74 @@ CREATE INDEX IF NOT EXISTS idx_vault_entries_vault_id ON vault_entries(vault_id)
 CREATE INDEX IF NOT EXISTS idx_vault_entries_key ON vault_entries(vault_id, key);
 `
 
+// PostgreSQL schema for GPU autoscaling (provider configs + tracked instances)
+const postgresAutoscaleSchemaSQL = `
+CREATE TABLE IF NOT EXISTS autoscale_providers (
+    id SERIAL PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    provider_type TEXT NOT NULL,
+    config BYTEA NOT NULL,
+    enabled BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_autoscale_providers_name ON autoscale_providers(name);
+
+CREATE TABLE IF NOT EXISTS autoscale_instances (
+    id SERIAL PRIMARY KEY,
+    instance_id TEXT UNIQUE NOT NULL,
+    provider TEXT NOT NULL,
+    queue TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'provisioning',
+    worker_id TEXT DEFAULT '',
+    protected BOOLEAN DEFAULT FALSE,
+    price_per_hour DOUBLE PRECISION DEFAULT 0,
+    cost_accumulated DOUBLE PRECISION DEFAULT 0,
+    metadata JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_job_at TIMESTAMP WITH TIME ZONE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_autoscale_instances_queue ON autoscale_instances(queue);
+CREATE INDEX IF NOT EXISTS idx_autoscale_instances_status ON autoscale_instances(status);
+`
+
+// SQLite schema for GPU autoscaling (provider configs + tracked instances)
+const sqliteAutoscaleSchemaSQL = `
+CREATE TABLE IF NOT EXISTS autoscale_providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    provider_type TEXT NOT NULL,
+    config BLOB NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_autoscale_providers_name ON autoscale_providers(name);
+
+CREATE TABLE IF NOT EXISTS autoscale_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    instance_id TEXT UNIQUE NOT NULL,
+    provider TEXT NOT NULL,
+    queue TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'provisioning',
+    worker_id TEXT DEFAULT '',
+    protected INTEGER DEFAULT 0,
+    price_per_hour REAL DEFAULT 0,
+    cost_accumulated REAL DEFAULT 0,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_job_at DATETIME,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_autoscale_instances_queue ON autoscale_instances(queue);
+CREATE INDEX IF NOT EXISTS idx_autoscale_instances_status ON autoscale_instances(status);
+`
+
 // PostgreSQL schema for admin_user (authentication)
 const postgresAdminUserSchemaSQL = `
 CREATE TABLE IF NOT EXISTS admin_user (
@@ -221,6 +289,27 @@ func EnsureSchema(db *sqlx.DB, debug bool) error {
 		}
 	}
 
+	// Check and create autoscale tables
+	autoscaleExist, err := tableExists(db, "autoscale_instances")
+	if err != nil {
+		return fmt.Errorf("failed to check autoscale tables existence: %w", err)
+	}
+	if autoscaleExist {
+		if debug {
+			log.Println("[SCHEMA] Autoscale tables already exist")
+		}
+	} else {
+		if debug {
+			log.Println("[SCHEMA] Creating autoscale tables...")
+		}
+		if err := createAutoscaleSchema(db); err != nil {
+			return fmt.Errorf("failed to create autoscale schema: %w", err)
+		}
+		if debug {
+			log.Println("[SCHEMA] Autoscale tables created successfully")
+		}
+	}
+
 	// Check and create admin_user table
 	adminUserExists, err := tableExists(db, "admin_user")
 	if err != nil {
@@ -298,6 +387,21 @@ func createVaultsSchema(db *sqlx.DB) error {
 		schemaSQL = sqliteVaultsSchemaSQL
 	} else {
 		schemaSQL = postgresVaultsSchemaSQL
+	}
+
+	_, err := db.Exec(schemaSQL)
+	return err
+}
+
+// createAutoscaleSchema creates the autoscale tables based on the database driver
+func createAutoscaleSchema(db *sqlx.DB) error {
+	driverName := db.DriverName()
+
+	var schemaSQL string
+	if driverName == "sqlite" {
+		schemaSQL = sqliteAutoscaleSchemaSQL
+	} else {
+		schemaSQL = postgresAutoscaleSchemaSQL
 	}
 
 	_, err := db.Exec(schemaSQL)

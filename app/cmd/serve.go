@@ -12,6 +12,8 @@ import (
 
 	"github.com/Publikey/runqy/api"
 	"github.com/Publikey/runqy/auth"
+	"github.com/Publikey/runqy/autoscale"
+	"github.com/Publikey/runqy/autoscale/provider"
 	_ "github.com/Publikey/runqy/docs"
 	"github.com/Publikey/runqy/models"
 	"github.com/Publikey/runqy/monitoring"
@@ -289,6 +291,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Initialize queue worker store (database for configs, Redis for asynq)
 	qwStore := queueworker.NewStore(db, redisAddr.RDB)
 
+	// Initialize autoscaling: encrypted provider-config store + instance tracking store
+	autoscaleProviderStore := provider.NewStore(db)
+	autoscaleInstanceStore := autoscale.NewStore(db)
+	autoScaler := autoscale.New(autoscaleInstanceStore, autoscaleProviderStore, qwStore, inspector, redisAddr.RDB, cfg)
+	autoScaler.Start()
+	if debugMode {
+		log.Println("[AUTOSCALE] Autoscaler started")
+	}
+
 	// Initialize monitoring UI (unless disabled)
 	var h *monitoring.HTTPHandler
 	if !disableUI {
@@ -420,6 +431,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt)
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
+	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, cfg.APIKey)
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.StaticFile("/swagger.yaml", "./docs/swagger.yaml")
@@ -462,6 +474,9 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	sig := <-quit
 	log.Printf("Received %v, shutting down...", sig)
+
+	// Stop the autoscaler before the inspector/redis it depends on are closed (deferred).
+	autoScaler.Stop()
 
 	// Stop watchers with timeout to prevent blocking forever
 	watcherDone := make(chan struct{})

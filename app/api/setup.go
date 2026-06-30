@@ -3,6 +3,8 @@ package api
 import (
 	"sync"
 
+	"github.com/Publikey/runqy/autoscale"
+	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/vaults"
@@ -81,4 +83,23 @@ func SetupVaultsAPI(r *gin.Engine, vaultStore *vaults.Store, apiKey string) {
 	router_vaults.POST("/:name/entries", SetEntry(vaultStore))
 	router_vaults.GET("/:name/entries", ListEntries(vaultStore))
 	router_vaults.DELETE("/:name/entries/:key", DeleteEntry(vaultStore))
+}
+
+// SetupAutoscaleAPI registers the GPU autoscaling routes (admin-only).
+func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerStore *provider.Store, apiKey string) {
+	grp := r.Group("/api/autoscale")
+	grp.Use(Authorize(apiKey))
+
+	// Status + instance protection
+	grp.GET("/status", AutoscaleStatus(instanceStore))
+	grp.POST("/instances/:id/protect", ProtectInstance(instanceStore))
+	grp.POST("/instances/:id/unprotect", UnprotectInstance(instanceStore))
+
+	// Provider config CRUD (vault-independent, encrypted at rest)
+	grp.GET("/provider-types", ListProviderTypes())
+	grp.GET("/providers", ListAutoscaleProviders(providerStore))
+	grp.POST("/providers", CreateAutoscaleProvider(providerStore))
+	grp.GET("/providers/:name", GetAutoscaleProvider(providerStore))
+	grp.PUT("/providers/:name", UpdateAutoscaleProvider(providerStore))
+	grp.DELETE("/providers/:name", DeleteAutoscaleProvider(providerStore))
 }

@@ -67,9 +67,10 @@ type QueueWorkersYAML struct {
 // 1. With sub_queues: creates multiple queues like "inference.high", "inference.low"
 // 2. Without sub_queues: uses priority field directly, creates "name.default"
 type QueueYAML struct {
-	Priority   int             `yaml:"priority,omitempty"`   // Used when no sub_queues defined
-	Deployment *DeploymentYAML `yaml:"deployment,omitempty"` // Deployment configuration
-	SubQueues  []SubQueueYAML  `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
+	Priority   int              `yaml:"priority,omitempty"`   // Used when no sub_queues defined
+	Deployment *DeploymentYAML  `yaml:"deployment,omitempty"` // Deployment configuration
+	Autoscale  *AutoscaleConfig `yaml:"autoscale,omitempty"`  // GPU autoscaling configuration (sibling of deployment)
+	SubQueues  []SubQueueYAML   `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
 
 	// Input and Output describe the schema of the task payload for this queue
 	Input  []FieldSchema `yaml:"input,omitempty"`
@@ -179,6 +180,11 @@ type DeploymentConfig struct {
 	Vaults             []string      `json:"vaults,omitempty"`    // List of vault names to inject as env vars
 	GitToken           string        `json:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
 	Limits             *LimitsConfig `json:"limits,omitempty"`    // Per-queue task lifecycle overrides (stored in deployment JSONB)
+
+	// Autoscale is the per-queue GPU autoscaling config. It is stored alongside the rest of
+	// the deployment JSON so it round-trips through the DB, REST API/CLI, and the UI. In YAML
+	// it is authored as a sibling of `deployment` (QueueYAML.Autoscale) and folded in here on load.
+	Autoscale *AutoscaleConfig `json:"autoscale,omitempty"`
 }
 
 // QueueSummary is a lightweight version for listing queues

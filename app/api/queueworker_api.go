@@ -412,6 +412,11 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
 				return
 			}
+			// Reject malformed autoscale config.
+			if err := req.Deployment.Autoscale.Validate(); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
+				return
+			}
 		}
 
 		ctx := c.Request.Context()
