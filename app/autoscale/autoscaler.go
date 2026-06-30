@@ -536,12 +536,21 @@ func workerServesParent(queuesField, parent string) bool {
 	if queuesField == "" {
 		return false
 	}
-	for _, q := range strings.Split(queuesField, ",") {
-		q = strings.TrimSpace(q)
-		if q == parent {
+	// The worker writes its queues either comma-separated ("inference.high,inference.low")
+	// or as a Go map string ("map[inference.high:10 inference.low:1]"). Normalize both:
+	// strip a "map[...]" wrapper, then tokenize on commas and whitespace, dropping any
+	// trailing ":<priority>" weight.
+	s := strings.TrimSpace(queuesField)
+	s = strings.TrimSuffix(strings.TrimPrefix(s, "map["), "]")
+	s = strings.ReplaceAll(s, ",", " ")
+	for _, tok := range strings.Fields(s) {
+		if i := strings.LastIndex(tok, ":"); i >= 0 {
+			tok = tok[:i] // drop ":<weight>"
+		}
+		if tok == parent {
 			return true
 		}
-		if p, _, _ := queueworker.ParseQueueName(q); p == parent {
+		if p, _, _ := queueworker.ParseQueueName(tok); p == parent {
 			return true
 		}
 	}

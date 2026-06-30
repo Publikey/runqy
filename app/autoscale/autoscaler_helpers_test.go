@@ -18,6 +18,9 @@ func TestWorkerServesParent(t *testing.T) {
 		{"other.default", "inference", false},
 		{"", "inference", false},
 		{" inference.high ", "inference", true},
+		{"map[inference.default:5]", "inference", true},
+		{"map[inference.high:10 inference.low:1]", "inference", true},
+		{"map[other.default:5]", "inference", false},
 	}
 	for _, c := range cases {
 		if got := workerServesParent(c.queues, c.parent); got != c.want {
