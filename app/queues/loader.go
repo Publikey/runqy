@@ -252,6 +252,7 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 			Vaults:             q.Deployment.Vaults,
 			GitToken:           q.Deployment.GitToken,
 			Limits:             q.Deployment.Limits,
+			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
 		}
 	}
 
@@ -259,9 +260,9 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 		// Create a config for each sub-queue
 		for _, sq := range q.SubQueues {
 			cfg := &QueueConfig{
-				Name:       BuildFullQueueName(baseName, sq.Name),
-				Priority:   sq.Priority,
-	
+				Name:     BuildFullQueueName(baseName, sq.Name),
+				Priority: sq.Priority,
+
 				Deployment: deployment,
 			}
 			configs = append(configs, cfg)
@@ -269,8 +270,8 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 	} else {
 		// No sub-queues, create single config with .default suffix
 		cfg := &QueueConfig{
-			Name:       BuildFullQueueName(baseName, DefaultSubQueueName),
-			Priority:   q.Priority,
+			Name:     BuildFullQueueName(baseName, DefaultSubQueueName),
+			Priority: q.Priority,
 
 			Deployment: deployment,
 		}

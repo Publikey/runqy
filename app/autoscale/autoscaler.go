@@ -26,6 +26,10 @@ const baseTick = 10 * time.Second
 // workerStaleThreshold matches the server/worker heartbeat staleness window.
 const workerStaleThreshold = 30 // seconds
 
+// workerStatusBootstrapping is the heartbeat status a worker reports from registration
+// until its supervised process signals ready (see runqy-worker heartbeat).
+const workerStatusBootstrapping = "bootstrapping"
+
 // Autoscaler is the background control loop that scales GPU workers per queue.
 type Autoscaler struct {
 	instances *Store
@@ -145,8 +149,10 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		return
 	}
 
-	// Reconcile worker correlation + protection from heartbeats, then load managed state.
-	a.reconcileWorkers(ctx, parent)
+	// Read worker heartbeats once per evaluation: used for correlation, live counting,
+	// and boot-phase detection. Reconcile correlation + protection, then load managed state.
+	workers := a.listWorkers(ctx)
+	a.reconcileWorkers(ctx, workers)
 
 	managed, err := a.instances.ListByQueue(ctx, parent)
 	if err != nil {
@@ -164,7 +170,7 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 	liveCount := len(live)
 
 	pending, active := a.queueDepth(ctx, parent)
-	totalWorkers := a.countLiveWorkers(ctx, parent)
+	totalWorkers := countLiveWorkers(workers, parent)
 
 	// Cost accumulation + idle activity tracking.
 	a.accrueCost(ctx, live, elapsed)
@@ -251,10 +257,17 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		}
 		toRemove = removable[:maxRemovable]
 	case hasIdle:
+		booting := bootstrappingInstances(workers)
 		now := time.Now()
 		for _, inst := range removable {
 			if len(toRemove) >= maxRemovable {
 				break
+			}
+			// Never idle-kill an instance that is still coming up: provider-side
+			// provisioning, or a correlated worker still bootstrapping (cloning code,
+			// installing deps, loading models). Idleness only counts once ready.
+			if inst.Status == StatusProvisioning || booting[inst.InstanceID] {
+				continue
 			}
 			if now.Sub(activityTime(inst)) >= idleTimeout {
 				toRemove = append(toRemove, inst)
@@ -345,9 +358,12 @@ func (a *Autoscaler) reconcileInstanceStates(ctx context.Context, prov provider.
 }
 
 // reconcileWorkers matches registered workers (by RUNQY_INSTANCE_ID echoed in their
-// heartbeat) to managed instance rows, and propagates self-declared protection.
-func (a *Autoscaler) reconcileWorkers(ctx context.Context, parent string) {
-	for _, w := range a.listWorkers(ctx) {
+// heartbeat) to managed instance rows, propagates self-declared protection, and keeps
+// the idle clock from counting boot time as idleness.
+func (a *Autoscaler) reconcileWorkers(ctx context.Context, workers []workerHeartbeat) {
+	now := time.Now()
+	staleCutoff := now.Unix() - workerStaleThreshold
+	for _, w := range workers {
 		if w.instanceID == "" {
 			continue
 		}
@@ -357,9 +373,19 @@ func (a *Autoscaler) reconcileWorkers(ctx context.Context, parent string) {
 		}
 		if inst.WorkerID != w.workerID {
 			_ = a.instances.SetWorkerID(ctx, inst.InstanceID, w.workerID)
+			// First correlation: start the idle clock now rather than at instance
+			// creation, so time spent booting is not counted as idleness.
+			if inst.LastJobAt == nil {
+				_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, now)
+			}
 		}
 		if w.protected && !inst.Protected {
 			_ = a.instances.SetProtected(ctx, inst.InstanceID, true)
+		}
+		// While the worker is still bootstrapping (fresh beat), keep sliding the idle
+		// clock forward: idleness only starts counting once the worker is ready.
+		if w.status == workerStatusBootstrapping && w.lastBeat >= staleCutoff {
+			_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, now)
 		}
 	}
 }
@@ -406,6 +432,7 @@ type workerHeartbeat struct {
 	workerID   string
 	queues     string
 	instanceID string
+	status     string
 	protected  bool
 	lastBeat   int64
 }
@@ -436,6 +463,7 @@ func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
 			workerID:   strings.TrimPrefix(key, "asynq:workers:"),
 			queues:     data["queues"],
 			instanceID: data["instance_id"],
+			status:     data["status"],
 			protected:  strings.EqualFold(data["protected"], "true"),
 		}
 		if lb, err := strconv.ParseInt(data["last_beat"], 10, 64); err == nil {
@@ -447,10 +475,10 @@ func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
 }
 
 // countLiveWorkers counts non-stale workers (managed or manual) serving the parent queue.
-func (a *Autoscaler) countLiveWorkers(ctx context.Context, parent string) int {
+func countLiveWorkers(workers []workerHeartbeat, parent string) int {
 	now := time.Now().Unix()
 	count := 0
-	for _, w := range a.listWorkers(ctx) {
+	for _, w := range workers {
 		if now-w.lastBeat > workerStaleThreshold {
 			continue
 		}
@@ -459,6 +487,19 @@ func (a *Autoscaler) countLiveWorkers(ctx context.Context, parent string) int {
 		}
 	}
 	return count
+}
+
+// bootstrappingInstances returns the instance ids whose correlated worker is still
+// bootstrapping (with a fresh heartbeat): those instances must not be idle-killed.
+func bootstrappingInstances(workers []workerHeartbeat) map[string]bool {
+	staleCutoff := time.Now().Unix() - workerStaleThreshold
+	out := make(map[string]bool)
+	for _, w := range workers {
+		if w.instanceID != "" && w.status == workerStatusBootstrapping && w.lastBeat >= staleCutoff {
+			out[w.instanceID] = true
+		}
+	}
+	return out
 }
 
 // getProvider returns a cached provider for a config record, rebuilding when the record changed.

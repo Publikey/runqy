@@ -425,9 +425,10 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 
 // SimpleQueueYAML represents a simple single-queue YAML format
 type SimpleQueueYAML struct {
-	Name       string                    `yaml:"name"`
-	Priority   int                       `yaml:"priority"`
-	Deployment *queueworker.DeploymentYAML `yaml:"deployment,omitempty"`
+	Name       string                       `yaml:"name"`
+	Priority   int                          `yaml:"priority"`
+	Deployment *queueworker.DeploymentYAML  `yaml:"deployment,omitempty"`
+	Autoscale  *queueworker.AutoscaleConfig `yaml:"autoscale,omitempty"`
 }
 
 func runConfigCreate(cmd *cobra.Command, args []string) error {
@@ -591,22 +592,11 @@ func runConfigCreateRemote() error {
 		var errors []string
 
 		for _, config := range configs {
+			// Pass the deployment through as-is: it already carries limits, autoscale, etc.
 			req := &CreateQueueRequest{
-				Name:     config.Name,
-				Priority: config.Priority,
-			}
-			if config.Deployment != nil {
-				req.Deployment = &DeploymentConfigAPI{
-					GitURL:             config.Deployment.GitURL,
-					Branch:             config.Deployment.Branch,
-					CodePath:           config.Deployment.CodePath,
-					StartupCmd:         config.Deployment.StartupCmd,
-					Mode:               config.Deployment.Mode,
-					StartupTimeoutSecs: config.Deployment.StartupTimeoutSecs,
-					RedisStorage:       config.Deployment.RedisStorage,
-					Vaults:             config.Deployment.Vaults,
-					GitToken:           config.Deployment.GitToken,
-				}
+				Name:       config.Name,
+				Priority:   config.Priority,
+				Deployment: config.Deployment,
 			}
 
 			resp, err := apiClient.CreateQueue(req, createForce)
@@ -661,7 +651,7 @@ func runConfigCreateRemote() error {
 	req := &CreateQueueRequest{
 		Name:     createName,
 		Priority: createPriority,
-		Deployment: &DeploymentConfigAPI{
+		Deployment: &queueworker.DeploymentConfig{
 			GitURL:     createGitURL,
 			Branch:     createBranch,
 			CodePath:   createCodePath,
@@ -748,6 +738,8 @@ func loadConfigsFromFile(filePath string) ([]*queueworker.QueueConfig, error) {
 			RedisStorage:       simple.Deployment.RedisStorage,
 			Vaults:             simple.Deployment.Vaults,
 			GitToken:           simple.Deployment.GitToken,
+			Limits:             simple.Deployment.Limits,
+			Autoscale:          simple.Autoscale, // fold the sibling autoscale block into the deployment JSON
 		}
 	}
 

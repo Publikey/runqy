@@ -7,11 +7,13 @@ import (
 	"strings"
 
 	"github.com/Publikey/runqy/auth"
+	"github.com/Publikey/runqy/autoscale"
+	asprovider "github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
 	queueworker "github.com/Publikey/runqy/queues"
+	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/gorilla/mux"
-	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/jmoiron/sqlx"
 	"github.com/redis/go-redis/v9"
 )
@@ -67,6 +69,16 @@ type Options struct {
 	//
 	// This field is optional. If nil, authentication is disabled.
 	AuthStore *auth.Store
+
+	// AutoscaleStore tracks autoscaler-managed GPU instances.
+	//
+	// This field is optional. If nil, autoscale endpoints are not registered.
+	AutoscaleStore *autoscale.Store
+
+	// AutoscaleProviderStore holds encrypted cloud provider configurations.
+	//
+	// This field is optional. If nil, autoscale endpoints are not registered.
+	AutoscaleProviderStore *asprovider.Store
 
 	// Config is the centralized server configuration.
 	//
@@ -275,6 +287,19 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/vaults/{name}/entries", newSetEntryHandlerFunc(opts.VaultStore)).Methods("POST")
 		api.HandleFunc("/vaults/{name}/entries", newListEntriesHandlerFunc(opts.VaultStore)).Methods("GET")
 		api.HandleFunc("/vaults/{name}/entries/{key}", newDeleteEntryHandlerFunc(opts.VaultStore)).Methods("DELETE")
+	}
+
+	// Autoscale endpoints (instance status/protection + provider config CRUD).
+	if opts.AutoscaleStore != nil && opts.AutoscaleProviderStore != nil {
+		api.HandleFunc("/autoscale/status", newAutoscaleStatusHandlerFunc(opts.AutoscaleStore)).Methods("GET")
+		api.HandleFunc("/autoscale/instances/{id}/protect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, true)).Methods("POST")
+		api.HandleFunc("/autoscale/instances/{id}/unprotect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, false)).Methods("POST")
+		api.HandleFunc("/autoscale/provider-types", newAutoscaleProviderTypesHandlerFunc()).Methods("GET")
+		api.HandleFunc("/autoscale/providers", newListAutoscaleProvidersHandlerFunc(opts.AutoscaleProviderStore)).Methods("GET")
+		api.HandleFunc("/autoscale/providers", newCreateAutoscaleProviderHandlerFunc(opts.AutoscaleProviderStore)).Methods("POST")
+		api.HandleFunc("/autoscale/providers/{name}", newGetAutoscaleProviderHandlerFunc(opts.AutoscaleProviderStore)).Methods("GET")
+		api.HandleFunc("/autoscale/providers/{name}", newUpdateAutoscaleProviderHandlerFunc(opts.AutoscaleProviderStore)).Methods("PUT")
+		api.HandleFunc("/autoscale/providers/{name}", newDeleteAutoscaleProviderHandlerFunc(opts.AutoscaleProviderStore)).Methods("DELETE")
 	}
 
 	// Queue config endpoints.

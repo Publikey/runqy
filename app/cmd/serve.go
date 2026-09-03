@@ -21,10 +21,10 @@ import (
 	"github.com/Publikey/runqy/vaults"
 	"github.com/Publikey/runqy/watcher"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/third_party/asynq/metrics"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -310,15 +310,17 @@ func runServe(cmd *cobra.Command, args []string) {
 
 		var monErr error
 		h, monErr = monitoring.New(monitoring.Options{
-			RootPath:          "/monitoring",
-			RedisConnOpt:      redisAddr.AsynqOpt,
-			ReadOnly:          cfg.ReadOnly,
-			DB:                db,
-			VaultStore:        vaultStore,
-			QueueStore:        qwStore,
-			AuthStore:         authStore,
-			PrometheusAddress: cfg.PrometheusAddress,
-			Config:            cfg,
+			RootPath:               "/monitoring",
+			RedisConnOpt:           redisAddr.AsynqOpt,
+			ReadOnly:               cfg.ReadOnly,
+			DB:                     db,
+			VaultStore:             vaultStore,
+			QueueStore:             qwStore,
+			AuthStore:              authStore,
+			AutoscaleStore:         autoscaleInstanceStore,
+			AutoscaleProviderStore: autoscaleProviderStore,
+			PrometheusAddress:      cfg.PrometheusAddress,
+			Config:                 cfg,
 		})
 		if monErr != nil {
 			log.Fatalf("Failed to initialize monitoring UI: %v", monErr)

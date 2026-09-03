@@ -1,0 +1,19 @@
+queues:
+  asdemo:
+    priority: 10
+    deployment:
+      git_url: "https://github.com/Publikey/test-dummy-task.git"
+      startup_cmd: "python dummy-task/main.py"
+    autoscale:
+      enabled: true
+      provider: my-mock
+      min_workers: 0
+      max_workers: 3
+      poll_interval: "30s"
+      scale_up:
+        - trigger: no_workers
+        - trigger: queue_depth
+          threshold: 3
+      scale_down:
+        - trigger: idle
+          timeout: "2m"

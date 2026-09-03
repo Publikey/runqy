@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	queueworker "github.com/Publikey/runqy/queues"
 )
 
 // APIClient handles HTTP requests to the remote runqy server
@@ -304,22 +306,9 @@ func (c *APIClient) GetWorker(workerID string) (*WorkerInfoAPI, error) {
 
 // QueueConfigAPI represents queue configuration from the API
 type QueueConfigAPI struct {
-	Name       string                `json:"name"`
-	Priority   int                   `json:"priority"`
-	Deployment *DeploymentConfigAPI  `json:"deployment,omitempty"`
-}
-
-// DeploymentConfigAPI represents deployment configuration
-type DeploymentConfigAPI struct {
-	GitURL             string   `json:"git_url"`
-	Branch             string   `json:"branch"`
-	CodePath           string   `json:"code_path,omitempty"`
-	StartupCmd         string   `json:"startup_cmd"`
-	Mode               string   `json:"mode,omitempty"`
-	StartupTimeoutSecs int      `json:"startup_timeout_secs,omitempty"`
-	RedisStorage       *bool    `json:"redis_storage,omitempty"`
-	Vaults             []string `json:"vaults,omitempty"`
-	GitToken           string   `json:"git_token,omitempty"`
+	Name       string                        `json:"name"`
+	Priority   int                           `json:"priority"`
+	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
 // ConfigListResponse is the response for listing configs
@@ -371,11 +360,12 @@ func (c *APIClient) ReloadConfigs() (*ReloadResponse, error) {
 	return &resp, nil
 }
 
-// CreateQueueRequest is the request body for creating a queue
+// CreateQueueRequest is the request body for creating a queue. Deployment uses the full
+// server-side type so nothing (limits, autoscale, ...) is dropped in transit.
 type CreateQueueRequest struct {
-	Name       string               `json:"name"`
-	Priority   int                  `json:"priority"`
-	Deployment *DeploymentConfigAPI `json:"deployment,omitempty"`
+	Name       string                        `json:"name"`
+	Priority   int                           `json:"priority"`
+	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
 // CreateQueueResponse is the response for queue creation

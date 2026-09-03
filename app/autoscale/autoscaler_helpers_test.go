@@ -3,6 +3,7 @@ package autoscale
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Publikey/runqy/autoscale/provider"
 )
@@ -26,6 +27,41 @@ func TestWorkerServesParent(t *testing.T) {
 		if got := workerServesParent(c.queues, c.parent); got != c.want {
 			t.Errorf("workerServesParent(%q,%q)=%v want %v", c.queues, c.parent, got, c.want)
 		}
+	}
+}
+
+func TestCountLiveWorkers(t *testing.T) {
+	now := time.Now().Unix()
+	workers := []workerHeartbeat{
+		{workerID: "w1", queues: "inference.high", lastBeat: now},
+		{workerID: "w2", queues: "inference.low", lastBeat: now - workerStaleThreshold - 10}, // stale
+		{workerID: "w3", queues: "other.default", lastBeat: now},
+	}
+	if got := countLiveWorkers(workers, "inference"); got != 1 {
+		t.Errorf("countLiveWorkers = %d want 1", got)
+	}
+}
+
+func TestBootstrappingInstances(t *testing.T) {
+	now := time.Now().Unix()
+	workers := []workerHeartbeat{
+		{workerID: "w1", instanceID: "as-1", status: workerStatusBootstrapping, lastBeat: now},
+		{workerID: "w2", instanceID: "as-2", status: "running", lastBeat: now},
+		{workerID: "w3", instanceID: "as-3", status: workerStatusBootstrapping, lastBeat: now - workerStaleThreshold - 10}, // stale
+		{workerID: "w4", instanceID: "", status: workerStatusBootstrapping, lastBeat: now},                                 // uncorrelated
+	}
+	got := bootstrappingInstances(workers)
+	if !got["as-1"] {
+		t.Errorf("as-1 (fresh bootstrapping) should be protected from idle-kill")
+	}
+	if got["as-2"] {
+		t.Errorf("as-2 (running) should not be in the bootstrapping set")
+	}
+	if got["as-3"] {
+		t.Errorf("as-3 (stale heartbeat) should not be in the bootstrapping set")
+	}
+	if len(got) != 1 {
+		t.Errorf("bootstrappingInstances size = %d want 1", len(got))
 	}
 }
 
