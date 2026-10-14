@@ -347,18 +347,26 @@ func runAutoscaleProvidersCreate(cmd *cobra.Command, args []string) error {
 
 func runAutoscaleProvidersUpdate(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	cfg, err := readProviderConfig(providerConfig)
-	if err != nil {
-		return err
+	// Only send what was asked to change: no --config keeps the stored config (and its
+	// credentials), no --enable/--disable keeps the current enabled flag.
+	var cfg json.RawMessage
+	if strings.TrimSpace(providerConfig) != "" {
+		var err error
+		if cfg, err = readProviderConfig(providerConfig); err != nil {
+			return err
+		}
 	}
-	// Default enabled=true unless --disable given; --enable forces true.
-	enabled := true
-	if providerDisable {
-		enabled = false
+	if providerEnable && providerDisable {
+		return fmt.Errorf("--enable and --disable are mutually exclusive")
+	}
+	var enabled *bool
+	if providerEnable || providerDisable {
+		v := providerEnable
+		enabled = &v
 	}
 
 	if IsRemoteMode() {
-		req := AutoscaleProviderRequestAPI{ProviderType: providerType, Config: cfg, Enabled: &enabled}
+		req := AutoscaleProviderRequestAPI{ProviderType: providerType, Config: cfg, Enabled: enabled}
 		if err := NewAPIClient().UpdateAutoscaleProviderAPI(name, req); err != nil {
 			return err
 		}

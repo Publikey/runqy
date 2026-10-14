@@ -199,11 +199,7 @@ func newUpdateAutoscaleProviderHandlerFunc(store *asprovider.Store) http.Handler
 			writeJSONError(w, "invalid request body", http.StatusBadRequest)
 			return
 		}
-		enabled := true
-		if req.Enabled != nil {
-			enabled = *req.Enabled
-		}
-		rec, err := store.Update(r.Context(), mux.Vars(r)["name"], req.ProviderType, req.Config, enabled)
+		rec, err := store.Update(r.Context(), mux.Vars(r)["name"], req.ProviderType, req.Config, req.Enabled)
 		if errors.Is(err, asprovider.ErrProviderNotFound) {
 			writeJSONError(w, "provider not found", http.StatusNotFound)
 			return

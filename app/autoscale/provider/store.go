@@ -171,8 +171,13 @@ func (s *Store) List(ctx context.Context) ([]*Record, error) {
 	return out, nil
 }
 
-// Update replaces a provider config. Returns ErrProviderNotFound if it doesn't exist.
-func (s *Store) Update(ctx context.Context, name, providerType string, config json.RawMessage, enabled bool) (*Record, error) {
+// Update patches a provider config. Returns ErrProviderNotFound if it doesn't exist.
+//   - providerType "" keeps the current type.
+//   - config nil/empty keeps the current config. Otherwise it replaces it, except that a
+//     secret field sent back in its masked form (as returned by MaskConfig, e.g. by an
+//     edit form pre-filled from the API) keeps its stored value — see mergeMaskedSecrets.
+//   - enabled nil keeps the current flag.
+func (s *Store) Update(ctx context.Context, name, providerType string, config json.RawMessage, enabled *bool) (*Record, error) {
 	if !s.IsEnabled() {
 		return nil, ErrProvidersDisabled
 	}
@@ -190,10 +195,19 @@ func (s *Store) Update(ctx context.Context, name, providerType string, config js
 		return nil, fmt.Errorf("unknown provider type %q (known: %v)", providerType, Types())
 	}
 	if len(config) == 0 {
+		config = existing.Config
+	} else {
+		if !json.Valid(config) {
+			return nil, fmt.Errorf("config is not valid JSON")
+		}
+		config = mergeMaskedSecrets(config, existing.Config)
+	}
+	if len(config) == 0 {
 		config = json.RawMessage("{}")
 	}
-	if !json.Valid(config) {
-		return nil, fmt.Errorf("config is not valid JSON")
+	isEnabled := existing.Enabled
+	if enabled != nil {
+		isEnabled = *enabled
 	}
 	enc, err := s.encryptor.Encrypt(config)
 	if err != nil {
@@ -201,14 +215,45 @@ func (s *Store) Update(ctx context.Context, name, providerType string, config js
 	}
 	now := time.Now()
 	query := s.db.Rebind(`UPDATE autoscale_providers SET provider_type = ?, config = ?, enabled = ?, updated_at = ? WHERE name = ?`)
-	if _, err := s.db.ExecContext(ctx, query, providerType, enc, enabled, now, name); err != nil {
+	if _, err := s.db.ExecContext(ctx, query, providerType, enc, isEnabled, now, name); err != nil {
 		return nil, fmt.Errorf("failed to update provider: %w", err)
 	}
 	existing.ProviderType = providerType
 	existing.Config = config
-	existing.Enabled = enabled
+	existing.Enabled = isEnabled
 	existing.UpdatedAt = now
 	return existing, nil
+}
+
+// mergeMaskedSecrets restores stored secret values that a client sent back masked.
+// A secret-looking key whose incoming value equals MaskSecret(stored value) keeps the
+// stored value; every other key is taken from incoming as-is. Non-object configs are
+// returned unchanged.
+func mergeMaskedSecrets(incoming, stored json.RawMessage) json.RawMessage {
+	var in, old map[string]interface{}
+	if json.Unmarshal(incoming, &in) != nil || json.Unmarshal(stored, &old) != nil {
+		return incoming
+	}
+	changed := false
+	for k, v := range in {
+		sv, ok := v.(string)
+		if !ok || !secretKeyHint.MatchString(k) {
+			continue
+		}
+		prev, ok := old[k].(string)
+		if ok && prev != "" && sv == vaults.MaskSecret(prev) {
+			in[k] = prev
+			changed = true
+		}
+	}
+	if !changed {
+		return incoming
+	}
+	merged, err := json.Marshal(in)
+	if err != nil {
+		return incoming
+	}
+	return merged
 }
 
 // Delete removes a provider config. Returns ErrProviderNotFound if it doesn't exist.

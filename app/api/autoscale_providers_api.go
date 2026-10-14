@@ -145,11 +145,7 @@ func UpdateAutoscaleProvider(store *provider.Store) gin.HandlerFunc {
 			c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
 			return
 		}
-		enabled := true
-		if req.Enabled != nil {
-			enabled = *req.Enabled
-		}
-		rec, err := store.Update(c.Request.Context(), c.Param("name"), req.ProviderType, req.Config, enabled)
+		rec, err := store.Update(c.Request.Context(), c.Param("name"), req.ProviderType, req.Config, req.Enabled)
 		if errors.Is(err, provider.ErrProviderNotFound) {
 			c.JSON(http.StatusNotFound, models.APIErrorResponse{Errors: []string{"provider not found"}})
 			return
