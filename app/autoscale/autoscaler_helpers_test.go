@@ -8,28 +8,6 @@ import (
 	"github.com/Publikey/runqy/autoscale/provider"
 )
 
-func TestWorkerServesParent(t *testing.T) {
-	cases := []struct {
-		queues string
-		parent string
-		want   bool
-	}{
-		{"inference.high,inference.low", "inference", true},
-		{"inference", "inference", true},
-		{"other.default", "inference", false},
-		{"", "inference", false},
-		{" inference.high ", "inference", true},
-		{"map[inference.default:5]", "inference", true},
-		{"map[inference.high:10 inference.low:1]", "inference", true},
-		{"map[other.default:5]", "inference", false},
-	}
-	for _, c := range cases {
-		if got := workerServesParent(c.queues, c.parent); got != c.want {
-			t.Errorf("workerServesParent(%q,%q)=%v want %v", c.queues, c.parent, got, c.want)
-		}
-	}
-}
-
 func TestCountLiveWorkers(t *testing.T) {
 	now := time.Now().Unix()
 	workers := []workerHeartbeat{

@@ -67,7 +67,7 @@ export interface Worker {
 	started_at: number;  // Unix timestamp
 	last_beat: number;   // Unix timestamp
 	concurrency: number;
-	queues: string;      // String like "map[queue1:5 queue2:5]"
+	queues: string;      // JSON {"queue":priority}; legacy workers: "map[queue1:5 queue2:5]" (see parseWorkerQueues)
 	status: string;
 	is_stale: boolean;
 	metrics?: WorkerMetrics;

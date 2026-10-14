@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { parseWorkerQueues } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
@@ -37,16 +38,6 @@
 		if (percent >= 90) return 'bg-error-500';
 		if (percent >= 70) return 'bg-warning-500';
 		return 'bg-success-500';
-	}
-
-	// Parse queues
-	function parseQueues(queuesStr: string): { name: string; priority: number }[] {
-		const match = queuesStr.match(/map\[(.*)\]/);
-		if (!match) return [];
-		return match[1].split(' ').map(q => {
-			const [name, priorityStr] = q.split(':');
-			return { name, priority: parseInt(priorityStr, 10) || 0 };
-		}).filter(q => q.name);
 	}
 
 	// Get worker status
@@ -183,7 +174,7 @@
 	{#if worker}
 		<!-- Queues -->
 		<div class="flex flex-wrap gap-1">
-			{#each parseQueues(worker.queues) as queue (queue.name)}
+			{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
 				<span class="badge preset-outlined-primary-500 text-sm">
 					{queue.name} <span class="text-surface-400 ml-1">p:{queue.priority}</span>
 				</span>

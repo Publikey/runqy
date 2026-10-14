@@ -1,19 +1,10 @@
 <script lang="ts">
+	import { parseWorkerQueues } from '$lib/utils/workerQueues';
 	import type { Worker } from '$lib/api/types';
 	import { formatRelativeTime, truncateId } from '$lib/utils/format';
 	import { workersStore } from '$lib/stores/workers';
 
 	let { worker, onclick }: { worker: Worker; onclick?: () => void } = $props();
-
-	// Parse queues string like "map[queue1:5 queue2:5]" to array of {name, priority}
-	function parseQueues(queuesStr: string): { name: string; priority: number }[] {
-		const match = queuesStr.match(/map\[(.*)\]/);
-		if (!match) return [];
-		return match[1].split(' ').map(q => {
-			const [name, priorityStr] = q.split(':');
-			return { name, priority: parseInt(priorityStr, 10) || 0 };
-		}).filter(q => q.name);
-	}
 
 	// Check if worker is processing (has active tasks on a server with matching id)
 	let isProcessing = $derived(
@@ -32,7 +23,7 @@
 		return 'stopped'; // fallback for unknown statuses
 	});
 
-	let queues = $derived(parseQueues(worker.queues));
+	let queues = $derived(parseWorkerQueues(worker.queues));
 	let startedDate = $derived(new Date(worker.started_at * 1000));
 	let lastBeatDate = $derived(new Date(worker.last_beat * 1000));
 
