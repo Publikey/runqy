@@ -12,9 +12,10 @@ import (
 
 var (
 	// login flags
-	loginServer  string
-	loginAPIKey  string
-	loginProfile string
+	loginServer   string
+	loginAPIKey   string
+	loginProfile  string
+	loginNoSwitch bool
 
 	// logout flags
 	logoutProfile string
@@ -27,11 +28,13 @@ var loginCmd = &cobra.Command{
 	Short: "Save server credentials for remote mode",
 	Long: `Login saves server credentials to ~/.runqy/credentials.json for later use.
 
-After logging in, you can use runqy commands without --server and --api-key flags.
+After logging in, the profile becomes the active one: runqy commands use it without
+--server and --api-key flags. Use --no-switch to save a profile without activating it.
 
 Examples:
   runqy login --server https://production.example.com:3000 --api-key prod-api-key
-  runqy login --server https://staging.example.com:3000 --name staging`,
+  runqy login --server https://staging.example.com:3000 --name staging
+  runqy login --server https://staging.example.com:3000 --name staging --no-switch`,
 	RunE: runLogin,
 }
 
@@ -94,9 +97,10 @@ Example:
 
 func init() {
 	// login flags (using long form only to avoid conflict with global -s and -k flags)
-	loginCmd.Flags().StringVar(&loginServer, "server", "", "Server URL (required)")
-	loginCmd.Flags().StringVar(&loginAPIKey, "api-key", "", "API key (will prompt if not provided)")
+	loginCmd.Flags().StringVarP(&loginServer, "server", "s", "", "Server URL (required)")
+	loginCmd.Flags().StringVarP(&loginAPIKey, "api-key", "k", "", "API key (will prompt if not provided)")
 	loginCmd.Flags().StringVarP(&loginProfile, "name", "n", "default", "Profile name")
+	loginCmd.Flags().BoolVar(&loginNoSwitch, "no-switch", false, "Save the profile without making it the active one")
 	loginCmd.MarkFlagRequired("server")
 
 	// logout flags
@@ -142,6 +146,24 @@ func runLogin(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Logged in to %s (saved as \"%s\")\n", serverToSave, loginProfile)
+
+	// Activate the profile just logged into, so the next commands go where the user
+	// expects. Saving a second profile used to leave the previous one active silently,
+	// sending commands to the wrong server (e.g. production instead of staging).
+	if !loginNoSwitch {
+		if err := SetCurrentProfile(loginProfile); err != nil {
+			return fmt.Errorf("failed to activate profile: %w", err)
+		}
+	}
+	current, err := GetCurrentProfileName()
+	if err != nil {
+		return fmt.Errorf("failed to read active profile: %w", err)
+	}
+	if current == loginProfile {
+		fmt.Printf("Active profile: \"%s\"\n", current)
+	} else {
+		fmt.Printf("Active profile is still \"%s\" (switch with: runqy auth switch %s)\n", current, loginProfile)
+	}
 	return nil
 }
 
