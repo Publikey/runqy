@@ -43,7 +43,8 @@ queues:
     deployment:
       git_url: "https://github.com/Publikey/test-dummy-task.git"
       branch: "master"
-      startup_cmd: "python dummy-task/main.py"
+      code_path: "dummy-task"
+      startup_cmd: "python main.py"
     alerts:
       rules:
         - type: latency          # stricter than the global 10m for this queue
@@ -58,6 +59,8 @@ queues:
     deployment:
       git_url: "https://github.com/Publikey/test-dummy-task.git"
       branch: "master"
-      startup_cmd: "python simple-task/main.py"
+      code_path: "simple-task"
+      startup_cmd: "python main.py"
+      mode: "one_shot"
     alerts:
       disabled: true             # mute every alert for this queue
