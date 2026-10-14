@@ -60,6 +60,9 @@ func NormalizeQueueName(name string) string {
 // QueueWorkersYAML is the root config structure
 type QueueWorkersYAML struct {
 	Queues map[string]QueueYAML `yaml:"queues"`
+	// Alerts is the optional global alerting configuration. It is applied to the stored
+	// alert settings on load/reload; at most one loaded file may define it.
+	Alerts *AlertSettings `yaml:"alerts,omitempty"`
 }
 
 // QueueYAML represents a single queue configuration in YAML
@@ -67,10 +70,11 @@ type QueueWorkersYAML struct {
 // 1. With sub_queues: creates multiple queues like "inference.high", "inference.low"
 // 2. Without sub_queues: uses priority field directly, creates "name.default"
 type QueueYAML struct {
-	Priority   int              `yaml:"priority,omitempty"`   // Used when no sub_queues defined
-	Deployment *DeploymentYAML  `yaml:"deployment,omitempty"` // Deployment configuration
-	Autoscale  *AutoscaleConfig `yaml:"autoscale,omitempty"`  // GPU autoscaling configuration (sibling of deployment)
-	SubQueues  []SubQueueYAML   `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
+	Priority   int                `yaml:"priority,omitempty"`   // Used when no sub_queues defined
+	Deployment *DeploymentYAML    `yaml:"deployment,omitempty"` // Deployment configuration
+	Autoscale  *AutoscaleConfig   `yaml:"autoscale,omitempty"`  // GPU autoscaling configuration (sibling of deployment)
+	Alerts     *QueueAlertsConfig `yaml:"alerts,omitempty"`     // Alert overrides for this queue (sibling of deployment)
+	SubQueues  []SubQueueYAML     `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
 
 	// Input and Output describe the schema of the task payload for this queue
 	Input  []FieldSchema `yaml:"input,omitempty"`
@@ -185,6 +189,10 @@ type DeploymentConfig struct {
 	// the deployment JSON so it round-trips through the DB, REST API/CLI, and the UI. In YAML
 	// it is authored as a sibling of `deployment` (QueueYAML.Autoscale) and folded in here on load.
 	Autoscale *AutoscaleConfig `json:"autoscale,omitempty"`
+
+	// Alerts is the per-queue alert override, stored like Autoscale (authored in YAML as a
+	// sibling of `deployment`, QueueYAML.Alerts).
+	Alerts *QueueAlertsConfig `json:"alerts,omitempty"`
 }
 
 // QueueSummary is a lightweight version for listing queues

@@ -174,6 +174,12 @@ func (c *QueueWorkersYAML) Validate() error {
 		if err := q.Autoscale.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}
+		if err := q.Alerts.Validate(); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
+	}
+	if err := c.Alerts.Validate(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -197,6 +203,7 @@ func (q *QueueYAML) ToQueueAndSubQueues(baseName string) (*Queue, []SubQueue) {
 			GitToken:           q.Deployment.GitToken,
 			Limits:             q.Deployment.Limits,
 			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             q.Alerts,    // same for the alerts override
 		}
 	}
 
@@ -253,6 +260,7 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 			GitToken:           q.Deployment.GitToken,
 			Limits:             q.Deployment.Limits,
 			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             q.Alerts,    // same for the alerts override
 		}
 	}
 

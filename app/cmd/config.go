@@ -425,10 +425,11 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 
 // SimpleQueueYAML represents a simple single-queue YAML format
 type SimpleQueueYAML struct {
-	Name       string                       `yaml:"name"`
-	Priority   int                          `yaml:"priority"`
-	Deployment *queueworker.DeploymentYAML  `yaml:"deployment,omitempty"`
-	Autoscale  *queueworker.AutoscaleConfig `yaml:"autoscale,omitempty"`
+	Name       string                         `yaml:"name"`
+	Priority   int                            `yaml:"priority"`
+	Deployment *queueworker.DeploymentYAML    `yaml:"deployment,omitempty"`
+	Autoscale  *queueworker.AutoscaleConfig   `yaml:"autoscale,omitempty"`
+	Alerts     *queueworker.QueueAlertsConfig `yaml:"alerts,omitempty"`
 }
 
 func runConfigCreate(cmd *cobra.Command, args []string) error {
@@ -740,6 +741,7 @@ func loadConfigsFromFile(filePath string) ([]*queueworker.QueueConfig, error) {
 			GitToken:           simple.Deployment.GitToken,
 			Limits:             simple.Deployment.Limits,
 			Autoscale:          simple.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             simple.Alerts,
 		}
 	}
 

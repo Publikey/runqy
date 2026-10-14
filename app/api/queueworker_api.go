@@ -119,8 +119,8 @@ type ReloadResponse struct {
 
 // CreateQueueRequest is the request body for creating a queue
 type CreateQueueRequest struct {
-	Name       string                      `json:"name" binding:"required"`
-	Priority   int                         `json:"priority" binding:"required,min=1"`
+	Name       string                        `json:"name" binding:"required"`
+	Priority   int                           `json:"priority" binding:"required,min=1"`
 	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
@@ -414,6 +414,11 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 			}
 			// Reject malformed autoscale config.
 			if err := req.Deployment.Autoscale.Validate(); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
+				return
+			}
+			// Reject malformed alert overrides.
+			if err := req.Deployment.Alerts.Validate(); err != nil {
 				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
 				return
 			}

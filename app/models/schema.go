@@ -193,6 +193,26 @@ CREATE INDEX IF NOT EXISTS idx_autoscale_instances_queue ON autoscale_instances(
 CREATE INDEX IF NOT EXISTS idx_autoscale_instances_status ON autoscale_instances(status);
 `
 
+// Alert settings: a single row (id = 1) holding the global alerting configuration as
+// JSON, encrypted when the vault master key is configured.
+const postgresAlertsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS alert_settings (
+    id INTEGER PRIMARY KEY,
+    config BYTEA NOT NULL,
+    encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+`
+
+const sqliteAlertsSchemaSQL = `
+CREATE TABLE IF NOT EXISTS alert_settings (
+    id INTEGER PRIMARY KEY,
+    config BLOB NOT NULL,
+    encrypted INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`
+
 // PostgreSQL schema for admin_user (authentication)
 const postgresAdminUserSchemaSQL = `
 CREATE TABLE IF NOT EXISTS admin_user (
@@ -308,6 +328,15 @@ func EnsureSchema(db *sqlx.DB, debug bool) error {
 		if debug {
 			log.Println("[SCHEMA] Autoscale tables created successfully")
 		}
+	}
+
+	// Alert settings table (idempotent CREATE IF NOT EXISTS)
+	alertsSQL := postgresAlertsSchemaSQL
+	if db.DriverName() == "sqlite" {
+		alertsSQL = sqliteAlertsSchemaSQL
+	}
+	if _, err := db.Exec(alertsSQL); err != nil {
+		return fmt.Errorf("failed to create alert_settings table: %w", err)
 	}
 
 	// Check and create admin_user table
