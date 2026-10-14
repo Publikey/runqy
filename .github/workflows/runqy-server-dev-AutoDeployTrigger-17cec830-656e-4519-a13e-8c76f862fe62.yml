@@ -1,28 +1,30 @@
 name: Trigger auto deployment for runqy-server-dev
 
-# When this action will be executed
+# Staging: every push to `dev` builds the server image and deploys it to the
+# runqy-server-dev Azure Container App. The OIDC federated credential is bound to
+# refs/heads/dev, so this workflow can only deploy from that branch.
 on:
-  # Automatically trigger it when detected changes in repo
   push:
-    branches: 
+    branches:
       [ dev ]
-    paths:
-    - '**'
-    - '.github/workflows/runqy-server-dev-AutoDeployTrigger-17cec830-656e-4519-a13e-8c76f862fe62.yml'
 
-  # Allow manual trigger 
-  workflow_dispatch:      
+  # Allow manual trigger (run it on the dev branch)
+  workflow_dispatch:
+
+concurrency:
+  group: runqy-server-dev
+  cancel-in-progress: true
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-    permissions: 
-      id-token: write #This is required for requesting the OIDC JWT Token
-      contents: read #Required when GH token is used to authenticate with private repo
+    permissions:
+      id-token: write # Required for requesting the OIDC JWT Token
+      contents: read  # Required when GH token is used to authenticate with private repo
 
     steps:
       - name: Checkout to the branch
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Azure Login
         uses: azure/login@v2
@@ -35,15 +37,12 @@ jobs:
         uses: azure/container-apps-deploy-action@v2
         with:
           appSourcePath: ${{ github.workspace }}
-          _dockerfilePathKey_: _dockerfilePath_
-          _targetLabelKey_: _targetLabel_
+          dockerfilePath: Dockerfile
           registryUrl: publikeyregistrydev.azurecr.io
           registryUsername: ${{ secrets.RUNQYSERVERDEV_REGISTRY_USERNAME }}
           registryPassword: ${{ secrets.RUNQYSERVERDEV_REGISTRY_PASSWORD }}
           containerAppName: runqy-server-dev
           resourceGroup: runqy
           imageToBuild: publikeyregistrydev.azurecr.io/runqy-server-dev:${{ github.sha }}
-          _buildArgumentsKey_: |
-            _buildArgumentsValues_
-
-
+          targetPort: 3000
+          buildArguments: VERSION=dev-${{ github.sha }} COMMIT=${{ github.sha }}
