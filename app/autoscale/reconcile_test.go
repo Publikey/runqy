@@ -23,6 +23,7 @@ type fakeProvider struct {
 	name         string
 	status       map[string]string // provider id -> status (default running)
 	provisionErr error
+	destroyErr   error
 	provisions   int
 	destroyed    []string
 }
@@ -47,6 +48,9 @@ func (f *fakeProvider) Provision(_ context.Context, _ provider.InstanceSpec) (st
 func (f *fakeProvider) Destroy(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.destroyErr != nil {
+		return f.destroyErr
+	}
 	f.destroyed = append(f.destroyed, id)
 	return nil
 }
@@ -72,10 +76,11 @@ func newTestAutoscaler(t *testing.T) *Autoscaler {
 		t.Fatal(err)
 	}
 	return &Autoscaler{
-		instances: NewStore(db),
-		cfg:       &config.Config{HTTPPort: "3000", APIKey: "admin"},
-		backoff:   make(map[string]*provisionBackoff),
-		lastSeen:  make(map[string]time.Time),
+		instances:  NewStore(db),
+		cfg:        &config.Config{HTTPPort: "3000", APIKey: "admin"},
+		backoff:    make(map[string]*provisionBackoff),
+		staleSince: make(map[string]time.Time),
+		bootSince:  make(map[string]bootObservation),
 	}
 }
 
@@ -246,5 +251,66 @@ func TestParseWorkerHeartbeat(t *testing.T) {
 	old := parseWorkerHeartbeat("w2", map[string]string{"last_beat": "100"})
 	if old.active != -1 {
 		t.Errorf("older worker without 'active': got %d, want -1 (unknown)", old.active)
+	}
+}
+
+func TestTeardownRetriedAfterDestroyFailure(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "doomed", StatusRunning, "", 30*time.Minute) // past boot_timeout
+	prov := &fakeProvider{destroyErr: errors.New("provider API down")}
+
+	if live := reconcile(t, a, prov, nil, time.Now()); len(live) != 0 {
+		t.Fatalf("live = %v, want none", ids(live))
+	}
+	if s := statusOf(t, a, "doomed"); s != StatusDraining {
+		t.Fatalf("after failed destroy: status %q, want draining (kept for retry)", s)
+	}
+
+	prov.destroyErr = nil
+	reconcile(t, a, prov, nil, time.Now())
+	if len(prov.destroyed) != 1 {
+		t.Fatalf("destroy not retried: %v", prov.destroyed)
+	}
+	if s := statusOf(t, a, "doomed"); s != StatusFailed {
+		t.Errorf("after retry: status %q, want failed (the recorded final status)", s)
+	}
+}
+
+func TestReconcileSlightlyLateHeartbeatIsNotLost(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "busy", StatusRunning, "w1", time.Hour)
+	prov := &fakeProvider{}
+	now := time.Now()
+	hb := func(at time.Time, lag int64) map[string]*workerHeartbeat {
+		return map[string]*workerHeartbeat{"busy": {workerID: "w1", status: "running", lastBeat: at.Unix() - lag, active: 1}}
+	}
+
+	reconcile(t, a, prov, hb(now, 0), now)
+	// One evaluation much later (long poll interval) where the beat is just past the
+	// staleness window: the worker is alive, nothing must be destroyed.
+	later := now.Add(6 * time.Minute)
+	if live := reconcile(t, a, prov, hb(later, workerStaleThreshold+1), later); len(live) != 1 {
+		t.Fatalf("live = %v, want [busy]", ids(live))
+	}
+	if len(prov.destroyed) != 0 {
+		t.Errorf("destroyed %v, want none", prov.destroyed)
+	}
+}
+
+func TestBootTimeoutRestartsClockForRestartedWorker(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "old", StatusRunning, "w2", 3*time.Hour) // machine is old, worker just restarted
+	prov := &fakeProvider{}
+	now := time.Now()
+	booting := func(at time.Time) map[string]*workerHeartbeat {
+		return map[string]*workerHeartbeat{"old": {workerID: "w2", status: workerStatusBootstrapping, lastBeat: at.Unix()}}
+	}
+
+	if live := reconcile(t, a, prov, booting(now), now); len(live) != 1 {
+		t.Fatalf("restarted worker torn down on machine age: live = %v", ids(live))
+	}
+	later := now.Add(21 * time.Minute)
+	if live := reconcile(t, a, prov, booting(later), later); len(live) != 0 {
+		t.Fatalf("worker bootstrapping for longer than boot_timeout kept: live = %v", ids(live))
 	}
 }

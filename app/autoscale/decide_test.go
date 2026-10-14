@@ -135,8 +135,9 @@ func TestDecideForcedScheduleScaleDown(t *testing.T) {
 	asc := cfg(0, 5, nil, []queueworker.ScaleTrigger{night})
 	busy := ready("busy", 0)
 	busy.busy = true
-	plan := decide(asc, snapshot(0, 2, ready("a", 0), busy))
-	// Forced scale-down ignores idleness but still never kills a busy worker.
+	plan := decide(asc, snapshot(0, 2, ready("a", time.Minute), busy, ready("just-finished", 10*time.Second)))
+	// Forced scale-down ignores idleness but never kills a busy worker, nor one that
+	// touched a task within busyGrace (its heartbeat may predate a new task).
 	if got := ids(plan.destroy); len(got) != 1 || got[0] != "a" {
 		t.Errorf("destroy = %v, want [a]", got)
 	}

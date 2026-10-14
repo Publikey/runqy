@@ -27,6 +27,10 @@ type instanceView struct {
 	lastActivity time.Time // last time it started/finished a task (or became ready)
 }
 
+// busyGrace keeps an instance that started or finished a task this recently out of any
+// scale-down: its last heartbeat may predate a task it just picked up.
+const busyGrace = 30 * time.Second
+
 // scalePlan is the outcome of one decision.
 type scalePlan struct {
 	provision int         // instances to create
@@ -138,7 +142,7 @@ func decide(asc *queueworker.AutoscaleConfig, snap queueSnapshot) scalePlan {
 	// for a later poll rather than killed mid-task.
 	removable := make([]instanceView, 0, live)
 	for _, iv := range snap.instances {
-		if iv.inst.Protected || iv.booting || iv.busy {
+		if iv.inst.Protected || iv.booting || iv.busy || snap.now.Sub(iv.lastActivity) < busyGrace {
 			continue
 		}
 		if !forceToFloor && snap.now.Sub(iv.lastActivity) < idleTimeout {

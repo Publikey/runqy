@@ -152,14 +152,16 @@ func (s *Store) UpdateStatus(ctx context.Context, instanceID, status string) err
 	return s.exec(ctx, query, status, time.Now(), instanceID)
 }
 
-// UpdateStatusWithReason sets the status of an instance and records why in its metadata
-// ("reason"), e.g. why it was torn down. Other metadata keys are kept.
-func (s *Store) UpdateStatusWithReason(ctx context.Context, inst *Instance, status, reason string) error {
+// UpdateStatusWithMeta sets the status of an instance and merges kv into its metadata
+// (e.g. why and how it is being torn down). Other metadata keys are kept.
+func (s *Store) UpdateStatusWithMeta(ctx context.Context, inst *Instance, status string, kv map[string]string) error {
 	meta := inst.MetadataMap()
 	if meta == nil {
 		meta = map[string]interface{}{}
 	}
-	meta["reason"] = reason
+	for k, v := range kv {
+		meta[k] = v
+	}
 	b, err := json.Marshal(meta)
 	if err != nil {
 		return fmt.Errorf("failed to encode metadata: %w", err)

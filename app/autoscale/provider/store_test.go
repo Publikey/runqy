@@ -75,6 +75,15 @@ func TestStoreUpdateKeepsSecrets(t *testing.T) {
 		t.Fatalf("disable-only update clobbered state: enabled=%v config=%s", stored.Enabled, stored.Config)
 	}
 
+	// A literal JSON null is "no config change", not a wipe.
+	if _, err := s.Update(ctx, "gpu", "", json.RawMessage(`null`), nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = s.Get(ctx, "gpu")
+	if configMap(t, stored.Config)["api_key"] != "sk-live-123456" {
+		t.Fatalf("null config wiped credentials: %s", stored.Config)
+	}
+
 	// A genuinely new secret replaces the old one.
 	if _, err := s.Update(ctx, "gpu", "", json.RawMessage(`{"api_key":"sk-new-999999"}`), nil); err != nil {
 		t.Fatal(err)

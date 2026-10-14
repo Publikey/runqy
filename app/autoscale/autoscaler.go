@@ -33,6 +33,11 @@ const workerStaleThreshold = 30 // seconds
 // instance is considered dead and torn down (the machine would otherwise bill forever).
 const workerLostTimeout = 5 * time.Minute
 
+// leaderTTL outlives the longest queue evaluation, so the lock (renewed before each
+// queue) cannot lapse mid-evaluation and let a second server act on the same queue.
+// It is also how long a crashed leader takes to be replaced.
+const leaderTTL = queueEvalTimeout + time.Minute
+
 // maxProvisionBackoff caps the wait between failed provisioning attempts.
 const maxProvisionBackoff = 10 * time.Minute
 
@@ -54,9 +59,11 @@ type Autoscaler struct {
 	provCache   map[string]cachedProvider // by provider name
 
 	// Loop-goroutine state (not shared).
-	lastEval map[string]time.Time         // parent queue -> last evaluation time
-	backoff  map[string]*provisionBackoff // parent queue -> provisioning failure backoff
-	lastSeen map[string]time.Time         // instance id -> last fresh heartbeat of its worker
+	lastEval   map[string]time.Time         // parent queue -> last evaluation time
+	backoff    map[string]*provisionBackoff // parent queue -> provisioning failure backoff
+	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
+	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
+	wasLeader  bool
 
 	stopOnce sync.Once
 	stopCh   chan struct{}
@@ -66,6 +73,13 @@ type Autoscaler struct {
 type cachedProvider struct {
 	prov      provider.Provider
 	updatedAt time.Time
+}
+
+// bootObservation tracks a worker seen bootstrapping, so a worker restarting on an old
+// machine gets its own boot_timeout instead of being judged on the machine's age.
+type bootObservation struct {
+	workerID string
+	since    time.Time
 }
 
 // provisionBackoff spaces out retries after provisioning failures (no capacity, bad
@@ -78,19 +92,20 @@ type provisionBackoff struct {
 // New constructs an Autoscaler. All dependencies are required.
 func New(instances *Store, providers *provider.Store, queues *queueworker.Store, inspector *asynq.Inspector, rdb *redis.Client, cfg *config.Config) *Autoscaler {
 	return &Autoscaler{
-		instances: instances,
-		providers: providers,
-		queues:    queues,
-		inspector: inspector,
-		rdb:       rdb,
-		cfg:       cfg,
-		leader:    newLeaderLock(rdb, 3*baseTick),
-		provCache: make(map[string]cachedProvider),
-		lastEval:  make(map[string]time.Time),
-		backoff:   make(map[string]*provisionBackoff),
-		lastSeen:  make(map[string]time.Time),
-		stopCh:    make(chan struct{}),
-		doneCh:    make(chan struct{}),
+		instances:  instances,
+		providers:  providers,
+		queues:     queues,
+		inspector:  inspector,
+		rdb:        rdb,
+		cfg:        cfg,
+		leader:     newLeaderLock(rdb, leaderTTL),
+		provCache:  make(map[string]cachedProvider),
+		lastEval:   make(map[string]time.Time),
+		backoff:    make(map[string]*provisionBackoff),
+		staleSince: make(map[string]time.Time),
+		bootSince:  make(map[string]bootObservation),
+		stopCh:     make(chan struct{}),
+		doneCh:     make(chan struct{}),
 	}
 }
 
@@ -128,10 +143,7 @@ func (a *Autoscaler) run() {
 // Only the server holding the leader lock acts, so several servers sharing one Redis
 // never provision twice.
 func (a *Autoscaler) tick() {
-	lctx, lcancel := context.WithTimeout(context.Background(), 5*time.Second)
-	isLeader := a.leader.acquire(lctx)
-	lcancel()
-	if !isLeader {
+	if !a.holdLeadership() {
 		return
 	}
 
@@ -177,10 +189,28 @@ func (a *Autoscaler) tick() {
 			return
 		default:
 		}
+		// Renew before each queue: an evaluation (< queueEvalTimeout) never outlives the lock.
+		if !a.holdLeadership() {
+			return
+		}
 		qctx, qcancel := context.WithTimeout(context.Background(), queueEvalTimeout)
 		a.evaluateQueue(qctx, d.parent, d.queue, d.queue.Deployment.Autoscale, d.window, d.elapsed)
 		qcancel()
 	}
+}
+
+// holdLeadership takes or renews the leader lock. Observations made during an earlier
+// term (another server may have acted since) are discarded when leadership is regained.
+func (a *Autoscaler) holdLeadership() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	isLeader := a.leader.acquire(ctx)
+	if isLeader && !a.wasLeader {
+		a.staleSince = make(map[string]time.Time)
+		a.bootSince = make(map[string]bootObservation)
+	}
+	a.wasLeader = isLeader
+	return isLeader
 }
 
 // evaluateQueue runs one scaling decision for a single parent queue.
@@ -207,7 +237,12 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 
 	// Read worker heartbeats once per evaluation: used for correlation, live counting,
 	// boot-phase detection and per-instance activity.
-	workers := a.listWorkers(ctx)
+	workers, err := a.listWorkers(ctx)
+	if err != nil {
+		// Without heartbeats every instance would look dead and the queue unserved: do nothing.
+		log.Printf("[AUTOSCALE] queue %q: cannot read worker heartbeats, skipping evaluation: %v", parent, err)
+		return
+	}
 	a.reconcileWorkers(ctx, workers)
 	byInstance := make(map[string]*workerHeartbeat)
 	for i := range workers {
@@ -284,15 +319,21 @@ func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *worke
 	return iv
 }
 
-// reconcileInstances syncs live instance rows with the provider and with worker
-// heartbeats, tearing down instances that are dead or stuck so they stop billing, and
-// returns the instances still live.
+// reconcileInstances syncs instance rows with the provider and with worker heartbeats,
+// tearing down instances that are dead or stuck so they stop billing, and returns the
+// instances still live.
+//   - Teardown left unfinished (provider error, crash): retry the destroy.
 //   - Provider reports failed/terminated: destroy (idempotent; frees e.g. Vast storage).
-//   - No ready worker within boot_timeout of creation: destroy (bad image, crash loop...).
-//   - Correlated worker silent for workerLostTimeout: destroy (machine died or hung).
+//   - No worker registered within boot_timeout of creation, or a worker bootstrapping for
+//     longer than boot_timeout: destroy (bad image, crash loop...).
+//   - Correlated worker dead for workerLostTimeout across evaluations: destroy.
 func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provider, parent string, managed []*Instance, byInstance map[string]*workerHeartbeat, bootTimeout time.Duration, now time.Time) []*Instance {
 	live := make([]*Instance, 0, len(managed))
 	for _, inst := range managed {
+		if inst.Status == StatusDraining || inst.Status == StatusDestroying {
+			a.finishTeardown(ctx, prov, inst)
+			continue
+		}
 		if !inst.IsLive() {
 			continue
 		}
@@ -317,30 +358,43 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 
 		hb := byInstance[inst.InstanceID]
 		fresh := hb != nil && now.Unix()-hb.lastBeat <= workerStaleThreshold
-		if fresh {
-			a.lastSeen[inst.InstanceID] = now
-		}
+		// alive tolerates a beat or two of lag: only a worker silent for well over the
+		// staleness window counts towards workerLostTimeout.
+		alive := hb != nil && now.Unix()-hb.lastBeat <= 2*workerStaleThreshold
 
-		stillBooting := inst.WorkerID == "" || (fresh && hb.status == workerStatusBootstrapping)
-		if stillBooting && now.Sub(inst.CreatedAt) > bootTimeout {
+		// Boot clock: from instance creation until a worker registers, then from when the
+		// current worker id was first seen bootstrapping (a restarted worker gets a fresh one).
+		bootRef := inst.CreatedAt
+		stillBooting := inst.WorkerID == ""
+		if !stillBooting && fresh && hb.status == workerStatusBootstrapping {
+			obs, ok := a.bootSince[inst.InstanceID]
+			if !ok || obs.workerID != hb.workerID {
+				obs = bootObservation{workerID: hb.workerID, since: now}
+				a.bootSince[inst.InstanceID] = obs
+			}
+			bootRef = obs.since
+			stillBooting = true
+		} else if fresh {
+			delete(a.bootSince, inst.InstanceID)
+		}
+		if stillBooting && now.Sub(bootRef) > bootTimeout {
 			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
 			a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout))
 			continue
 		}
 
-		if inst.WorkerID != "" && !fresh {
-			seen, ok := a.lastSeen[inst.InstanceID]
-			if !ok {
-				// First time this server looks at it (e.g. after a restart): start the clock.
-				a.lastSeen[inst.InstanceID] = now
-			} else if now.Sub(seen) > workerLostTimeout {
-				if inst.Protected {
-					log.Printf("[AUTOSCALE] queue %q: worker of protected instance %s silent for %s — NOT destroying (protected)", parent, inst.InstanceID, now.Sub(seen).Round(time.Second))
-				} else {
-					log.Printf("[AUTOSCALE] queue %q: worker of instance %s silent for %s — tearing down", parent, inst.InstanceID, now.Sub(seen).Round(time.Second))
-					a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("worker heartbeat lost for more than %s", workerLostTimeout))
-					continue
-				}
+		if alive || inst.WorkerID == "" {
+			delete(a.staleSince, inst.InstanceID)
+		} else if since, ok := a.staleSince[inst.InstanceID]; !ok {
+			// First dead-looking observation: start the clock, decide on a later evaluation.
+			a.staleSince[inst.InstanceID] = now
+		} else if now.Sub(since) > workerLostTimeout {
+			if inst.Protected {
+				log.Printf("[AUTOSCALE] queue %q: worker of protected instance %s silent for %s — NOT destroying (protected)", parent, inst.InstanceID, now.Sub(since).Round(time.Second))
+			} else {
+				log.Printf("[AUTOSCALE] queue %q: worker of instance %s silent for %s — tearing down", parent, inst.InstanceID, now.Sub(since).Round(time.Second))
+				a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("worker heartbeat lost for more than %s", workerLostTimeout))
+				continue
 			}
 		}
 
@@ -428,18 +482,37 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 }
 
 // teardown destroys an instance at the provider and records its final status and reason.
-// On a provider error the previous status is restored so the next evaluation retries.
+// The intent is persisted first (status draining + final_status/reason in metadata), so a
+// failed Destroy or a crash in between is retried by finishTeardown on later evaluations
+// instead of leaving a machine that nothing tracks.
 func (a *Autoscaler) teardown(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string) {
-	prev := inst.Status
-	_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusDraining)
-	providerID := providerInstanceID(inst)
-	if err := prov.Destroy(ctx, providerID); err != nil {
-		log.Printf("[AUTOSCALE] destroy %s (provider id %s) failed: %v", inst.InstanceID, providerID, err)
-		_ = a.instances.UpdateStatus(ctx, inst.InstanceID, prev) // retry next evaluation
+	wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.instances.UpdateStatusWithMeta(wctx, inst, StatusDraining, map[string]string{"reason": reason, "final_status": finalStatus}); err != nil {
+		log.Printf("[AUTOSCALE] teardown %s: cannot record intent, not destroying yet: %v", inst.InstanceID, err)
 		return
 	}
-	_ = a.instances.UpdateStatusWithReason(ctx, inst, finalStatus, reason)
-	delete(a.lastSeen, inst.InstanceID)
+	a.finishTeardown(ctx, prov, inst)
+}
+
+// finishTeardown destroys a draining instance at the provider and, on success, moves it
+// to the final status recorded by teardown (terminated if none).
+func (a *Autoscaler) finishTeardown(ctx context.Context, prov provider.Provider, inst *Instance) {
+	providerID := providerInstanceID(inst)
+	if err := prov.Destroy(ctx, providerID); err != nil {
+		log.Printf("[AUTOSCALE] destroy %s (provider id %s) failed, will retry: %v", inst.InstanceID, providerID, err)
+		return
+	}
+	final := StatusTerminated
+	if s, ok := inst.MetadataMap()["final_status"].(string); ok && s != "" {
+		final = s
+	}
+	wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = a.instances.UpdateStatus(wctx, inst.InstanceID, final)
+	inst.Status = final
+	delete(a.staleSince, inst.InstanceID)
+	delete(a.bootSince, inst.InstanceID)
 }
 
 // reconcileWorkers matches registered workers (by RUNQY_INSTANCE_ID echoed in their
@@ -536,7 +609,7 @@ type workerHeartbeat struct {
 }
 
 // listWorkers reads all worker heartbeats from Redis.
-func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
+func (a *Autoscaler) listWorkers(ctx context.Context) ([]workerHeartbeat, error) {
 	var out []workerHeartbeat
 	iter := a.rdb.Scan(ctx, 0, "asynq:workers:*", 100).Iterator()
 	var keys []string
@@ -546,8 +619,8 @@ func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
 			keys = append(keys, k)
 		}
 	}
-	if iter.Err() != nil {
-		return out
+	if err := iter.Err(); err != nil {
+		return nil, err
 	}
 	for _, key := range keys {
 		if t, err := a.rdb.Type(ctx, key).Result(); err != nil || t != "hash" {
@@ -559,7 +632,7 @@ func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
 		}
 		out = append(out, parseWorkerHeartbeat(strings.TrimPrefix(key, "asynq:workers:"), data))
 	}
-	return out
+	return out, nil
 }
 
 // parseWorkerHeartbeat decodes a worker hash (asynq:workers:<id>).

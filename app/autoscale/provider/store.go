@@ -194,7 +194,7 @@ func (s *Store) Update(ctx context.Context, name, providerType string, config js
 	if !IsRegistered(providerType) {
 		return nil, fmt.Errorf("unknown provider type %q (known: %v)", providerType, Types())
 	}
-	if len(config) == 0 {
+	if len(config) == 0 || strings.TrimSpace(string(config)) == "null" {
 		config = existing.Config
 	} else {
 		if !json.Valid(config) {
