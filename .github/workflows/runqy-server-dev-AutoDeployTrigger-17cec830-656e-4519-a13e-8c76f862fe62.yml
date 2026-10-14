@@ -1,0 +1,49 @@
+name: Trigger auto deployment for runqy-server-dev
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ dev ]
+    paths:
+    - '**'
+    - '.github/workflows/runqy-server-dev-AutoDeployTrigger-17cec830-656e-4519-a13e-8c76f862fe62.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.RUNQYSERVERDEV_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.RUNQYSERVERDEV_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.RUNQYSERVERDEV_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          _targetLabelKey_: _targetLabel_
+          registryUrl: publikeyregistrydev.azurecr.io
+          registryUsername: ${{ secrets.RUNQYSERVERDEV_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.RUNQYSERVERDEV_REGISTRY_PASSWORD }}
+          containerAppName: runqy-server-dev
+          resourceGroup: runqy
+          imageToBuild: publikeyregistrydev.azurecr.io/runqy-server-dev:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
