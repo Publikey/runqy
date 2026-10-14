@@ -10,11 +10,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/api"
 	"github.com/Publikey/runqy/auth"
 	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/autoscale/provider"
 	_ "github.com/Publikey/runqy/docs"
+	"github.com/Publikey/runqy/health"
 	"github.com/Publikey/runqy/models"
 	"github.com/Publikey/runqy/monitoring"
 	queueworker "github.com/Publikey/runqy/queues"
@@ -295,7 +297,17 @@ func runServe(cmd *cobra.Command, args []string) {
 	autoscaleProviderStore := provider.NewStore(db)
 	autoscaleInstanceStore := autoscale.NewStore(db)
 	autoScaler := autoscale.New(autoscaleInstanceStore, autoscaleProviderStore, qwStore, inspector, redisAddr.RDB, cfg)
+	autoScaler.SetEventSink(alerts.NewEventRecorder(redisAddr.RDB))
 	autoScaler.Start()
+
+	// Initialize alerting: settings (DB, also fed by the YAML `alerts` block on load/reload)
+	// and the leader-locked evaluator.
+	alertSettingsStore := alerts.NewSettingsStore(db)
+	api.SetAlertSettingsSink(alertSettingsStore.Save)
+	publicURL := os.Getenv("RUNQY_PUBLIC_URL")
+	alertsAPI := &alerts.API{Store: alertSettingsStore, Redis: redisAddr.RDB, Vault: vaultStore, PublicURL: publicURL}
+	alertEngine := alerts.NewEngine(health.NewCollector(qwStore, inspector, redisAddr.RDB), alertSettingsStore, redisAddr.RDB, vaultStore, publicURL)
+	alertEngine.Start()
 	if debugMode {
 		log.Println("[AUTOSCALE] Autoscaler started")
 	}
@@ -319,6 +331,7 @@ func runServe(cmd *cobra.Command, args []string) {
 			AuthStore:              authStore,
 			AutoscaleStore:         autoscaleInstanceStore,
 			AutoscaleProviderStore: autoscaleProviderStore,
+			AlertsAPI:              alertsAPI,
 			PrometheusAddress:      cfg.PrometheusAddress,
 			Config:                 cfg,
 		})
@@ -434,6 +447,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt)
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
 	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, cfg.APIKey)
+	api.SetupAlertsAPI(router, alertsAPI, cfg.APIKey)
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.StaticFile("/swagger.yaml", "./docs/swagger.yaml")
@@ -477,8 +491,9 @@ func runServe(cmd *cobra.Command, args []string) {
 	sig := <-quit
 	log.Printf("Received %v, shutting down...", sig)
 
-	// Stop the autoscaler before the inspector/redis it depends on are closed (deferred).
+	// Stop background loops before the inspector/redis they depend on are closed (deferred).
 	autoScaler.Stop()
+	alertEngine.Stop()
 
 	// Stop watchers with timeout to prevent blocking forever
 	watcherDone := make(chan struct{})

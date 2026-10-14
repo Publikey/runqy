@@ -112,8 +112,9 @@ func LoadFile(path string) (*QueueWorkersYAML, error) {
 		return nil, fmt.Errorf("yaml parse error: %w", err)
 	}
 
-	// Skip files that don't have the expected structure
-	if cfg.Queues == nil || len(cfg.Queues) == 0 {
+	// Skip files that don't have the expected structure (a file may hold only the
+	// global alerts block)
+	if len(cfg.Queues) == 0 && cfg.Alerts == nil {
 		return nil, nil
 	}
 

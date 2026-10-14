@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/auth"
 	"github.com/Publikey/runqy/autoscale"
 	asprovider "github.com/Publikey/runqy/autoscale/provider"
@@ -79,6 +80,11 @@ type Options struct {
 	//
 	// This field is optional. If nil, autoscale endpoints are not registered.
 	AutoscaleProviderStore *asprovider.Store
+
+	// AlertsAPI serves the alerting endpoints.
+	//
+	// This field is optional. If nil, alert endpoints are not registered.
+	AlertsAPI *alerts.API
 
 	// Config is the centralized server configuration.
 	//
@@ -287,6 +293,14 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/vaults/{name}/entries", newSetEntryHandlerFunc(opts.VaultStore)).Methods("POST")
 		api.HandleFunc("/vaults/{name}/entries", newListEntriesHandlerFunc(opts.VaultStore)).Methods("GET")
 		api.HandleFunc("/vaults/{name}/entries/{key}", newDeleteEntryHandlerFunc(opts.VaultStore)).Methods("DELETE")
+	}
+
+	// Alerting endpoints (overview, settings, test email).
+	if opts.AlertsAPI != nil {
+		api.HandleFunc("/alerts", opts.AlertsAPI.Overview).Methods("GET")
+		api.HandleFunc("/alerts/settings", opts.AlertsAPI.GetSettings).Methods("GET")
+		api.HandleFunc("/alerts/settings", opts.AlertsAPI.PutSettings).Methods("PUT")
+		api.HandleFunc("/alerts/test", opts.AlertsAPI.Test).Methods("POST")
 	}
 
 	// Autoscale endpoints (instance status/protection + provider config CRUD).

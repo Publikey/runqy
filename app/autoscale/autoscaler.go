@@ -65,9 +65,33 @@ type Autoscaler struct {
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
 	wasLeader  bool
 
+	events EventSink // optional: failures reported to alerting
+
 	stopOnce sync.Once
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+}
+
+// EventSink receives autoscaling failures (provisioning errors, instances torn down
+// because they never became ready or lost their worker). alerts.EventRecorder implements it.
+type EventSink interface {
+	Record(ctx context.Context, queue, rule, message string) error
+}
+
+// SetEventSink registers where failures are reported. Call before Start.
+func (a *Autoscaler) SetEventSink(s EventSink) { a.events = s }
+
+// reportFailure forwards a failure to the event sink, if any. It never blocks the loop
+// for long and never fails it.
+func (a *Autoscaler) reportFailure(queue, message string) {
+	if a.events == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.events.Record(ctx, queue, queueworker.AlertAutoscaleFailure, message); err != nil {
+		log.Printf("[AUTOSCALE] cannot report failure to alerting: %v", err)
+	}
 }
 
 type cachedProvider struct {
@@ -412,6 +436,7 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 	}
 	if err := a.checkWorkerEnv(prov.Name()); err != nil {
 		log.Printf("[AUTOSCALE] queue %q: cannot provision: %v", parent, err)
+		a.reportFailure(parent, "cannot provision: "+err.Error())
 		return
 	}
 	for i := 0; i < n; i++ {
@@ -428,6 +453,7 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 			}
 			b.until = now.Add(delay)
 			log.Printf("[AUTOSCALE] queue %q: provision failed (%d in a row), next attempt in %s: %v", parent, b.failures, delay, err)
+			a.reportFailure(parent, fmt.Sprintf("provisioning failed (%d in a row, next attempt in %s): %v", b.failures, delay, err))
 			return
 		}
 		delete(a.backoff, parent)
@@ -486,6 +512,9 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 // failed Destroy or a crash in between is retried by finishTeardown on later evaluations
 // instead of leaving a machine that nothing tracks.
 func (a *Autoscaler) teardown(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string) {
+	if finalStatus == StatusFailed {
+		a.reportFailure(inst.Queue, fmt.Sprintf("instance %s destroyed: %s", inst.InstanceID, reason))
+	}
 	wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := a.instances.UpdateStatusWithMeta(wctx, inst, StatusDraining, map[string]string{"reason": reason, "final_status": finalStatus}); err != nil {

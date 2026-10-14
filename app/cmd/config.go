@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/models"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/spf13/cobra"
@@ -336,6 +337,17 @@ func runConfigReload(cmd *cobra.Command, args []string) error {
 	if len(reloaded) > 0 {
 		if err := store.RegisterAsynqQueues(ctx, reloaded); err != nil {
 			fmt.Printf("Warning: failed to register asynq queues: %v\n", err)
+		}
+	}
+
+	// Global alert settings (top-level `alerts` block)
+	if settings, err := queueworker.GlobalAlertSettings(yamls); err != nil {
+		errors = append(errors, "alerts: "+err.Error())
+	} else if settings != nil {
+		if err := alerts.NewSettingsStore(pgDB).Save(ctx, settings); err != nil {
+			errors = append(errors, "alerts: failed to save settings: "+err.Error())
+		} else {
+			fmt.Println("Alert settings loaded from YAML.")
 		}
 	}
 

@@ -3,13 +3,14 @@ package api
 import (
 	"sync"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
 	queueworker "github.com/Publikey/runqy/queues"
+	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/gin-gonic/gin"
-	"github.com/Publikey/runqy/third_party/asynq"
 )
 
 // Global vault store for use by worker handshake (protected by mutex)
@@ -26,7 +27,7 @@ func GetVaultStore() *vaults.Store {
 }
 
 func SetupAPI(r *gin.Engine, qwStore *queueworker.Store, qwConfigDir string, cfg *config.Config, redisOpt asynq.RedisClientOpt) {
-	adminKey  := cfg.APIKey
+	adminKey := cfg.APIKey
 	workerKey := cfg.WorkerAPIKey
 	clientKey := cfg.ClientAPIKey
 
@@ -86,6 +87,16 @@ func SetupVaultsAPI(r *gin.Engine, vaultStore *vaults.Store, apiKey string) {
 }
 
 // SetupAutoscaleAPI registers the GPU autoscaling routes (admin-only).
+// SetupAlertsAPI registers the alerting endpoints (admin key).
+func SetupAlertsAPI(r *gin.Engine, a *alerts.API, apiKey string) {
+	grp := r.Group("/api/alerts")
+	grp.Use(Authorize(apiKey))
+	grp.GET("", gin.WrapF(a.Overview))
+	grp.GET("/settings", gin.WrapF(a.GetSettings))
+	grp.PUT("/settings", gin.WrapF(a.PutSettings))
+	grp.POST("/test", gin.WrapF(a.Test))
+}
+
 func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerStore *provider.Store, apiKey string) {
 	grp := r.Group("/api/autoscale")
 	grp.Use(Authorize(apiKey))

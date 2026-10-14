@@ -239,3 +239,20 @@ func EffectiveAlertRules(global []AlertRule, q *QueueAlertsConfig) []AlertRule {
 	}
 	return out
 }
+
+// GlobalAlertSettings returns the global `alerts` block of the loaded YAML files, or nil
+// when none defines one. Defining it in more than one file is an error.
+func GlobalAlertSettings(files []*QueueWorkersYAML) (*AlertSettings, error) {
+	var found *AlertSettings
+	count := 0
+	for _, f := range files {
+		if f != nil && f.Alerts != nil {
+			found = f.Alerts
+			count++
+		}
+	}
+	if count > 1 {
+		return nil, fmt.Errorf("the global alerts block is defined in %d YAML files; define it in only one", count)
+	}
+	return found, nil
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -301,5 +302,29 @@ func TestBootTimeoutRestartsClockForRestartedWorker(t *testing.T) {
 	later := now.Add(21 * time.Minute)
 	if live := reconcile(t, a, prov, booting(later), later); len(live) != 0 {
 		t.Fatalf("worker bootstrapping for longer than boot_timeout kept: live = %v", ids(live))
+	}
+}
+
+type fakeSink struct{ messages []string }
+
+func (f *fakeSink) Record(_ context.Context, queue, rule, message string) error {
+	f.messages = append(f.messages, queue+"|"+rule+"|"+message)
+	return nil
+}
+
+func TestFailuresReportedToEventSink(t *testing.T) {
+	a := newTestAutoscaler(t)
+	sink := &fakeSink{}
+	a.SetEventSink(sink)
+
+	prov := &fakeProvider{name: "mock", provisionErr: errors.New("no offers")}
+	a.provisionN(context.Background(), "inference", &queueworker.AutoscaleConfig{MaxWorkers: 1}, prov, "p", 1, 30*time.Second, time.Now())
+	addInstance(t, a, "stuck", StatusRunning, "", time.Hour) // past boot_timeout
+	reconcile(t, a, &fakeProvider{}, nil, time.Now())
+
+	if len(sink.messages) != 2 ||
+		!strings.Contains(sink.messages[0], "inference|autoscale_failure|provisioning failed") ||
+		!strings.Contains(sink.messages[1], "instance stuck destroyed: no ready worker") {
+		t.Fatalf("events = %v", sink.messages)
 	}
 }
