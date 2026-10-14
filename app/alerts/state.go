@@ -34,8 +34,8 @@ type alertState struct {
 	Rule         string    `json:"rule"`
 	Since        time.Time `json:"since"` // when the condition became true
 	Firing       bool      `json:"firing"`
-	FiredAt      time.Time `json:"fired_at,omitempty"`
-	LastNotified time.Time `json:"last_notified,omitempty"`
+	FiredAt      time.Time `json:"fired_at,omitzero"`
+	LastNotified time.Time `json:"last_notified,omitzero"`
 	Message      string    `json:"message"`
 }
 
@@ -59,10 +59,10 @@ type Event struct {
 
 // Status reports the evaluator's health for the dashboard.
 type Status struct {
-	LastEval    time.Time `json:"last_eval,omitempty"`
-	LastSent    time.Time `json:"last_sent,omitempty"`
-	LastError   string    `json:"last_error,omitempty"`
-	LastErrorAt time.Time `json:"last_error_at,omitempty"`
+	LastEval    time.Time `json:"last_eval,omitzero"`
+	LastSent    time.Time `json:"last_sent,omitzero"`
+	LastError   string    `json:"last_error,omitzero"`
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
 }
 
 // stateStore is the persistence the engine needs (Redis in production).

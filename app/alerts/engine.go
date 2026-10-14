@@ -378,7 +378,7 @@ type ActiveAlert struct {
 	Rule    string    `json:"rule"`
 	Firing  bool      `json:"firing"`
 	Since   time.Time `json:"since"`
-	FiredAt time.Time `json:"fired_at,omitempty"`
+	FiredAt time.Time `json:"fired_at,omitzero"`
 	Message string    `json:"message"`
 }
 

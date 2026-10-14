@@ -1,0 +1,9 @@
+.git
+**/node_modules
+app/monitoring/ui/.svelte-kit
+dist
+*.exe
+*.exe~
+*.db
+*.log
+app/vegeta
