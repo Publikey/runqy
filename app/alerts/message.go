@@ -64,7 +64,7 @@ func renderDigest(settings *queueworker.AlertSettings, notes []HistoryEntry, pub
 				parts = append(parts, fmt.Sprintf("%d %s", counts[s], strings.ToLower(statusLabels[s])))
 			}
 		}
-		subject = "[runqy] " + strings.Join(parts, ", ")
+		subject = "[runqy] " + strings.Join(parts, ", ") + " — " + queueList(notes, 3)
 	}
 
 	var text strings.Builder
@@ -120,4 +120,20 @@ func renderTest(settings *queueworker.AlertSettings, publicURL string, now time.
 		HTML: `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:24px"><p>` +
 			strings.ReplaceAll(html.EscapeString(body), "\n", "<br>") + `</p></body></html>`,
 	}
+}
+
+// queueList names the distinct queues of notes, at most max of them ("a, b +2").
+func queueList(notes []HistoryEntry, max int) string {
+	var names []string
+	seen := map[string]bool{}
+	for _, n := range notes {
+		if !seen[n.Queue] {
+			seen[n.Queue] = true
+			names = append(names, n.Queue)
+		}
+	}
+	if len(names) <= max {
+		return strings.Join(names, ", ")
+	}
+	return fmt.Sprintf("%s +%d", strings.Join(names[:max], ", "), len(names)-max)
 }

@@ -195,6 +195,21 @@ type DeploymentConfig struct {
 	Alerts *QueueAlertsConfig `json:"alerts,omitempty"`
 }
 
+// ValidateOverrides checks the optional per-queue blocks (limits, autoscale, alerts) so
+// every entry point (YAML, REST API, dashboard) rejects the same malformed values.
+func (d *DeploymentConfig) ValidateOverrides() error {
+	if d == nil {
+		return nil
+	}
+	if err := d.Limits.Validate(); err != nil {
+		return err
+	}
+	if err := d.Autoscale.Validate(); err != nil {
+		return err
+	}
+	return d.Alerts.Validate()
+}
+
 // QueueSummary is a lightweight version for listing queues
 type QueueSummary struct {
 	Name     string `json:"name"`

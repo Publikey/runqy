@@ -20,7 +20,9 @@ import type {
 	DeploymentConfig,
 	PlaygroundEnqueueResponse,
 	AutoscaleStatus,
-	AutoscaleProvider
+	AutoscaleProvider,
+	AlertsOverview,
+	AlertSettings
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -470,5 +472,26 @@ export async function playgroundEnqueue(
 	return fetchJson(`${BASE_URL}/playground/enqueue`, {
 		method: 'POST',
 		body: JSON.stringify({ queue, payload, count, timeout })
+	});
+}
+
+// Alerting API
+export async function getAlertsOverview(history: number = 50): Promise<AlertsOverview> {
+	return fetchJson(`${BASE_URL}/alerts?history=${history}`);
+}
+
+export async function getAlertSettings(): Promise<{ settings: AlertSettings }> {
+	return fetchJson(`${BASE_URL}/alerts/settings`);
+}
+
+export async function saveAlertSettings(settings: AlertSettings): Promise<{ message: string; settings: AlertSettings }> {
+	return fetchJson(`${BASE_URL}/alerts/settings`, { method: 'PUT', body: JSON.stringify(settings) });
+}
+
+// Sends a test email with the given (possibly unsaved) settings, or the saved ones.
+export async function sendTestAlert(settings?: AlertSettings): Promise<{ message: string }> {
+	return fetchJson(`${BASE_URL}/alerts/test`, {
+		method: 'POST',
+		body: settings ? JSON.stringify(settings) : undefined
 	});
 }

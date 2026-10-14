@@ -236,7 +236,7 @@ func TestDigestGroupsNotificationsAndQueueOverrides(t *testing.T) {
 		t.Fatalf("want one digest email, got %d", len(snd.sent))
 	}
 	m := snd.sent[0]
-	if m.Subject != "[runqy] 2 firing" {
+	if m.Subject != "[runqy] 2 firing — a, b" {
 		t.Errorf("subject = %q", m.Subject)
 	}
 	for _, unwanted := range []string{"muted", "paused", "host:1"} {

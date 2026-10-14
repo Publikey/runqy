@@ -7,9 +7,12 @@
 		AutoscaleConfig,
 		AutoscaleProvider,
 		ScaleTrigger,
-		ScaleTriggerType
+		ScaleTriggerType,
+		AlertRule,
+		QueueLimitsConfig
 	} from '$lib/api/types';
 	import { getVaults, getVault, getAutoscaleProviders } from '$lib/api/client';
+	import AlertRulesEditor from './AlertRulesEditor.svelte';
 
 	interface SubQueue {
 		name: string;
@@ -80,6 +83,13 @@
 	let instanceDiskGb = $state<number | undefined>(undefined);
 	let instanceMaxPrice = $state<number | undefined>(undefined);
 	let availableProviders = $state<AutoscaleProvider[]>([]);
+
+	// Alert overrides for this queue
+	let alertsMuted = $state(false);
+	let alertRules = $state<AlertRule[]>([]);
+
+	// Fields this form does not edit but must keep when saving an existing queue.
+	let preservedLimits = $state<QueueLimitsConfig | undefined>(undefined);
 	let loadingProviders = $state(false);
 
 	const scaleUpTypes: ScaleTriggerType[] = ['no_workers', 'queue_depth', 'latency', 'schedule'];
@@ -252,7 +262,8 @@
 					startup_timeout_secs: startupTimeout,
 					redis_storage: redisStorage,
 					vaults: vaultsArray.length > 0 ? vaultsArray : undefined,
-					git_token: gitTokenRef || undefined
+					git_token: gitTokenRef || undefined,
+					limits: preservedLimits
 				};
 			}
 		}
@@ -339,6 +350,40 @@
 			deployment.autoscale = autoscale;
 		}
 
+		// Alert overrides: only stored when the queue is muted or has its own rules.
+		if (alertsMuted || alertRules.length > 0) {
+			if (!deployment) {
+				error = 'Alert overrides require a deployment configuration (Git URL and startup command)';
+				return;
+			}
+			for (const r of alertRules) {
+				if (r.disabled) continue;
+				if (r.type === 'latency' && !r.max_latency?.trim()) {
+					error = 'latency alert rules require a max latency (e.g. 10m)';
+					return;
+				}
+				if (r.type === 'pending' && !(Number(r.threshold) > 0)) {
+					error = 'backlog alert rules require a positive threshold';
+					return;
+				}
+			}
+			deployment.alerts = {
+				disabled: alertsMuted || undefined,
+				rules: alertRules.map((r) => {
+					const rule: AlertRule = { type: r.type };
+					if (r.disabled) {
+						rule.disabled = true;
+						return rule;
+					}
+					if (r.for?.trim()) rule.for = r.for.trim();
+					if (r.type === 'latency') rule.max_latency = r.max_latency?.trim();
+					if (r.type === 'pending') rule.threshold = Number(r.threshold);
+					if (r.type === 'no_workers' && r.when_idle) rule.when_idle = true;
+					return rule;
+				})
+			};
+		}
+
 		const queuesToCreate: QueueToCreate[] = [];
 
 		if (subQueues.length === 0) {
@@ -401,6 +446,9 @@
 		instanceImage = '';
 		instanceDiskGb = undefined;
 		instanceMaxPrice = undefined;
+		alertsMuted = false;
+		alertRules = [];
+		preservedLimits = undefined;
 		error = '';
 	}
 
@@ -452,6 +500,9 @@
 						instanceDiskGb = as.instance?.disk_gb;
 						instanceMaxPrice = as.instance?.max_price_per_hour;
 					}
+					alertsMuted = config.deployment.alerts?.disabled ?? false;
+					alertRules = (config.deployment.alerts?.rules || []).map((r) => ({ ...r }));
+					preservedLimits = config.deployment.limits;
 				}
 			}
 		} else {
@@ -826,6 +877,24 @@
 									</div>
 								</div>
 							{/if}
+
+							<hr class="hr" />
+
+							<div class="space-y-3">
+								<div class="flex items-center justify-between gap-4">
+									<div>
+										<h5 class="h5 mb-1">Alerts</h5>
+										<p class="text-sm text-surface-500">Override the global alert rules for this queue</p>
+									</div>
+									<label class="flex items-center gap-3 cursor-pointer">
+										<input type="checkbox" bind:checked={alertsMuted} class="checkbox" disabled={loading} />
+										<span class="text-sm">Mute</span>
+									</label>
+								</div>
+								{#if !alertsMuted}
+									<AlertRulesEditor bind:rules={alertRules} override disabled={loading} />
+								{/if}
+							</div>
 						</div>
 					{/if}
 

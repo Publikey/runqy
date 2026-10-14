@@ -266,6 +266,7 @@ export interface DeploymentConfig {
 	git_token?: string;
 	limits?: QueueLimitsConfig;
 	autoscale?: AutoscaleConfig;
+	alerts?: QueueAlertsConfig;
 }
 
 // Autoscaling types
@@ -359,4 +360,71 @@ export interface QueueConfigDetail {
 export interface PlaygroundEnqueueResponse {
 	tasks: { id: string; queue: string }[];
 	count: number;
+}
+
+// ---- Alerting ----
+
+export type AlertRuleType = 'no_workers' | 'latency' | 'pending' | 'worker_unhealthy' | 'autoscale_failure';
+
+export interface AlertRule {
+	type: AlertRuleType;
+	for?: string; // condition must hold this long before firing
+	max_latency?: string; // latency
+	threshold?: number; // pending
+	when_idle?: boolean; // no_workers: also fire when nothing is pending
+	disabled?: boolean; // queue override: turn this rule type off
+}
+
+export interface QueueAlertsConfig {
+	disabled?: boolean; // mute every alert for this queue
+	rules?: AlertRule[];
+}
+
+export interface AlertSettings {
+	enabled: boolean;
+	provider: 'smtp' | 'sendgrid';
+	from: string;
+	recipients: string[];
+	smtp?: {
+		host: string;
+		port?: number;
+		username?: string;
+		password?: string; // literal (masked when read), vault://vault/key, or empty for RUNQY_SMTP_PASSWORD
+		tls?: 'starttls' | 'tls' | 'none' | '';
+	};
+	sendgrid?: {
+		api_key?: string; // literal (masked when read), vault://vault/key, or empty for RUNQY_SENDGRID_API_KEY
+	};
+	rules?: AlertRule[];
+	repeat_interval?: string;
+	send_resolved?: boolean;
+}
+
+export interface ActiveAlert {
+	queue: string;
+	rule: AlertRuleType;
+	firing: boolean;
+	since: string;
+	fired_at?: string;
+	message: string;
+}
+
+export interface AlertHistoryEntry {
+	time: string;
+	queue: string;
+	rule: AlertRuleType;
+	status: 'firing' | 'resolved' | 'repeat' | 'event';
+	message: string;
+}
+
+export interface AlertsOverview {
+	enabled: boolean;
+	active: ActiveAlert[];
+	history: AlertHistoryEntry[];
+	status: {
+		last_eval?: string;
+		last_sent?: string;
+		last_error?: string;
+		last_error_at?: string;
+	};
 }
