@@ -243,17 +243,6 @@ func TestRealProviderNeedsPublicURLAndWorkerKey(t *testing.T) {
 	}
 }
 
-func TestParseWorkerHeartbeat(t *testing.T) {
-	hb := parseWorkerHeartbeat("w1", map[string]string{"last_beat": "100", "active": "2", "last_task_at": "90", "protected": "true"})
-	if hb.active != 2 || hb.lastTaskAt != 90 || !hb.protected || hb.lastBeat != 100 {
-		t.Errorf("got %+v", hb)
-	}
-	old := parseWorkerHeartbeat("w2", map[string]string{"last_beat": "100"})
-	if old.active != -1 {
-		t.Errorf("older worker without 'active': got %d, want -1 (unknown)", old.active)
-	}
-}
-
 func TestTeardownRetriedAfterDestroyFailure(t *testing.T) {
 	a := newTestAutoscaler(t)
 	addInstance(t, a, "doomed", StatusRunning, "", 30*time.Minute) // past boot_timeout

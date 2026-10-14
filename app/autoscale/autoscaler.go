@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/health"
+	"github.com/Publikey/runqy/leader"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/google/uuid"
@@ -53,7 +53,7 @@ type Autoscaler struct {
 	inspector *asynq.Inspector
 	rdb       *redis.Client
 	cfg       *config.Config
-	leader    *leaderLock
+	leader    *leader.Lock
 
 	provCacheMu sync.Mutex
 	provCache   map[string]cachedProvider // by provider name
@@ -98,7 +98,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		inspector:  inspector,
 		rdb:        rdb,
 		cfg:        cfg,
-		leader:     newLeaderLock(rdb, leaderTTL),
+		leader:     leader.New(rdb, "runqy:autoscale:leader", leaderTTL),
 		provCache:  make(map[string]cachedProvider),
 		lastEval:   make(map[string]time.Time),
 		backoff:    make(map[string]*provisionBackoff),
@@ -125,7 +125,7 @@ func (a *Autoscaler) run() {
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		a.leader.release(ctx)
+		a.leader.Release(ctx)
 	}()
 	ticker := time.NewTicker(baseTick)
 	defer ticker.Stop()
@@ -204,7 +204,7 @@ func (a *Autoscaler) tick() {
 func (a *Autoscaler) holdLeadership() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	isLeader := a.leader.acquire(ctx)
+	isLeader := a.leader.Acquire(ctx)
 	if isLeader && !a.wasLeader {
 		a.staleSince = make(map[string]time.Time)
 		a.bootSince = make(map[string]bootObservation)
@@ -610,51 +610,24 @@ type workerHeartbeat struct {
 
 // listWorkers reads all worker heartbeats from Redis.
 func (a *Autoscaler) listWorkers(ctx context.Context) ([]workerHeartbeat, error) {
-	var out []workerHeartbeat
-	iter := a.rdb.Scan(ctx, 0, "asynq:workers:*", 100).Iterator()
-	var keys []string
-	for iter.Next(ctx) {
-		k := iter.Val()
-		if strings.Count(k, ":") >= 2 {
-			keys = append(keys, k)
-		}
-	}
-	if err := iter.Err(); err != nil {
+	workers, err := health.ReadWorkers(ctx, a.rdb)
+	if err != nil {
 		return nil, err
 	}
-	for _, key := range keys {
-		if t, err := a.rdb.Type(ctx, key).Result(); err != nil || t != "hash" {
-			continue
+	out := make([]workerHeartbeat, len(workers))
+	for i, w := range workers {
+		out[i] = workerHeartbeat{
+			workerID:   w.ID,
+			queues:     w.Queues,
+			instanceID: w.InstanceID,
+			status:     w.Status,
+			protected:  w.Protected,
+			lastBeat:   w.LastBeat,
+			active:     w.Active,
+			lastTaskAt: w.LastTaskAt,
 		}
-		data, err := a.rdb.HGetAll(ctx, key).Result()
-		if err != nil || len(data) == 0 {
-			continue
-		}
-		out = append(out, parseWorkerHeartbeat(strings.TrimPrefix(key, "asynq:workers:"), data))
 	}
 	return out, nil
-}
-
-// parseWorkerHeartbeat decodes a worker hash (asynq:workers:<id>).
-func parseWorkerHeartbeat(workerID string, data map[string]string) workerHeartbeat {
-	hb := workerHeartbeat{
-		workerID:   workerID,
-		queues:     data["queues"],
-		instanceID: data["instance_id"],
-		status:     data["status"],
-		protected:  strings.EqualFold(data["protected"], "true"),
-		active:     -1,
-	}
-	if lb, err := strconv.ParseInt(data["last_beat"], 10, 64); err == nil {
-		hb.lastBeat = lb
-	}
-	if n, err := strconv.Atoi(data["active"]); err == nil {
-		hb.active = n
-	}
-	if t, err := strconv.ParseInt(data["last_task_at"], 10, 64); err == nil {
-		hb.lastTaskAt = t
-	}
-	return hb
 }
 
 // countLiveWorkers counts non-stale workers (managed or manual) serving the parent queue.
