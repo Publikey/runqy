@@ -1,0 +1,61 @@
+# alerts.yaml — Email alerting example
+#
+# The top-level `alerts` block configures where notifications go and the default rules
+# for every queue. It is applied on server start and on `runqy config reload`, and can
+# also be edited from the dashboard (Alerts page). Define it in only one YAML file.
+#
+# Each queue can override rules with its own `alerts` block (next to `deployment`).
+#
+# Secrets: use a vault reference (vault://vault-name/key), or leave the field empty and
+# set RUNQY_SMTP_PASSWORD / RUNQY_SENDGRID_API_KEY on the server. A literal secret is only
+# accepted when RUNQY_VAULT_MASTER_KEY is set (it is then stored encrypted).
+#
+# Try it: runqy alerts test    # sends a test email
+#         runqy alerts status  # active alerts and recent notifications
+
+alerts:
+  enabled: true
+  provider: smtp                 # smtp | sendgrid
+  from: "runqy <alerts@example.com>"
+  recipients:
+    - ops@example.com
+  smtp:
+    host: smtp.example.com
+    port: 587                    # default: 587 (starttls), 465 (tls), 25 (none)
+    tls: starttls                # starttls | tls | none
+    username: alerts@example.com
+    password: "vault://mail/smtp_password"
+  # sendgrid:
+  #   api_key: "vault://mail/sendgrid_api_key"
+  repeat_interval: 4h            # re-send while still firing; "0" = once
+  send_resolved: true            # email when an alert clears
+  rules:
+    - type: no_workers           # jobs pending and no live worker
+      for: 2m                    # must hold 2 minutes before firing
+    - type: latency              # oldest pending job waited too long
+      max_latency: 10m
+    - type: worker_unhealthy     # a worker reports a degraded process
+    - type: autoscale_failure    # provisioning failed / instance destroyed for failure
+
+queues:
+  reports:
+    priority: 1
+    deployment:
+      git_url: "https://github.com/Publikey/test-dummy-task.git"
+      startup_cmd: "python dummy-task/main.py"
+    alerts:
+      rules:
+        - type: latency          # stricter than the global 10m for this queue
+          max_latency: 2m
+        - type: pending          # queue-only rule
+          threshold: 500
+        - type: worker_unhealthy # turned off for this queue
+          disabled: true
+
+  nightly-batch:
+    priority: 1
+    deployment:
+      git_url: "https://github.com/Publikey/test-dummy-task.git"
+      startup_cmd: "python simple-task/main.py"
+    alerts:
+      disabled: true             # mute every alert for this queue
