@@ -306,14 +306,16 @@ export interface AutoscaleProvider {
 	updated_at: string;
 }
 
-export type ScaleTriggerType = 'no_workers' | 'queue_depth' | 'schedule' | 'idle';
+export type ScaleTriggerType = 'no_workers' | 'queue_depth' | 'latency' | 'schedule' | 'idle';
 
 export interface ScaleTrigger {
 	trigger: ScaleTriggerType;
 	threshold?: number;
 	cron?: string;
 	workers?: number;
+	duration?: string; // schedule scale_up: how long to hold the target
 	timeout?: string;
+	max_latency?: string; // latency: oldest pending job age that triggers a scale-up
 }
 
 export interface AutoscaleInstanceSpec {
@@ -329,6 +331,7 @@ export interface AutoscaleConfig {
 	min_workers: number;
 	max_workers: number;
 	poll_interval: string;
+	boot_timeout?: string;
 	scale_up: ScaleTrigger[];
 	scale_down: ScaleTrigger[];
 	instance: AutoscaleInstanceSpec;

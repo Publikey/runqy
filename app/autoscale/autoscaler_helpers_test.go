@@ -20,29 +20,6 @@ func TestCountLiveWorkers(t *testing.T) {
 	}
 }
 
-func TestBootstrappingInstances(t *testing.T) {
-	now := time.Now().Unix()
-	workers := []workerHeartbeat{
-		{workerID: "w1", instanceID: "as-1", status: workerStatusBootstrapping, lastBeat: now},
-		{workerID: "w2", instanceID: "as-2", status: "running", lastBeat: now},
-		{workerID: "w3", instanceID: "as-3", status: workerStatusBootstrapping, lastBeat: now - workerStaleThreshold - 10}, // stale
-		{workerID: "w4", instanceID: "", status: workerStatusBootstrapping, lastBeat: now},                                 // uncorrelated
-	}
-	got := bootstrappingInstances(workers)
-	if !got["as-1"] {
-		t.Errorf("as-1 (fresh bootstrapping) should be protected from idle-kill")
-	}
-	if got["as-2"] {
-		t.Errorf("as-2 (running) should not be in the bootstrapping set")
-	}
-	if got["as-3"] {
-		t.Errorf("as-3 (stale heartbeat) should not be in the bootstrapping set")
-	}
-	if len(got) != 1 {
-		t.Errorf("bootstrappingInstances size = %d want 1", len(got))
-	}
-}
-
 func TestProviderInstanceID(t *testing.T) {
 	inst := &Instance{InstanceID: "as-123", Metadata: mustJSON(map[string]string{"provider_instance_id": "mock-7"})}
 	if got := providerInstanceID(inst); got != "mock-7" {

@@ -1,0 +1,250 @@
+package autoscale
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Publikey/runqy/autoscale/provider"
+	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/models"
+	queueworker "github.com/Publikey/runqy/queues"
+	"github.com/jmoiron/sqlx"
+	_ "modernc.org/sqlite"
+)
+
+// fakeProvider records calls and returns scripted statuses.
+type fakeProvider struct {
+	mu           sync.Mutex
+	name         string
+	status       map[string]string // provider id -> status (default running)
+	provisionErr error
+	provisions   int
+	destroyed    []string
+}
+
+func (f *fakeProvider) Name() string {
+	if f.name == "" {
+		return "fake"
+	}
+	return f.name
+}
+
+func (f *fakeProvider) Provision(_ context.Context, _ provider.InstanceSpec) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.provisions++
+	if f.provisionErr != nil {
+		return "", f.provisionErr
+	}
+	return fmt.Sprintf("p-%d", f.provisions), nil
+}
+
+func (f *fakeProvider) Destroy(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.destroyed = append(f.destroyed, id)
+	return nil
+}
+
+func (f *fakeProvider) Status(_ context.Context, id string) (provider.InstanceStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	st := provider.StatusRunning
+	if s, ok := f.status[id]; ok {
+		st = s
+	}
+	return provider.InstanceStatus{InstanceID: id, Status: st}, nil
+}
+
+func newTestAutoscaler(t *testing.T) *Autoscaler {
+	t.Helper()
+	db, err := sqlx.Connect("sqlite", filepath.Join(t.TempDir(), "autoscale.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	if err := models.EnsureSchema(db, false); err != nil {
+		t.Fatal(err)
+	}
+	return &Autoscaler{
+		instances: NewStore(db),
+		cfg:       &config.Config{HTTPPort: "3000", APIKey: "admin"},
+		backoff:   make(map[string]*provisionBackoff),
+		lastSeen:  make(map[string]time.Time),
+	}
+}
+
+func addInstance(t *testing.T, a *Autoscaler, id, status, workerID string, age time.Duration) *Instance {
+	t.Helper()
+	inst := &Instance{
+		InstanceID: id, Provider: "fake", Queue: "inference", Status: status, WorkerID: workerID,
+		CreatedAt: time.Now().Add(-age), Metadata: mustJSON(map[string]string{"provider_instance_id": "p-" + id}),
+	}
+	if err := a.instances.Create(context.Background(), inst); err != nil {
+		t.Fatal(err)
+	}
+	return inst
+}
+
+func statusOf(t *testing.T, a *Autoscaler, id string) string {
+	t.Helper()
+	inst, err := a.instances.GetByInstanceID(context.Background(), id)
+	if err != nil || inst == nil {
+		t.Fatalf("get %s: %v", id, err)
+	}
+	return inst.Status
+}
+
+func reconcile(t *testing.T, a *Autoscaler, prov provider.Provider, hbs map[string]*workerHeartbeat, now time.Time) []*Instance {
+	t.Helper()
+	managed, err := a.instances.ListByQueue(context.Background(), "inference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hbs == nil {
+		hbs = map[string]*workerHeartbeat{}
+	}
+	return a.reconcileInstances(context.Background(), prov, "inference", managed, hbs, 20*time.Minute, now)
+}
+
+func TestReconcileTearsDownInstancesDeadAtProvider(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "gone", StatusRunning, "w1", time.Hour)
+	addInstance(t, a, "boot-failed", StatusProvisioning, "", time.Minute)
+	addInstance(t, a, "ok", StatusRunning, "w3", time.Hour)
+	prov := &fakeProvider{status: map[string]string{
+		"p-gone":        provider.StatusTerminated,
+		"p-boot-failed": provider.StatusFailed,
+	}}
+	now := time.Now()
+	hbs := map[string]*workerHeartbeat{"ok": {workerID: "w3", status: "running", lastBeat: now.Unix()}}
+
+	live := reconcile(t, a, prov, hbs, now)
+
+	if len(live) != 1 || live[0].InstanceID != "ok" {
+		t.Fatalf("live = %v, want [ok]", ids(live))
+	}
+	if len(prov.destroyed) != 2 {
+		t.Errorf("destroyed = %v, want both dead instances destroyed at the provider", prov.destroyed)
+	}
+	if s := statusOf(t, a, "gone"); s != StatusTerminated {
+		t.Errorf("gone: status %q, want terminated", s)
+	}
+	if s := statusOf(t, a, "boot-failed"); s != StatusFailed {
+		t.Errorf("boot-failed: status %q, want failed", s)
+	}
+}
+
+func TestReconcileBootTimeout(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "stuck", StatusRunning, "", 30*time.Minute)   // never registered
+	addInstance(t, a, "young", StatusProvisioning, "", time.Minute) // still within boot_timeout
+	prov := &fakeProvider{}
+
+	live := reconcile(t, a, prov, nil, time.Now())
+
+	if len(live) != 1 || live[0].InstanceID != "young" {
+		t.Fatalf("live = %v, want [young]", ids(live))
+	}
+	if s := statusOf(t, a, "stuck"); s != StatusFailed {
+		t.Errorf("stuck: status %q, want failed", s)
+	}
+}
+
+func TestReconcileLostWorker(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "lost", StatusRunning, "w1", time.Hour)
+	p := addInstance(t, a, "lost-protected", StatusRunning, "w2", time.Hour)
+	if err := a.instances.SetProtected(context.Background(), p.InstanceID, true); err != nil {
+		t.Fatal(err)
+	}
+	prov := &fakeProvider{}
+	now := time.Now()
+
+	// First look (e.g. right after a server restart): the clock starts, nothing is killed.
+	if live := reconcile(t, a, prov, nil, now); len(live) != 2 {
+		t.Fatalf("first pass live = %v, want both", ids(live))
+	}
+	// Still silent past workerLostTimeout: the unprotected one is torn down.
+	live := reconcile(t, a, prov, nil, now.Add(workerLostTimeout+time.Minute))
+	if len(live) != 1 || live[0].InstanceID != "lost-protected" {
+		t.Fatalf("live = %v, want [lost-protected]", ids(live))
+	}
+	if s := statusOf(t, a, "lost"); s != StatusFailed {
+		t.Errorf("lost: status %q, want failed", s)
+	}
+}
+
+func TestProvisionBackoff(t *testing.T) {
+	a := newTestAutoscaler(t)
+	prov := &fakeProvider{name: "mock", provisionErr: errors.New("no offers")}
+	asc := &queueworker.AutoscaleConfig{Enabled: true, Provider: "p", MaxWorkers: 3}
+	ctx := context.Background()
+	now := time.Now()
+
+	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now)
+	if prov.provisions != 1 {
+		t.Fatalf("provisions = %d, want 1 (stop at first failure)", prov.provisions)
+	}
+	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now.Add(10*time.Second))
+	if prov.provisions != 1 {
+		t.Fatalf("provisions = %d, want 1 (still backing off)", prov.provisions)
+	}
+	later := now.Add(31 * time.Second)
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later)
+	if prov.provisions != 2 || a.backoff["inference"].failures != 2 {
+		t.Fatalf("provisions = %d failures = %d, want 2/2", prov.provisions, a.backoff["inference"].failures)
+	}
+	if wait := a.backoff["inference"].until.Sub(later); wait != time.Minute {
+		t.Errorf("second backoff = %s, want 1m (doubled)", wait)
+	}
+
+	prov.provisionErr = nil
+	a.provisionN(ctx, "inference", asc, prov, "p", 2, 30*time.Second, now.Add(2*time.Minute))
+	if prov.provisions != 4 || a.backoff["inference"] != nil {
+		t.Errorf("after recovery: provisions = %d backoff = %v, want 4 and reset", prov.provisions, a.backoff["inference"])
+	}
+}
+
+func TestRealProviderNeedsPublicURLAndWorkerKey(t *testing.T) {
+	a := newTestAutoscaler(t)
+	t.Setenv("RUNQY_PUBLIC_URL", "")
+	prov := &fakeProvider{name: "runpod"}
+	asc := &queueworker.AutoscaleConfig{Enabled: true, Provider: "p", MaxWorkers: 1}
+
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	if prov.provisions != 0 {
+		t.Fatal("provisioned without RUNQY_PUBLIC_URL")
+	}
+
+	t.Setenv("RUNQY_PUBLIC_URL", "https://runqy.example.com")
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	if prov.provisions != 0 {
+		t.Fatal("provisioned with the admin API key (no RUNQY_WORKER_API_KEY)")
+	}
+
+	a.cfg.WorkerAPIKey = "worker-key"
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	if prov.provisions != 1 {
+		t.Fatalf("provisions = %d, want 1 once configured", prov.provisions)
+	}
+	if env := a.workerEnv("inference", "as-1"); env["RUNQY_API_KEY"] != "worker-key" {
+		t.Errorf("RUNQY_API_KEY = %q, want the worker key", env["RUNQY_API_KEY"])
+	}
+}
+
+func TestParseWorkerHeartbeat(t *testing.T) {
+	hb := parseWorkerHeartbeat("w1", map[string]string{"last_beat": "100", "active": "2", "last_task_at": "90", "protected": "true"})
+	if hb.active != 2 || hb.lastTaskAt != 90 || !hb.protected || hb.lastBeat != 100 {
+		t.Errorf("got %+v", hb)
+	}
+	old := parseWorkerHeartbeat("w2", map[string]string{"last_beat": "100"})
+	if old.active != -1 {
+		t.Errorf("older worker without 'active': got %d, want -1 (unknown)", old.active)
+	}
+}

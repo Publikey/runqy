@@ -3,9 +3,9 @@ package autoscale
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +23,18 @@ import (
 // poll_interval has elapsed since its last evaluation.
 const baseTick = 10 * time.Second
 
+// queueEvalTimeout bounds one queue evaluation (provider HTTP calls use 30s timeouts each).
+const queueEvalTimeout = 2 * time.Minute
+
 // workerStaleThreshold matches the server/worker heartbeat staleness window.
 const workerStaleThreshold = 30 // seconds
+
+// workerLostTimeout is how long a correlated worker may stop heartbeating before its
+// instance is considered dead and torn down (the machine would otherwise bill forever).
+const workerLostTimeout = 5 * time.Minute
+
+// maxProvisionBackoff caps the wait between failed provisioning attempts.
+const maxProvisionBackoff = 10 * time.Minute
 
 // workerStatusBootstrapping is the heartbeat status a worker reports from registration
 // until its supervised process signals ready (see runqy-worker heartbeat).
@@ -38,19 +48,31 @@ type Autoscaler struct {
 	inspector *asynq.Inspector
 	rdb       *redis.Client
 	cfg       *config.Config
+	leader    *leaderLock
 
 	provCacheMu sync.Mutex
 	provCache   map[string]cachedProvider // by provider name
 
-	lastEval map[string]time.Time // parent queue -> last evaluation time
+	// Loop-goroutine state (not shared).
+	lastEval map[string]time.Time         // parent queue -> last evaluation time
+	backoff  map[string]*provisionBackoff // parent queue -> provisioning failure backoff
+	lastSeen map[string]time.Time         // instance id -> last fresh heartbeat of its worker
 
-	stopCh chan struct{}
-	doneCh chan struct{}
+	stopOnce sync.Once
+	stopCh   chan struct{}
+	doneCh   chan struct{}
 }
 
 type cachedProvider struct {
 	prov      provider.Provider
 	updatedAt time.Time
+}
+
+// provisionBackoff spaces out retries after provisioning failures (no capacity, bad
+// credentials, price too low...) so a broken config does not hammer the provider API.
+type provisionBackoff struct {
+	failures int
+	until    time.Time
 }
 
 // New constructs an Autoscaler. All dependencies are required.
@@ -62,8 +84,11 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		inspector: inspector,
 		rdb:       rdb,
 		cfg:       cfg,
+		leader:    newLeaderLock(rdb, 3*baseTick),
 		provCache: make(map[string]cachedProvider),
 		lastEval:  make(map[string]time.Time),
+		backoff:   make(map[string]*provisionBackoff),
+		lastSeen:  make(map[string]time.Time),
 		stopCh:    make(chan struct{}),
 		doneCh:    make(chan struct{}),
 	}
@@ -74,14 +99,19 @@ func (a *Autoscaler) Start() {
 	go a.run()
 }
 
-// Stop signals the loop to stop and waits for it to finish.
+// Stop signals the loop to stop and waits for it to finish. Safe to call more than once.
 func (a *Autoscaler) Stop() {
-	close(a.stopCh)
+	a.stopOnce.Do(func() { close(a.stopCh) })
 	<-a.doneCh
 }
 
 func (a *Autoscaler) run() {
 	defer close(a.doneCh)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		a.leader.release(ctx)
+	}()
 	ticker := time.NewTicker(baseTick)
 	defer ticker.Stop()
 	for {
@@ -95,15 +125,29 @@ func (a *Autoscaler) run() {
 }
 
 // tick evaluates every autoscale-enabled parent queue whose poll interval has elapsed.
+// Only the server holding the leader lock acts, so several servers sharing one Redis
+// never provision twice.
 func (a *Autoscaler) tick() {
-	ctx, cancel := context.WithTimeout(context.Background(), baseTick)
-	defer cancel()
+	lctx, lcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	isLeader := a.leader.acquire(lctx)
+	lcancel()
+	if !isLeader {
+		return
+	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), baseTick)
 	parents, err := a.queues.ListParentQueues(ctx)
 	if err != nil {
+		cancel()
 		log.Printf("[AUTOSCALE] failed to list queues: %v", err)
 		return
 	}
+	type due struct {
+		parent          string
+		queue           *queueworker.Queue
+		window, elapsed time.Duration
+	}
+	var todo []due
 	now := time.Now()
 	for _, parent := range parents {
 		queue, err := a.queues.GetQueue(ctx, parent)
@@ -115,15 +159,27 @@ func (a *Autoscaler) tick() {
 			continue
 		}
 		interval := asc.PollIntervalOrDefault()
-		if last, ok := a.lastEval[parent]; ok && now.Sub(last) < interval {
-			continue
-		}
 		elapsed := interval
 		if last, ok := a.lastEval[parent]; ok {
+			if now.Sub(last) < interval {
+				continue
+			}
 			elapsed = now.Sub(last)
 		}
 		a.lastEval[parent] = now
-		a.evaluateQueue(ctx, parent, queue, asc, interval, elapsed)
+		todo = append(todo, due{parent, queue, interval, elapsed})
+	}
+	cancel()
+
+	for _, d := range todo {
+		select {
+		case <-a.stopCh:
+			return
+		default:
+		}
+		qctx, qcancel := context.WithTimeout(context.Background(), queueEvalTimeout)
+		a.evaluateQueue(qctx, d.parent, d.queue, d.queue.Deployment.Autoscale, d.window, d.elapsed)
+		qcancel()
 	}
 }
 
@@ -150,140 +206,183 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 	}
 
 	// Read worker heartbeats once per evaluation: used for correlation, live counting,
-	// and boot-phase detection. Reconcile correlation + protection, then load managed state.
+	// boot-phase detection and per-instance activity.
 	workers := a.listWorkers(ctx)
 	a.reconcileWorkers(ctx, workers)
+	byInstance := make(map[string]*workerHeartbeat)
+	for i := range workers {
+		if id := workers[i].instanceID; id != "" {
+			byInstance[id] = &workers[i]
+		}
+	}
 
 	managed, err := a.instances.ListByQueue(ctx, parent)
 	if err != nil {
 		log.Printf("[AUTOSCALE] queue %q: list instances failed: %v", parent, err)
 		return
 	}
-	a.reconcileInstanceStates(ctx, prov, managed)
+	now := time.Now()
+	live := a.reconcileInstances(ctx, prov, parent, managed, byInstance, asc.BootTimeoutOrDefault(), now)
 
+	stats := a.queueStats(ctx, parent)
+	a.accrueCost(ctx, live, elapsed)
+
+	snap := queueSnapshot{
+		now:          now,
+		window:       window,
+		pending:      stats.pending,
+		active:       stats.active,
+		latency:      stats.latency,
+		totalWorkers: countLiveWorkers(workers, parent),
+	}
+	for _, inst := range live {
+		snap.instances = append(snap.instances, a.viewInstance(ctx, inst, byInstance[inst.InstanceID], stats.active, now))
+	}
+
+	plan := decide(asc, snap)
+
+	if plan.provision > 0 {
+		log.Printf("[AUTOSCALE] queue %q: scale-up %d -> %d (pending=%d active=%d latency=%s workers=%d)",
+			parent, len(live), plan.desired, stats.pending, stats.active, stats.latency.Round(time.Second), snap.totalWorkers)
+		a.provisionN(ctx, parent, asc, prov, rec.Name, plan.provision, window, now)
+		return
+	}
+	for _, inst := range plan.destroy {
+		log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s", parent, inst.InstanceID)
+		a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+	}
+}
+
+// viewInstance builds the decision view of a live instance from its row and its worker's
+// heartbeat, and persists the activity clock.
+func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *workerHeartbeat, queueActive int, now time.Time) instanceView {
+	fresh := hb != nil && now.Unix()-hb.lastBeat <= workerStaleThreshold
+	ready := fresh && hb.status != workerStatusBootstrapping
+	iv := instanceView{
+		inst:         inst,
+		booting:      !ready && (inst.Status == StatusProvisioning || inst.WorkerID == "" || (fresh && hb.status == workerStatusBootstrapping)),
+		lastActivity: activityTime(inst),
+	}
+	switch {
+	case fresh && hb.active >= 0:
+		// Worker reports its own activity: idleness is measured per instance.
+		iv.busy = hb.active > 0
+		if hb.lastTaskAt > 0 {
+			if t := time.Unix(hb.lastTaskAt, 0); t.After(iv.lastActivity) {
+				iv.lastActivity = t
+				_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, t)
+			}
+		}
+	case ready:
+		// Older worker without activity fields: fall back to queue-level activity.
+		iv.busy = queueActive > 0
+	}
+	if iv.busy {
+		iv.lastActivity = now
+		_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, now)
+	}
+	return iv
+}
+
+// reconcileInstances syncs live instance rows with the provider and with worker
+// heartbeats, tearing down instances that are dead or stuck so they stop billing, and
+// returns the instances still live.
+//   - Provider reports failed/terminated: destroy (idempotent; frees e.g. Vast storage).
+//   - No ready worker within boot_timeout of creation: destroy (bad image, crash loop...).
+//   - Correlated worker silent for workerLostTimeout: destroy (machine died or hung).
+func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provider, parent string, managed []*Instance, byInstance map[string]*workerHeartbeat, bootTimeout time.Duration, now time.Time) []*Instance {
 	live := make([]*Instance, 0, len(managed))
 	for _, inst := range managed {
-		if inst.IsLive() {
-			live = append(live, inst)
+		if !inst.IsLive() {
+			continue
 		}
-	}
-	liveCount := len(live)
 
-	pending, active := a.queueDepth(ctx, parent)
-	totalWorkers := countLiveWorkers(workers, parent)
-
-	// Cost accumulation + idle activity tracking.
-	a.accrueCost(ctx, live, elapsed)
-	if active > 0 {
-		now := time.Now()
-		for _, inst := range live {
-			_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, now)
-		}
-	}
-
-	// ---- Scale-up evaluation ----
-	desired := asc.MinWorkers
-	for i := range asc.ScaleUp {
-		t := &asc.ScaleUp[i]
-		switch t.Trigger {
-		case queueworker.TriggerNoWorkers:
-			if pending > 0 && totalWorkers == 0 {
-				desired = maxInt(desired, 1)
-			}
-		case queueworker.TriggerQueueDepth:
-			if pending > t.Threshold {
-				desired = maxInt(desired, liveCount+1)
-			}
-		case queueworker.TriggerSchedule:
-			if a.cronFired(t.Cron, window) {
-				desired = maxInt(desired, t.Workers)
-			}
-		}
-	}
-	if desired > asc.MaxWorkers {
-		desired = asc.MaxWorkers
-	}
-
-	if desired > liveCount {
-		toAdd := desired - liveCount
-		log.Printf("[AUTOSCALE] queue %q: scale-up %d -> %d (pending=%d active=%d workers=%d)", parent, liveCount, desired, pending, active, totalWorkers)
-		for i := 0; i < toAdd; i++ {
-			a.provision(ctx, parent, queue, asc, prov, rec.Name)
-		}
-		return // don't scale down in the same tick
-	}
-
-	// ---- Scale-down evaluation ----
-	floor := asc.MinWorkers
-	forceToFloor := false
-	var idleTimeout time.Duration
-	hasIdle := false
-	for i := range asc.ScaleDown {
-		t := &asc.ScaleDown[i]
-		switch t.Trigger {
-		case queueworker.TriggerSchedule:
-			if a.cronFired(t.Cron, window) {
-				forceToFloor = true
-			}
-		case queueworker.TriggerIdle:
-			if d, err := time.ParseDuration(t.Timeout); err == nil {
-				idleTimeout = d
-				hasIdle = true
-			}
-		}
-	}
-
-	// Removable = live, unprotected, oldest activity first.
-	removable := make([]*Instance, 0, len(live))
-	for _, inst := range live {
-		if !inst.Protected {
-			removable = append(removable, inst)
-		}
-	}
-	sort.Slice(removable, func(i, j int) bool {
-		return activityTime(removable[i]).Before(activityTime(removable[j]))
-	})
-
-	maxRemovable := liveCount - floor
-	if maxRemovable < 0 {
-		maxRemovable = 0
-	}
-
-	var toRemove []*Instance
-	switch {
-	case forceToFloor:
-		if maxRemovable > len(removable) {
-			maxRemovable = len(removable)
-		}
-		toRemove = removable[:maxRemovable]
-	case hasIdle:
-		booting := bootstrappingInstances(workers)
-		now := time.Now()
-		for _, inst := range removable {
-			if len(toRemove) >= maxRemovable {
-				break
-			}
-			// Never idle-kill an instance that is still coming up: provider-side
-			// provisioning, or a correlated worker still bootstrapping (cloning code,
-			// installing deps, loading models). Idleness only counts once ready.
-			if inst.Status == StatusProvisioning || booting[inst.InstanceID] {
+		if st, err := prov.Status(ctx, providerInstanceID(inst)); err == nil {
+			switch st.Status {
+			case provider.StatusRunning:
+				if inst.Status == StatusProvisioning {
+					_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusRunning)
+					inst.Status = StatusRunning
+				}
+			case provider.StatusFailed, provider.StatusTerminated:
+				final := StatusTerminated
+				if inst.Status == StatusProvisioning {
+					final = StatusFailed
+				}
+				log.Printf("[AUTOSCALE] queue %q: instance %s reported %s by provider — tearing down", parent, inst.InstanceID, st.Status)
+				a.teardown(ctx, prov, inst, final, "provider reported "+st.Status+messageSuffix(st.Message))
 				continue
 			}
-			if now.Sub(activityTime(inst)) >= idleTimeout {
-				toRemove = append(toRemove, inst)
+		}
+
+		hb := byInstance[inst.InstanceID]
+		fresh := hb != nil && now.Unix()-hb.lastBeat <= workerStaleThreshold
+		if fresh {
+			a.lastSeen[inst.InstanceID] = now
+		}
+
+		stillBooting := inst.WorkerID == "" || (fresh && hb.status == workerStatusBootstrapping)
+		if stillBooting && now.Sub(inst.CreatedAt) > bootTimeout {
+			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
+			a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout))
+			continue
+		}
+
+		if inst.WorkerID != "" && !fresh {
+			seen, ok := a.lastSeen[inst.InstanceID]
+			if !ok {
+				// First time this server looks at it (e.g. after a restart): start the clock.
+				a.lastSeen[inst.InstanceID] = now
+			} else if now.Sub(seen) > workerLostTimeout {
+				if inst.Protected {
+					log.Printf("[AUTOSCALE] queue %q: worker of protected instance %s silent for %s — NOT destroying (protected)", parent, inst.InstanceID, now.Sub(seen).Round(time.Second))
+				} else {
+					log.Printf("[AUTOSCALE] queue %q: worker of instance %s silent for %s — tearing down", parent, inst.InstanceID, now.Sub(seen).Round(time.Second))
+					a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("worker heartbeat lost for more than %s", workerLostTimeout))
+					continue
+				}
 			}
 		}
-	}
 
-	for _, inst := range toRemove {
-		log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s (protected=%v)", parent, inst.InstanceID, inst.Protected)
-		a.destroy(ctx, prov, inst)
+		live = append(live, inst)
+	}
+	return live
+}
+
+// provisionN creates up to n instances, stopping at the first failure and backing off
+// exponentially (poll interval × 2^failures, capped) before the next attempt.
+func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string, n int, pollInterval time.Duration, now time.Time) {
+	if b := a.backoff[parent]; b != nil && now.Before(b.until) {
+		log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d failure(s)", parent, b.until.Format(time.RFC3339), b.failures)
+		return
+	}
+	if err := a.checkWorkerEnv(prov.Name()); err != nil {
+		log.Printf("[AUTOSCALE] queue %q: cannot provision: %v", parent, err)
+		return
+	}
+	for i := 0; i < n; i++ {
+		if err := a.provision(ctx, parent, asc, prov, providerName); err != nil {
+			b := a.backoff[parent]
+			if b == nil {
+				b = &provisionBackoff{}
+				a.backoff[parent] = b
+			}
+			b.failures++
+			delay := pollInterval << uint(minInt(b.failures-1, 10))
+			if delay > maxProvisionBackoff || delay <= 0 {
+				delay = maxProvisionBackoff
+			}
+			b.until = now.Add(delay)
+			log.Printf("[AUTOSCALE] queue %q: provision failed (%d in a row), next attempt in %s: %v", parent, b.failures, delay, err)
+			return
+		}
+		delete(a.backoff, parent)
 	}
 }
 
 // provision creates one instance: generate a correlation id, inject env, call the provider,
 // and record the instance row.
-func (a *Autoscaler) provision(ctx context.Context, parent string, queue *queueworker.Queue, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string) {
+func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string) error {
 	correlationID := "as-" + uuid.NewString()
 
 	spec := provider.InstanceSpec{Queue: parent, Env: a.workerEnv(parent, correlationID)}
@@ -296,13 +395,12 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, queue *queuew
 
 	providerID, err := prov.Provision(ctx, spec)
 	if err != nil {
-		log.Printf("[AUTOSCALE] queue %q: provision failed: %v", parent, err)
 		// Record the failure so it is visible in status.
 		_ = a.instances.Create(ctx, &Instance{
 			InstanceID: correlationID, Provider: providerName, Queue: parent, Status: StatusFailed,
 			Metadata: mustJSON(map[string]string{"error": err.Error()}),
 		})
-		return
+		return err
 	}
 
 	var price float64
@@ -319,42 +417,29 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, queue *queuew
 		Metadata:     meta,
 	}
 	if err := a.instances.Create(ctx, inst); err != nil {
-		log.Printf("[AUTOSCALE] queue %q: failed to record instance %s: %v", parent, correlationID, err)
+		// The machine exists but we can't track it: destroy it rather than leak it.
+		log.Printf("[AUTOSCALE] queue %q: failed to record instance %s, destroying it: %v", parent, correlationID, err)
+		if derr := prov.Destroy(ctx, providerID); derr != nil {
+			log.Printf("[AUTOSCALE] queue %q: destroy of untracked instance %s (provider id %s) failed: %v", parent, correlationID, providerID, derr)
+		}
+		return err
 	}
+	return nil
 }
 
-// destroy drains then destroys an instance.
-func (a *Autoscaler) destroy(ctx context.Context, prov provider.Provider, inst *Instance) {
+// teardown destroys an instance at the provider and records its final status and reason.
+// On a provider error the previous status is restored so the next evaluation retries.
+func (a *Autoscaler) teardown(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string) {
+	prev := inst.Status
 	_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusDraining)
 	providerID := providerInstanceID(inst)
 	if err := prov.Destroy(ctx, providerID); err != nil {
 		log.Printf("[AUTOSCALE] destroy %s (provider id %s) failed: %v", inst.InstanceID, providerID, err)
-		_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusRunning) // revert; retry next tick
+		_ = a.instances.UpdateStatus(ctx, inst.InstanceID, prev) // retry next evaluation
 		return
 	}
-	_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusTerminated)
-}
-
-// reconcileInstanceStates polls the provider for provisioning instances and promotes them
-// to running (real providers boot asynchronously; mock is immediate).
-func (a *Autoscaler) reconcileInstanceStates(ctx context.Context, prov provider.Provider, managed []*Instance) {
-	for _, inst := range managed {
-		if inst.Status != StatusProvisioning {
-			continue
-		}
-		st, err := prov.Status(ctx, providerInstanceID(inst))
-		if err != nil {
-			continue
-		}
-		switch st.Status {
-		case provider.StatusRunning:
-			_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusRunning)
-			inst.Status = StatusRunning
-		case provider.StatusFailed, provider.StatusTerminated:
-			_ = a.instances.UpdateStatus(ctx, inst.InstanceID, StatusFailed)
-			inst.Status = StatusFailed
-		}
-	}
+	_ = a.instances.UpdateStatusWithReason(ctx, inst, finalStatus, reason)
+	delete(a.lastSeen, inst.InstanceID)
 }
 
 // reconcileWorkers matches registered workers (by RUNQY_INSTANCE_ID echoed in their
@@ -403,28 +488,39 @@ func (a *Autoscaler) accrueCost(ctx context.Context, live []*Instance, elapsed t
 	}
 }
 
-// queueDepth sums pending and active across all sub-queues of a parent queue.
-func (a *Autoscaler) queueDepth(ctx context.Context, parent string) (pending, active int) {
+// queueStatsResult aggregates a parent queue's sub-queues.
+type queueStatsResult struct {
+	pending, active int
+	latency         time.Duration // oldest pending job across sub-queues
+}
+
+// queueStats sums pending/active and takes the max latency across all sub-queues of a
+// parent queue.
+func (a *Autoscaler) queueStats(ctx context.Context, parent string) queueStatsResult {
+	var out queueStatsResult
+	add := func(name string) {
+		info, err := a.inspector.GetQueueInfo(name)
+		if err != nil {
+			return
+		}
+		out.pending += info.Pending
+		out.active += info.Active
+		if info.Latency > out.latency {
+			out.latency = info.Latency
+		}
+	}
 	q, err := a.queues.GetQueueWithSubQueues(ctx, parent)
 	if err != nil || q == nil {
-		return 0, 0
+		return out
 	}
-	subs := q.SubQueues
-	if len(subs) == 0 {
-		// Fall back to the default sub-queue name.
-		if info, err := a.inspector.GetQueueInfo(queueworker.NormalizeQueueName(parent)); err == nil {
-			return info.Pending, info.Active
-		}
-		return 0, 0
+	if len(q.SubQueues) == 0 {
+		add(queueworker.NormalizeQueueName(parent))
+		return out
 	}
-	for _, sq := range subs {
-		full := queueworker.BuildFullQueueName(parent, sq.Name)
-		if info, err := a.inspector.GetQueueInfo(full); err == nil {
-			pending += info.Pending
-			active += info.Active
-		}
+	for _, sq := range q.SubQueues {
+		add(queueworker.BuildFullQueueName(parent, sq.Name))
 	}
-	return pending, active
+	return out
 }
 
 // workerHeartbeat is the subset of worker hash fields the autoscaler needs.
@@ -435,6 +531,8 @@ type workerHeartbeat struct {
 	status     string
 	protected  bool
 	lastBeat   int64
+	active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
+	lastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
 }
 
 // listWorkers reads all worker heartbeats from Redis.
@@ -459,19 +557,31 @@ func (a *Autoscaler) listWorkers(ctx context.Context) []workerHeartbeat {
 		if err != nil || len(data) == 0 {
 			continue
 		}
-		hb := workerHeartbeat{
-			workerID:   strings.TrimPrefix(key, "asynq:workers:"),
-			queues:     data["queues"],
-			instanceID: data["instance_id"],
-			status:     data["status"],
-			protected:  strings.EqualFold(data["protected"], "true"),
-		}
-		if lb, err := strconv.ParseInt(data["last_beat"], 10, 64); err == nil {
-			hb.lastBeat = lb
-		}
-		out = append(out, hb)
+		out = append(out, parseWorkerHeartbeat(strings.TrimPrefix(key, "asynq:workers:"), data))
 	}
 	return out
+}
+
+// parseWorkerHeartbeat decodes a worker hash (asynq:workers:<id>).
+func parseWorkerHeartbeat(workerID string, data map[string]string) workerHeartbeat {
+	hb := workerHeartbeat{
+		workerID:   workerID,
+		queues:     data["queues"],
+		instanceID: data["instance_id"],
+		status:     data["status"],
+		protected:  strings.EqualFold(data["protected"], "true"),
+		active:     -1,
+	}
+	if lb, err := strconv.ParseInt(data["last_beat"], 10, 64); err == nil {
+		hb.lastBeat = lb
+	}
+	if n, err := strconv.Atoi(data["active"]); err == nil {
+		hb.active = n
+	}
+	if t, err := strconv.ParseInt(data["last_task_at"], 10, 64); err == nil {
+		hb.lastTaskAt = t
+	}
+	return hb
 }
 
 // countLiveWorkers counts non-stale workers (managed or manual) serving the parent queue.
@@ -489,19 +599,6 @@ func countLiveWorkers(workers []workerHeartbeat, parent string) int {
 	return count
 }
 
-// bootstrappingInstances returns the instance ids whose correlated worker is still
-// bootstrapping (with a fresh heartbeat): those instances must not be idle-killed.
-func bootstrappingInstances(workers []workerHeartbeat) map[string]bool {
-	staleCutoff := time.Now().Unix() - workerStaleThreshold
-	out := make(map[string]bool)
-	for _, w := range workers {
-		if w.instanceID != "" && w.status == workerStatusBootstrapping && w.lastBeat >= staleCutoff {
-			out[w.instanceID] = true
-		}
-	}
-	return out
-}
-
 // getProvider returns a cached provider for a config record, rebuilding when the record changed.
 func (a *Autoscaler) getProvider(rec *provider.Record) (provider.Provider, error) {
 	a.provCacheMu.Lock()
@@ -517,15 +614,21 @@ func (a *Autoscaler) getProvider(rec *provider.Record) (provider.Provider, error
 	return p, nil
 }
 
-// cronFired reports whether the cron expression activated within the trailing window.
-func (a *Autoscaler) cronFired(expr string, window time.Duration) bool {
-	sched, err := queueworker.ParseCron(expr)
-	if err != nil {
-		return false
+// checkWorkerEnv verifies a remote machine could actually join this server. Real
+// providers boot on third-party hosts, so they need a reachable public URL and a
+// worker-scoped API key: the admin key must never be shipped to a rented machine.
+// The mock provider boots nothing and is exempt.
+func (a *Autoscaler) checkWorkerEnv(providerType string) error {
+	if providerType == "mock" {
+		return nil
 	}
-	now := time.Now()
-	next := sched.Next(now.Add(-window))
-	return !next.After(now)
+	if os.Getenv("RUNQY_PUBLIC_URL") == "" {
+		return fmt.Errorf("RUNQY_PUBLIC_URL is not set: remote workers could not reach this server")
+	}
+	if a.cfg.WorkerAPIKey == "" {
+		return fmt.Errorf("RUNQY_WORKER_API_KEY is not set: refusing to send the admin API key to a remote machine")
+	}
+	return nil
 }
 
 // workerEnv builds the env injected into a booting worker so it auto-registers and correlates.
@@ -536,7 +639,7 @@ func (a *Autoscaler) workerEnv(parent, correlationID string) map[string]string {
 	}
 	apiKey := a.cfg.WorkerAPIKey
 	if apiKey == "" {
-		apiKey = a.cfg.APIKey
+		apiKey = a.cfg.APIKey // mock provider only (see checkWorkerEnv)
 	}
 	return map[string]string{
 		"RUNQY_SERVER_URL":  serverURL,
@@ -555,6 +658,13 @@ func activityTime(inst *Instance) time.Time {
 	return inst.CreatedAt
 }
 
+func messageSuffix(msg string) string {
+	if msg == "" {
+		return ""
+	}
+	return ": " + msg
+}
+
 func providerInstanceID(inst *Instance) string {
 	if id := providerIDFromMeta(inst.Metadata); id != "" {
 		return id
@@ -566,11 +676,12 @@ func providerIDFromMeta(meta []byte) string {
 	if len(meta) == 0 {
 		return ""
 	}
-	var m map[string]string
+	var m map[string]interface{}
 	if err := json.Unmarshal(meta, &m); err != nil {
 		return ""
 	}
-	return m["provider_instance_id"]
+	id, _ := m["provider_instance_id"].(string)
+	return id
 }
 
 func mustJSON(v interface{}) []byte {
@@ -583,6 +694,13 @@ func mustJSON(v interface{}) []byte {
 
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minInt(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b

@@ -9,15 +9,19 @@ import (
 
 // Scale trigger type identifiers.
 const (
-	TriggerNoWorkers = "no_workers"  // jobs pending but zero live workers
+	TriggerNoWorkers  = "no_workers"  // jobs pending but zero live workers
 	TriggerQueueDepth = "queue_depth" // pending jobs exceed a threshold
 	TriggerSchedule   = "schedule"    // cron-based pre-warm / forced shutdown
 	TriggerIdle       = "idle"        // worker idle for longer than a timeout
+	TriggerLatency    = "latency"     // oldest pending job older than max_latency
 
 	// Phase 2 (parsed but not yet acted on by the autoscaler).
-	TriggerLatency     = "latency"
-	TriggerCostBudget  = "cost_budget"
+	TriggerCostBudget = "cost_budget"
 )
+
+// DefaultBootTimeout is how long an instance may take to boot and register a ready
+// worker before the autoscaler gives up on it and destroys it.
+const DefaultBootTimeout = 20 * time.Minute
 
 // AutoscaleConfig is the per-queue autoscaling configuration. It is carried inside the
 // queue's DeploymentConfig (persisted in the deployment JSON column) so it round-trips
@@ -29,6 +33,7 @@ type AutoscaleConfig struct {
 	MinWorkers   int            `yaml:"min_workers" json:"min_workers"`
 	MaxWorkers   int            `yaml:"max_workers" json:"max_workers"`
 	PollInterval string         `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"` // Go duration, default 30s
+	BootTimeout  string         `yaml:"boot_timeout,omitempty" json:"boot_timeout,omitempty"`   // Go duration, default 20m
 	ScaleUp      []ScaleTrigger `yaml:"scale_up,omitempty" json:"scale_up,omitempty"`
 	ScaleDown    []ScaleTrigger `yaml:"scale_down,omitempty" json:"scale_down,omitempty"`
 	Instance     *InstanceSpec  `yaml:"instance,omitempty" json:"instance,omitempty"`
@@ -37,11 +42,13 @@ type AutoscaleConfig struct {
 // ScaleTrigger is one scale-up or scale-down rule. The Trigger field selects the type;
 // the remaining fields are interpreted per type (see Validate).
 type ScaleTrigger struct {
-	Trigger   string `yaml:"trigger" json:"trigger"`
-	Threshold int    `yaml:"threshold,omitempty" json:"threshold,omitempty"` // queue_depth
-	Cron      string `yaml:"cron,omitempty" json:"cron,omitempty"`           // schedule
-	Workers   int    `yaml:"workers,omitempty" json:"workers,omitempty"`     // schedule (target count)
-	Timeout   string `yaml:"timeout,omitempty" json:"timeout,omitempty"`     // idle (Go duration)
+	Trigger    string `yaml:"trigger" json:"trigger"`
+	Threshold  int    `yaml:"threshold,omitempty" json:"threshold,omitempty"`     // queue_depth
+	Cron       string `yaml:"cron,omitempty" json:"cron,omitempty"`               // schedule
+	Workers    int    `yaml:"workers,omitempty" json:"workers,omitempty"`         // schedule (target count)
+	Duration   string `yaml:"duration,omitempty" json:"duration,omitempty"`       // schedule scale_up: hold the target this long (Go duration)
+	Timeout    string `yaml:"timeout,omitempty" json:"timeout,omitempty"`         // idle (Go duration)
+	MaxLatency string `yaml:"max_latency,omitempty" json:"max_latency,omitempty"` // latency (Go duration)
 }
 
 // InstanceSpec describes the GPU instance the provider should provision for this queue.
@@ -64,6 +71,19 @@ func (a *AutoscaleConfig) PollIntervalOrDefault() time.Duration {
 	d, err := time.ParseDuration(a.PollInterval)
 	if err != nil || d <= 0 {
 		return def
+	}
+	return d
+}
+
+// BootTimeoutOrDefault returns the configured boot timeout, or DefaultBootTimeout when
+// unset/invalid.
+func (a *AutoscaleConfig) BootTimeoutOrDefault() time.Duration {
+	if a == nil || a.BootTimeout == "" {
+		return DefaultBootTimeout
+	}
+	d, err := time.ParseDuration(a.BootTimeout)
+	if err != nil || d <= 0 {
+		return DefaultBootTimeout
 	}
 	return d
 }
@@ -92,6 +112,11 @@ func (a *AutoscaleConfig) Validate() error {
 	if a.PollInterval != "" {
 		if _, err := time.ParseDuration(a.PollInterval); err != nil {
 			return fmt.Errorf("autoscale.poll_interval %q is not a valid duration: %w", a.PollInterval, err)
+		}
+	}
+	if a.BootTimeout != "" {
+		if d, err := time.ParseDuration(a.BootTimeout); err != nil || d <= 0 {
+			return fmt.Errorf("autoscale.boot_timeout %q must be a positive duration", a.BootTimeout)
 		}
 	}
 	for i := range a.ScaleUp {
@@ -142,7 +167,22 @@ func (t *ScaleTrigger) validate(scaleUp bool) error {
 		if scaleUp && t.Workers <= 0 {
 			return fmt.Errorf("scale_up trigger %q requires a positive workers count", t.Trigger)
 		}
-	case TriggerLatency, TriggerCostBudget:
+		if t.Duration != "" {
+			if !scaleUp {
+				return fmt.Errorf("duration is only valid on a scale_up schedule")
+			}
+			if d, err := time.ParseDuration(t.Duration); err != nil || d <= 0 {
+				return fmt.Errorf("trigger %q has invalid duration %q", t.Trigger, t.Duration)
+			}
+		}
+	case TriggerLatency:
+		if !scaleUp {
+			return fmt.Errorf("trigger %q is only valid for scale_up", t.Trigger)
+		}
+		if d, err := time.ParseDuration(t.MaxLatency); err != nil || d <= 0 {
+			return fmt.Errorf("trigger %q requires a positive max_latency duration (got %q)", t.Trigger, t.MaxLatency)
+		}
+	case TriggerCostBudget:
 		// Phase 2: accepted in config but not yet enforced. Do not fail validation.
 	default:
 		return fmt.Errorf("unknown trigger type %q", t.Trigger)

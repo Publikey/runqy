@@ -152,6 +152,27 @@ func (s *Store) UpdateStatus(ctx context.Context, instanceID, status string) err
 	return s.exec(ctx, query, status, time.Now(), instanceID)
 }
 
+// UpdateStatusWithReason sets the status of an instance and records why in its metadata
+// ("reason"), e.g. why it was torn down. Other metadata keys are kept.
+func (s *Store) UpdateStatusWithReason(ctx context.Context, inst *Instance, status, reason string) error {
+	meta := inst.MetadataMap()
+	if meta == nil {
+		meta = map[string]interface{}{}
+	}
+	meta["reason"] = reason
+	b, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to encode metadata: %w", err)
+	}
+	query := s.db.Rebind(`UPDATE autoscale_instances SET status = ?, metadata = ?, updated_at = ? WHERE instance_id = ?`)
+	if err := s.exec(ctx, query, status, b, time.Now(), inst.InstanceID); err != nil {
+		return err
+	}
+	inst.Status = status
+	inst.Metadata = b
+	return nil
+}
+
 // SetWorkerID associates a registered worker with an instance (correlation).
 func (s *Store) SetWorkerID(ctx context.Context, instanceID, workerID string) error {
 	query := s.db.Rebind(`UPDATE autoscale_instances SET worker_id = ?, updated_at = ? WHERE instance_id = ?`)

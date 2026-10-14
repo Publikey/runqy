@@ -72,6 +72,7 @@
 	let autoscaleMinWorkers = $state(0);
 	let autoscaleMaxWorkers = $state(1);
 	let autoscalePollInterval = $state('30s');
+	let autoscaleBootTimeout = $state('');
 	let scaleUp = $state<ScaleTrigger[]>([]);
 	let scaleDown = $state<ScaleTrigger[]>([]);
 	let instanceGpu = $state('');
@@ -81,8 +82,8 @@
 	let availableProviders = $state<AutoscaleProvider[]>([]);
 	let loadingProviders = $state(false);
 
-	const scaleUpTypes: ScaleTriggerType[] = ['no_workers', 'queue_depth', 'schedule'];
-	const scaleDownTypes: ScaleTriggerType[] = ['idle', 'queue_depth', 'schedule'];
+	const scaleUpTypes: ScaleTriggerType[] = ['no_workers', 'queue_depth', 'latency', 'schedule'];
+	const scaleDownTypes: ScaleTriggerType[] = ['idle', 'schedule'];
 
 	async function loadProviders() {
 		loadingProviders = true;
@@ -280,6 +281,10 @@
 					error = 'queue_depth scale-up triggers require a threshold';
 					return;
 				}
+				if (t.trigger === 'latency' && !t.max_latency?.trim()) {
+					error = 'latency scale-up triggers require a max latency (e.g. 5m)';
+					return;
+				}
 				if (t.trigger === 'schedule') {
 					if (!t.cron?.trim()) {
 						error = 'schedule scale-up triggers require a cron expression';
@@ -292,10 +297,6 @@
 				}
 			}
 			for (const t of scaleDown) {
-				if (t.trigger === 'queue_depth' && (t.threshold === undefined || t.threshold === null)) {
-					error = 'queue_depth scale-down triggers require a threshold';
-					return;
-				}
 				if (t.trigger === 'schedule' && !t.cron?.trim()) {
 					error = 'schedule scale-down triggers require a cron expression';
 					return;
@@ -309,9 +310,11 @@
 			const cleanTrigger = (t: ScaleTrigger): ScaleTrigger => {
 				const out: ScaleTrigger = { trigger: t.trigger };
 				if (t.trigger === 'queue_depth') out.threshold = t.threshold;
+				if (t.trigger === 'latency') out.max_latency = t.max_latency?.trim();
 				if (t.trigger === 'schedule') {
 					out.cron = t.cron?.trim();
 					if (t.workers !== undefined && t.workers !== null) out.workers = t.workers;
+					if (t.duration?.trim()) out.duration = t.duration.trim();
 				}
 				if (t.trigger === 'idle') out.timeout = t.timeout?.trim();
 				return out;
@@ -323,6 +326,7 @@
 				min_workers: autoscaleMinWorkers,
 				max_workers: autoscaleMaxWorkers,
 				poll_interval: autoscalePollInterval.trim() || '30s',
+				boot_timeout: autoscaleBootTimeout.trim() || undefined,
 				scale_up: scaleUp.map(cleanTrigger),
 				scale_down: scaleDown.map(cleanTrigger),
 				instance: {
@@ -390,6 +394,7 @@
 		autoscaleMinWorkers = 0;
 		autoscaleMaxWorkers = 1;
 		autoscalePollInterval = '30s';
+		autoscaleBootTimeout = '';
 		scaleUp = [];
 		scaleDown = [];
 		instanceGpu = '';
@@ -439,6 +444,7 @@
 						autoscaleMinWorkers = as.min_workers ?? 0;
 						autoscaleMaxWorkers = as.max_workers ?? 1;
 						autoscalePollInterval = as.poll_interval || '30s';
+						autoscaleBootTimeout = as.boot_timeout || '';
 						scaleUp = (as.scale_up || []).map((t) => ({ ...t }));
 						scaleDown = (as.scale_down || []).map((t) => ({ ...t }));
 						instanceGpu = as.instance?.gpu || '';
@@ -676,7 +682,7 @@
 										{/if}
 									</label>
 
-									<div class="grid grid-cols-3 gap-4">
+									<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
 										<label class="label">
 											<span class="label-text">Min Workers</span>
 											<input type="number" bind:value={autoscaleMinWorkers} min="0" class="input" disabled={loading} />
@@ -688,6 +694,10 @@
 										<label class="label">
 											<span class="label-text">Poll Interval</span>
 											<input type="text" bind:value={autoscalePollInterval} placeholder="30s" class="input" disabled={loading} />
+										</label>
+										<label class="label">
+											<span class="label-text">Boot Timeout</span>
+											<input type="text" bind:value={autoscaleBootTimeout} placeholder="20m" class="input" disabled={loading} />
 										</label>
 									</div>
 
@@ -718,6 +728,11 @@
 																<span class="label-text text-xs">Threshold</span>
 																<input type="number" bind:value={trigger.threshold} min="0" class="input" disabled={loading} />
 															</label>
+														{:else if trigger.trigger === 'latency'}
+															<label class="label w-28">
+																<span class="label-text text-xs">Max Latency</span>
+																<input type="text" bind:value={trigger.max_latency} placeholder="5m" class="input" disabled={loading} />
+															</label>
 														{:else if trigger.trigger === 'schedule'}
 															<label class="label flex-1 min-w-[120px]">
 																<span class="label-text text-xs">Cron</span>
@@ -726,6 +741,10 @@
 															<label class="label w-24">
 																<span class="label-text text-xs">Workers</span>
 																<input type="number" bind:value={trigger.workers} min="0" class="input" disabled={loading} />
+															</label>
+															<label class="label w-24">
+																<span class="label-text text-xs">Hold for</span>
+																<input type="text" bind:value={trigger.duration} placeholder="8h" class="input" disabled={loading} />
 															</label>
 														{/if}
 														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleUp(index)} disabled={loading}>
@@ -761,12 +780,7 @@
 																{/each}
 															</select>
 														</label>
-														{#if trigger.trigger === 'queue_depth'}
-															<label class="label w-28">
-																<span class="label-text text-xs">Threshold</span>
-																<input type="number" bind:value={trigger.threshold} min="0" class="input" disabled={loading} />
-															</label>
-														{:else if trigger.trigger === 'schedule'}
+														{#if trigger.trigger === 'schedule'}
 															<label class="label flex-1 min-w-[120px]">
 																<span class="label-text text-xs">Cron</span>
 																<input type="text" bind:value={trigger.cron} placeholder="0 18 * * *" class="input font-mono text-sm" disabled={loading} />
