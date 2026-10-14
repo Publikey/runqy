@@ -7,7 +7,6 @@ import type {
 	TaskListResponse,
 	TaskState,
 	Worker,
-	WorkerInfo,
 	ServerInfo,
 	RedisInfo,
 	DailyStats,
@@ -207,10 +206,6 @@ export async function runAllArchivedTasks(qname: string): Promise<{ run_count: n
 // Worker API
 export async function getWorkers(): Promise<{ workers: Worker[] }> {
 	return fetchJson(`${BASE_URL}/workers`);
-}
-
-export async function getWorkerInfo(workerId: string): Promise<WorkerInfo> {
-	return fetchJson(`${BASE_URL}/workers/${encodeURIComponent(workerId)}`);
 }
 
 export async function getWorkerLogs(workerId: string, n: number = 200): Promise<{ lines: string[]; count: number }> {

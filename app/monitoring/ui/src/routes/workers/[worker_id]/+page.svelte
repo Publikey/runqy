@@ -10,7 +10,7 @@
 	import { formatRelativeTime } from '$lib/utils/format';
 	import type { Worker, LogLine } from '$lib/api/types';
 
-	let workerId = $derived(decodeURIComponent($page.params.worker_id));
+	let workerId = $derived(decodeURIComponent($page.params.worker_id ?? ''));
 
 	let worker = $derived(
 		$workersStore.workers.find(w => w.worker_id === workerId)
