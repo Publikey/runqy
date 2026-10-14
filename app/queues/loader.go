@@ -167,6 +167,10 @@ func (c *QueueWorkersYAML) Validate() error {
 		if q.Deployment.StartupCmd == "" {
 			return fmt.Errorf("queue '%s': deployment.startup_cmd is required", queueName)
 		}
+		// Workers refuse a deployment without a branch; fail here rather than at worker boot.
+		if q.Deployment.Branch == "" {
+			return fmt.Errorf("queue '%s': deployment.branch is required", queueName)
+		}
 		// Reject malformed task lifecycle limits rather than silently ignoring them.
 		if err := q.Deployment.Limits.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': deployment.%w", queueName, err)

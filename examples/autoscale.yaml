@@ -17,6 +17,7 @@ queues:
     priority: 10
     deployment:
       git_url: "https://github.com/Publikey/test-dummy-task.git"
+      branch: "master"
       startup_cmd: "python dummy-task/main.py"
     autoscale:
       enabled: true
