@@ -30,21 +30,20 @@ type runpodConfig struct {
 	VolumeGB        int      `json:"volume_in_gb"`      // optional persistent volume
 	VolumeMountPath string   `json:"volume_mount_path"` // optional, e.g. "/workspace"
 	BaseURL         string   `json:"base_url"`          // optional override (tests)
-	// MinCUDAVersion restricts hosts to drivers supporting at least this CUDA version
-	// (default "12.8", required by the inference image). "none" disables the filter.
+	// MinCUDAVersion restricts hosts to CUDA versions from this one up to the newest in
+	// RunPod's enum. Off by default: allowedCudaVersions matches exact versions and the
+	// API rejects anything above 13.0, so recent hosts (CUDA 13.1+) would be excluded.
+	// Tested live: with ["12.8","12.9","13.0"] no instance was ever available.
 	MinCUDAVersion string `json:"min_cuda_version,omitempty"`
 }
 
 // runpodCUDAVersions is RunPod's allowedCudaVersions enum, oldest first.
 var runpodCUDAVersions = []string{"11.8", "12.0", "12.1", "12.2", "12.3", "12.4", "12.5", "12.6", "12.7", "12.8", "12.9", "13.0"}
 
-// allowedCUDAVersions returns the enum values >= min ("" -> default 12.8, "none" -> nil).
+// allowedCUDAVersions returns the enum values >= min ("" or "none" -> nil: no filter).
 func allowedCUDAVersions(min string) []string {
-	switch min {
-	case "none":
+	if min == "" || min == "none" {
 		return nil
-	case "":
-		min = defaultMinCUDAVersion
 	}
 	for i, v := range runpodCUDAVersions {
 		if v == min {

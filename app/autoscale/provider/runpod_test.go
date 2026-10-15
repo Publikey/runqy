@@ -85,9 +85,10 @@ func TestRunPodLifecycle(t *testing.T) {
 	if v, ok := createBody["volumeInGb"]; !ok || v != float64(0) {
 		t.Errorf("volumeInGb = %v (sent=%v), want an explicit 0", v, ok)
 	}
-	// Hosts must support the image's CUDA 12.8.
-	if cuda := fmt.Sprint(createBody["allowedCudaVersions"]); cuda != "[12.8 12.9 13.0]" {
-		t.Errorf("allowedCudaVersions = %s, want [12.8 12.9 13.0]", cuda)
+	// No CUDA filter by default: RunPod's exact-version enum stops at 13.0 and would
+	// exclude every recent host.
+	if _, set := createBody["allowedCudaVersions"]; set {
+		t.Errorf("allowedCudaVersions sent by default: %v", createBody["allowedCudaVersions"])
 	}
 
 	// Status (running)
@@ -127,8 +128,8 @@ func TestAllowedCUDAVersions(t *testing.T) {
 	if got := fmt.Sprint(allowedCUDAVersions("12.6")); got != "[12.6 12.7 12.8 12.9 13.0]" {
 		t.Errorf("12.6 -> %s", got)
 	}
-	if allowedCUDAVersions("none") != nil {
-		t.Error("none should disable the filter")
+	if allowedCUDAVersions("none") != nil || allowedCUDAVersions("") != nil {
+		t.Error("unset or none should disable the filter")
 	}
 }
 
