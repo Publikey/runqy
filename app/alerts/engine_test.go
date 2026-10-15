@@ -302,3 +302,48 @@ func TestDigestFooterMentionsRemindersOnlyForFiringAlerts(t *testing.T) {
 		}
 	}
 }
+
+func TestFiringAlertResolvedWhenNoLongerMonitored(t *testing.T) {
+	cases := []struct {
+		name   string
+		change func(col *fakeCollector)
+		reason string
+	}{
+		{"paused", func(c *fakeCollector) { c.queues[0].Paused = true }, "queue paused"},
+		{"muted", func(c *fakeCollector) {
+			c.queues[0].Deployment = &queueworker.DeploymentConfig{Alerts: &queueworker.QueueAlertsConfig{Disabled: true}}
+		}, "alert muted or rule removed"},
+		{"removed", func(c *fakeCollector) { c.queues = nil }, "queue removed or disabled"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, col, st, snd := newTestEngine(baseSettings(queueworker.AlertRule{Type: queueworker.AlertNoWorkers}), health.QueueHealth{Name: "q", Pending: 3})
+			mustEval(t, e, t0)
+			if len(snd.sent) != 1 {
+				t.Fatalf("want the firing email first, got %d", len(snd.sent))
+			}
+			tc.change(col)
+			mustEval(t, e, t0.Add(time.Minute))
+			if len(snd.sent) != 2 || !strings.Contains(snd.sent[1].Subject, "RESOLVED") || !strings.Contains(snd.sent[1].Text, tc.reason) {
+				t.Fatalf("want a RESOLVED email mentioning %q, got %+v", tc.reason, snd.sent)
+			}
+			if len(st.states) != 0 {
+				t.Errorf("state kept after resolve: %v", st.states)
+			}
+			mustEval(t, e, t0.Add(2*time.Minute))
+			if len(snd.sent) != 2 {
+				t.Errorf("resolved twice")
+			}
+		})
+	}
+}
+
+func TestPendingAlertDroppedSilentlyWhenNoLongerMonitored(t *testing.T) {
+	e, col, st, snd := newTestEngine(baseSettings(queueworker.AlertRule{Type: queueworker.AlertNoWorkers, For: "5m"}), health.QueueHealth{Name: "q", Pending: 3})
+	mustEval(t, e, t0) // condition true but not firing yet
+	col.queues[0].Paused = true
+	mustEval(t, e, t0.Add(time.Minute))
+	if len(snd.sent) != 0 || len(st.states) != 0 {
+		t.Fatalf("an alert that never fired must vanish silently: sent=%d states=%v", len(snd.sent), st.states)
+	}
+}

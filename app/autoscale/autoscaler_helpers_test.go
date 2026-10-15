@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Publikey/runqy/autoscale/provider"
+	"github.com/Publikey/runqy/third_party/asynq"
 )
 
 func TestCountLiveWorkers(t *testing.T) {
@@ -66,5 +67,21 @@ func TestDisplayStatus(t *testing.T) {
 		if got := DisplayStatus(in[0], in[1]); got != want {
 			t.Errorf("DisplayStatus(%q, %q) = %q, want %q", in[0], in[1], got, want)
 		}
+	}
+}
+
+func TestAggregateQueueStatsIgnoresPausedPending(t *testing.T) {
+	got := aggregateQueueStats([]*asynq.QueueInfo{
+		{Queue: "inference.high", Pending: 3, Active: 1, Latency: time.Minute},
+		{Queue: "inference.low", Pending: 50, Active: 2, Latency: time.Hour, Paused: true},
+	})
+	if got.pending != 3 || got.latency != time.Minute {
+		t.Errorf("paused sub-queue counted as load: %+v", got)
+	}
+	if got.active != 3 {
+		t.Errorf("active = %d, want 3 (machines busy on a paused sub-queue still count)", got.active)
+	}
+	if all := aggregateQueueStats([]*asynq.QueueInfo{{Pending: 25, Paused: true}}); all.pending != 0 {
+		t.Errorf("fully paused queue: pending = %d, want 0 (no scale-up)", all.pending)
 	}
 }

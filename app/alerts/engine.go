@@ -347,18 +347,46 @@ func planChanges(settings *queueworker.AlertSettings, conds map[string]condition
 			note: &HistoryEntry{Time: now, Queue: st.Queue, Rule: st.Rule, Status: StatusEvent, Message: msg}})
 	}
 
-	// States whose rule no longer applies (queue removed, muted or paused, rule removed):
-	// drop silently. Event throttle entries are kept until their window has passed.
+	// States whose rule is no longer evaluated (queue paused, muted or removed, rule
+	// removed). A firing alert gets a RESOLVED saying why, so the recipient is not left
+	// with an alert that never closes. Event throttle entries are kept until their window
+	// has passed.
+	byName := make(map[string]health.QueueHealth, len(queues))
+	for _, q := range queues {
+		byName[q.Name] = q
+	}
 	for key, old := range prev {
 		if _, ok := conds[key]; ok || handled[key] {
 			continue
 		}
-		if old.Rule == queueworker.AlertAutoscaleFailure && now.Sub(old.LastNotified) < eventThrottle {
+		if old.Rule == queueworker.AlertAutoscaleFailure {
+			if now.Sub(old.LastNotified) >= eventThrottle {
+				out = append(out, change{key: key})
+			}
 			continue
 		}
-		out = append(out, change{key: key})
+		ch := change{key: key}
+		if old.Firing && sendResolved {
+			ch.note = &HistoryEntry{Time: now, Queue: old.Queue, Rule: old.Rule, Status: StatusResolved,
+				Message: fmt.Sprintf("no longer monitored (%s) after %s", unmonitoredReason(byName, old.Queue), roundDuration(now.Sub(old.FiredAt)))}
+			ch.fallback = old // retry the notification next time
+		}
+		out = append(out, ch)
 	}
 	return out
+}
+
+// unmonitoredReason explains why a queue's alert stopped being evaluated.
+func unmonitoredReason(queues map[string]health.QueueHealth, name string) string {
+	q, ok := queues[name]
+	switch {
+	case !ok:
+		return "queue removed or disabled"
+	case q.Paused:
+		return "queue paused"
+	default:
+		return "alert muted or rule removed for this queue"
+	}
 }
 
 func roundDuration(d time.Duration) time.Duration {

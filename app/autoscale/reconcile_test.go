@@ -1,9 +1,12 @@
 package autoscale
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -81,6 +84,7 @@ func newTestAutoscaler(t *testing.T) *Autoscaler {
 		cfg:        &config.Config{HTTPPort: "3000", APIKey: "admin"},
 		backoff:    make(map[string]*provisionBackoff),
 		bootFails:  make(map[string]*provisionBackoff),
+		envWarned:  make(map[string]string),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
 	}
@@ -194,16 +198,16 @@ func TestProvisionBackoff(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now)
+	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now, "")
 	if prov.provisions != 1 {
 		t.Fatalf("provisions = %d, want 1 (stop at first failure)", prov.provisions)
 	}
-	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now.Add(10*time.Second))
+	a.provisionN(ctx, "inference", asc, prov, "p", 3, 30*time.Second, now.Add(10*time.Second), "")
 	if prov.provisions != 1 {
 		t.Fatalf("provisions = %d, want 1 (still backing off)", prov.provisions)
 	}
 	later := now.Add(31 * time.Second)
-	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later)
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later, "")
 	if prov.provisions != 2 || a.backoff["inference"].failures != 2 {
 		t.Fatalf("provisions = %d failures = %d, want 2/2", prov.provisions, a.backoff["inference"].failures)
 	}
@@ -212,7 +216,7 @@ func TestProvisionBackoff(t *testing.T) {
 	}
 
 	prov.provisionErr = nil
-	a.provisionN(ctx, "inference", asc, prov, "p", 2, 30*time.Second, now.Add(2*time.Minute))
+	a.provisionN(ctx, "inference", asc, prov, "p", 2, 30*time.Second, now.Add(2*time.Minute), "")
 	if prov.provisions != 4 || a.backoff["inference"] != nil {
 		t.Errorf("after recovery: provisions = %d backoff = %v, want 4 and reset", prov.provisions, a.backoff["inference"])
 	}
@@ -224,19 +228,19 @@ func TestRealProviderNeedsPublicURLAndWorkerKey(t *testing.T) {
 	prov := &fakeProvider{name: "runpod"}
 	asc := &queueworker.AutoscaleConfig{Enabled: true, Provider: "p", MaxWorkers: 1}
 
-	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now(), "")
 	if prov.provisions != 0 {
 		t.Fatal("provisioned without RUNQY_PUBLIC_URL")
 	}
 
 	t.Setenv("RUNQY_PUBLIC_URL", "https://runqy.example.com")
-	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now(), "")
 	if prov.provisions != 0 {
 		t.Fatal("provisioned with the admin API key (no RUNQY_WORKER_API_KEY)")
 	}
 
 	a.cfg.WorkerAPIKey = "worker-key"
-	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now())
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, 30*time.Second, time.Now(), "")
 	if prov.provisions != 1 {
 		t.Fatalf("provisions = %d, want 1 once configured", prov.provisions)
 	}
@@ -319,7 +323,7 @@ func TestFailuresReportedToEventSink(t *testing.T) {
 	a.SetEventSink(sink)
 
 	prov := &fakeProvider{name: "mock", provisionErr: errors.New("no offers")}
-	a.provisionN(context.Background(), "inference", &queueworker.AutoscaleConfig{MaxWorkers: 1}, prov, "p", 1, 30*time.Second, time.Now())
+	a.provisionN(context.Background(), "inference", &queueworker.AutoscaleConfig{MaxWorkers: 1}, prov, "p", 1, 30*time.Second, time.Now(), "")
 	addInstance(t, a, "stuck", StatusRunning, "", time.Hour) // past boot_timeout
 	reconcile(t, a, &fakeProvider{}, nil, time.Now())
 
@@ -344,7 +348,7 @@ func TestBootFailuresBackOffProvisioning(t *testing.T) {
 		t.Fatalf("after 1st boot failure: %+v, want 1 failure and a 20m pause", b)
 	}
 	// ...and the next instance is not rented right away (the staging loop rented one every boot_timeout).
-	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, now.Add(time.Minute))
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, now.Add(time.Minute), "")
 	if prov.provisions != 0 {
 		t.Fatal("provisioned during the boot-failure pause")
 	}
@@ -368,7 +372,7 @@ func TestBootFailuresBackOffProvisioning(t *testing.T) {
 	if a.bootFails["inference"] != nil {
 		t.Fatalf("boot-failure pause not reset by a ready worker: %+v", a.bootFails["inference"])
 	}
-	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later)
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later, "")
 	if prov.provisions != 1 {
 		t.Fatalf("provisions = %d, want 1 after the reset", prov.provisions)
 	}
@@ -385,5 +389,27 @@ func TestLostWorkerIsNotABootFailure(t *testing.T) {
 	}
 	if a.bootFails["inference"] != nil {
 		t.Error("a machine that worked then died (e.g. preempted) must not slow down provisioning")
+	}
+}
+
+func TestProvisionPauseLoggedOnce(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+
+	a := newTestAutoscaler(t)
+	prov := &fakeProvider{name: "mock", provisionErr: errors.New("no offers")}
+	asc := &queueworker.AutoscaleConfig{MaxWorkers: 1}
+	now := time.Now()
+	a.provisionN(context.Background(), "inference", asc, prov, "p", 1, time.Minute, now, "scale-up 0 -> 1")
+	for i := 1; i <= 5; i++ { // five more polls inside the 1m pause
+		a.provisionN(context.Background(), "inference", asc, prov, "p", 1, time.Minute, now.Add(time.Duration(i)*5*time.Second), "scale-up 0 -> 1")
+	}
+	out := buf.String()
+	if n := strings.Count(out, "provisioning paused"); n != 1 {
+		t.Errorf("pause logged %d times, want once:\n%s", n, out)
+	}
+	if n := strings.Count(out, "scale-up 0 -> 1"); n != 1 {
+		t.Errorf("scale-up logged %d times, want once (only when actually attempted):\n%s", n, out)
 	}
 }

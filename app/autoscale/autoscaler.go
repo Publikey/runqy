@@ -65,6 +65,7 @@ type Autoscaler struct {
 	// Loop-goroutine state (not shared).
 	lastEval   map[string]time.Time         // parent queue -> last evaluation time
 	backoff    map[string]*provisionBackoff // parent queue -> provisioning failure backoff
+	envWarned  map[string]string            // parent queue -> last missing-prerequisite error logged
 	bootFails  map[string]*provisionBackoff // parent queue -> instances that never became ready
 	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
@@ -114,8 +115,9 @@ type bootObservation struct {
 // provisionBackoff spaces out retries after provisioning failures (no capacity, bad
 // credentials, price too low...) so a broken config does not hammer the provider API.
 type provisionBackoff struct {
-	failures int
-	until    time.Time
+	failures  int
+	until     time.Time
+	announced bool // the pause was logged (log it once, not every poll)
 }
 
 // New constructs an Autoscaler. All dependencies are required.
@@ -131,6 +133,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		provCache:  make(map[string]cachedProvider),
 		lastEval:   make(map[string]time.Time),
 		backoff:    make(map[string]*provisionBackoff),
+		envWarned:  make(map[string]string),
 		bootFails:  make(map[string]*provisionBackoff),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
@@ -307,9 +310,9 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 	plan := decide(asc, snap)
 
 	if plan.provision > 0 {
-		log.Printf("[AUTOSCALE] queue %q: scale-up %d -> %d (pending=%d active=%d latency=%s workers=%d)",
-			parent, len(live), plan.desired, stats.pending, stats.active, stats.latency.Round(time.Second), snap.totalWorkers)
-		a.provisionN(ctx, parent, asc, prov, rec.Name, plan.provision, window, now)
+		scaleLog := fmt.Sprintf("scale-up %d -> %d (pending=%d active=%d latency=%s workers=%d)",
+			len(live), plan.desired, stats.pending, stats.active, stats.latency.Round(time.Second), snap.totalWorkers)
+		a.provisionN(ctx, parent, asc, prov, rec.Name, plan.provision, window, now, scaleLog)
 		return
 	}
 	for _, inst := range plan.destroy {
@@ -456,25 +459,42 @@ func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration,
 		delay = maxBootBackoff
 	}
 	b.until = now.Add(delay)
+	b.announced = false
 	log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning paused for %s", parent, b.failures, delay)
 	return fmt.Sprintf("; %d in a row, next instance in %s", b.failures, delay)
 }
 
 // provisionN creates up to n instances, stopping at the first failure and backing off
 // exponentially (poll interval × 2^failures, capped) before the next attempt.
-func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string, n int, pollInterval time.Duration, now time.Time) {
+//
+// scaleLog describes the decision; it is logged only when provisioning is actually
+// attempted, and pauses are logged once per pause instead of every poll.
+func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string, n int, pollInterval time.Duration, now time.Time, scaleLog string) {
 	if b := a.backoff[parent]; b != nil && now.Before(b.until) {
-		log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d failure(s)", parent, b.until.Format(time.RFC3339), b.failures)
+		if !b.announced {
+			log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d failure(s)", parent, b.until.Format(time.RFC3339), b.failures)
+			b.announced = true
+		}
 		return
 	}
 	if b := a.bootFails[parent]; b != nil && now.Before(b.until) {
-		log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d instance(s) that never became ready", parent, b.until.Format(time.RFC3339), b.failures)
+		if !b.announced {
+			log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d instance(s) that never became ready", parent, b.until.Format(time.RFC3339), b.failures)
+			b.announced = true
+		}
 		return
 	}
 	if err := a.checkWorkerEnv(prov.Name()); err != nil {
-		log.Printf("[AUTOSCALE] queue %q: cannot provision: %v", parent, err)
-		a.reportFailure(parent, "cannot provision: "+err.Error())
+		if msg := err.Error(); a.envWarned[parent] != msg {
+			log.Printf("[AUTOSCALE] queue %q: cannot provision: %v", parent, err)
+			a.envWarned[parent] = msg
+		}
+		a.reportFailure(parent, "cannot provision: "+err.Error()) // throttled by the alert evaluator
 		return
+	}
+	delete(a.envWarned, parent)
+	if scaleLog != "" {
+		log.Printf("[AUTOSCALE] queue %q: %s", parent, scaleLog)
 	}
 	for i := 0; i < n; i++ {
 		if err := a.provision(ctx, parent, asc, prov, providerName); err != nil {
@@ -489,6 +509,7 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 				delay = maxProvisionBackoff
 			}
 			b.until = now.Add(delay)
+			b.announced = false
 			log.Printf("[AUTOSCALE] queue %q: provision failed (%d in a row), next attempt in %s: %v", parent, b.failures, delay, err)
 			a.reportFailure(parent, fmt.Sprintf("provisioning failed (%d in a row, next attempt in %s): %v", b.failures, delay, err))
 			return
@@ -634,30 +655,42 @@ type queueStatsResult struct {
 }
 
 // queueStats sums pending/active and takes the max latency across all sub-queues of a
-// parent queue.
+// parent queue. Pending jobs of a paused sub-queue are left out: no worker will take them,
+// so they must not trigger a scale-up (renting machines for a paused queue wastes money).
+// Their active jobs still count, as machines working on them are busy.
 func (a *Autoscaler) queueStats(ctx context.Context, parent string) queueStatsResult {
+	q, err := a.queues.GetQueueWithSubQueues(ctx, parent)
+	if err != nil || q == nil {
+		return queueStatsResult{}
+	}
+	names := []string{queueworker.NormalizeQueueName(parent)}
+	if len(q.SubQueues) > 0 {
+		names = names[:0]
+		for _, sq := range q.SubQueues {
+			names = append(names, queueworker.BuildFullQueueName(parent, sq.Name))
+		}
+	}
+	var infos []*asynq.QueueInfo
+	for _, name := range names {
+		if info, err := a.inspector.GetQueueInfo(name); err == nil {
+			infos = append(infos, info)
+		}
+	}
+	return aggregateQueueStats(infos)
+}
+
+// aggregateQueueStats combines sub-queue statistics (see queueStats).
+func aggregateQueueStats(infos []*asynq.QueueInfo) queueStatsResult {
 	var out queueStatsResult
-	add := func(name string) {
-		info, err := a.inspector.GetQueueInfo(name)
-		if err != nil {
-			return
+	for _, info := range infos {
+		out.active += info.Active
+		if info.Paused {
+			continue
 		}
 		out.pending += info.Pending
-		out.active += info.Active
 		if info.Latency > out.latency {
 			out.latency = info.Latency
 		}
-	}
-	q, err := a.queues.GetQueueWithSubQueues(ctx, parent)
-	if err != nil || q == nil {
-		return out
-	}
-	if len(q.SubQueues) == 0 {
-		add(queueworker.NormalizeQueueName(parent))
-		return out
-	}
-	for _, sq := range q.SubQueues {
-		add(queueworker.BuildFullQueueName(parent, sq.Name))
 	}
 	return out
 }
