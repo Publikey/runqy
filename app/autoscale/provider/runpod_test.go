@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,6 +27,7 @@ func TestRunPodFactoryValidation(t *testing.T) {
 func TestRunPodLifecycle(t *testing.T) {
 	var gotAuth, gotMethod, gotPath string
 	var createBody map[string]interface{}
+	var deleted []string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -37,11 +39,14 @@ func TestRunPodLifecycle(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"id":"pod-123","desiredStatus":"RUNNING"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/pods/pod-123":
-			w.Write([]byte(`{"id":"pod-123","desiredStatus":"RUNNING"}`))
+			w.Write([]byte(`{"id":"pod-123","name":"runqy-inference-abcdef123456","desiredStatus":"RUNNING"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/pods/prod-pod":
+			w.Write([]byte(`{"id":"prod-pod","name":"minimax","desiredStatus":"RUNNING"}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/pods/gone":
 			w.WriteHeader(http.StatusNotFound)
 			w.Write([]byte(`{"error":"not found"}`))
 		case r.Method == http.MethodDelete:
+			deleted = append(deleted, r.URL.Path)
 			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -76,6 +81,14 @@ func TestRunPodLifecycle(t *testing.T) {
 	if gpus, ok := createBody["gpuTypeIds"].([]interface{}); !ok || len(gpus) != 1 || gpus[0] != "NVIDIA GeForce RTX 4090" {
 		t.Fatalf("gpuTypeIds not sent: %v", createBody["gpuTypeIds"])
 	}
+	// No billed persistent volume unless configured (RunPod defaults to 20 GB).
+	if v, ok := createBody["volumeInGb"]; !ok || v != float64(0) {
+		t.Errorf("volumeInGb = %v (sent=%v), want an explicit 0", v, ok)
+	}
+	// Hosts must support the image's CUDA 12.8.
+	if cuda := fmt.Sprint(createBody["allowedCudaVersions"]); cuda != "[12.8 12.9 13.0]" {
+		t.Errorf("allowedCudaVersions = %s, want [12.8 12.9 13.0]", cuda)
+	}
 
 	// Status (running)
 	st, err := p.Status(ctx, "pod-123")
@@ -95,6 +108,27 @@ func TestRunPodLifecycle(t *testing.T) {
 	}
 	if gotMethod != http.MethodDelete || !strings.HasPrefix(gotPath, "/pods/") {
 		t.Fatalf("destroy hit %s %s", gotMethod, gotPath)
+	}
+
+	// A pod runqy did not create is never destroyed, even with its id.
+	if err := p.Destroy(ctx, "prod-pod"); err == nil || !strings.Contains(err.Error(), "refusing to destroy") {
+		t.Fatalf("destroy of a foreign pod: err = %v, want a refusal", err)
+	}
+	if len(deleted) != 1 || deleted[0] != "/pods/pod-123" {
+		t.Fatalf("DELETE calls = %v, want only /pods/pod-123", deleted)
+	}
+	// Already gone is success.
+	if err := p.Destroy(ctx, "gone"); err != nil {
+		t.Fatalf("destroy of a gone pod: %v", err)
+	}
+}
+
+func TestAllowedCUDAVersions(t *testing.T) {
+	if got := fmt.Sprint(allowedCUDAVersions("12.6")); got != "[12.6 12.7 12.8 12.9 13.0]" {
+		t.Errorf("12.6 -> %s", got)
+	}
+	if allowedCUDAVersions("none") != nil {
+		t.Error("none should disable the filter")
 	}
 }
 

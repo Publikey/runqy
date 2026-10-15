@@ -26,6 +26,28 @@ type runpodConfig struct {
 	VolumeGB        int    `json:"volume_in_gb"`      // optional persistent volume
 	VolumeMountPath string `json:"volume_mount_path"` // optional, e.g. "/workspace"
 	BaseURL         string `json:"base_url"`          // optional override (tests)
+	// MinCUDAVersion restricts hosts to drivers supporting at least this CUDA version
+	// (default "12.8", required by the inference image). "none" disables the filter.
+	MinCUDAVersion string `json:"min_cuda_version,omitempty"`
+}
+
+// runpodCUDAVersions is RunPod's allowedCudaVersions enum, oldest first.
+var runpodCUDAVersions = []string{"11.8", "12.0", "12.1", "12.2", "12.3", "12.4", "12.5", "12.6", "12.7", "12.8", "12.9", "13.0"}
+
+// allowedCUDAVersions returns the enum values >= min ("" -> default 12.8, "none" -> nil).
+func allowedCUDAVersions(min string) []string {
+	switch min {
+	case "none":
+		return nil
+	case "":
+		min = defaultMinCUDAVersion
+	}
+	for i, v := range runpodCUDAVersions {
+		if v == min {
+			return runpodCUDAVersions[i:]
+		}
+	}
+	return nil
 }
 
 // runPodProvider talks to the RunPod REST v1 API.
@@ -82,8 +104,11 @@ func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 	if gpuType != "" {
 		body["gpuTypeIds"] = []string{gpuType}
 	}
-	if p.cfg.VolumeGB > 0 {
-		body["volumeInGb"] = p.cfg.VolumeGB
+	// RunPod creates (and bills) a 20 GB persistent volume when volumeInGb is omitted:
+	// workers do not need one unless configured.
+	body["volumeInGb"] = p.cfg.VolumeGB
+	if cuda := allowedCUDAVersions(p.cfg.MinCUDAVersion); len(cuda) > 0 {
+		body["allowedCudaVersions"] = cuda
 	}
 	if p.cfg.VolumeMountPath != "" {
 		body["volumeMountPath"] = p.cfg.VolumeMountPath
@@ -99,7 +124,22 @@ func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 	return resp.ID, nil
 }
 
+// Destroy terminates a pod. It is idempotent (gone is success) and refuses any pod whose
+// name lacks runqy's prefix, so a wrong id can never destroy a pod runqy did not create
+// (the account may run hand-made production pods).
 func (p *runPodProvider) Destroy(ctx context.Context, instanceID string) error {
+	var pod struct {
+		Name string `json:"name"`
+	}
+	if err := p.do(ctx, http.MethodGet, "/pods/"+instanceID, nil, &pod); err != nil {
+		if isNotFound(err) {
+			return nil // already gone
+		}
+		return err
+	}
+	if !strings.HasPrefix(pod.Name, runqyLabelPrefix) {
+		return fmt.Errorf("runpod: refusing to destroy pod %s: name %q was not set by runqy (expected prefix %q)", instanceID, pod.Name, runqyLabelPrefix)
+	}
 	err := p.do(ctx, http.MethodDelete, "/pods/"+instanceID, nil, nil)
 	if err != nil && isNotFound(err) {
 		return nil // already gone — idempotent

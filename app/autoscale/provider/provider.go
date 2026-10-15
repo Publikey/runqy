@@ -5,6 +5,10 @@ package provider
 
 import "context"
 
+// defaultMinCUDAVersion is the lowest host CUDA version accepted by default: the
+// runqy-worker inference image is built on CUDA 12.8.
+const defaultMinCUDAVersion = "12.8"
+
 // Instance status values reported by a provider. These mirror (a subset of) the
 // lifecycle states tracked in the autoscale_instances table.
 const (

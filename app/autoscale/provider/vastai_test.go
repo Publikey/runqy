@@ -316,3 +316,16 @@ func TestVastAIVerifiedOnlyByDefault(t *testing.T) {
 		t.Errorf("verified filter still sent with verified_only=false")
 	}
 }
+
+func TestVastAIMinCUDAFilter(t *testing.T) {
+	f, p := newFakeVast(t)
+	p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if c, _ := f.search["cuda_max_good"].(map[string]interface{}); c == nil || c["gte"] != 12.8 {
+		t.Errorf("cuda_max_good = %v, want gte 12.8 by default", f.search["cuda_max_good"])
+	}
+	p.(*vastAIProvider).cfg.MinCUDAVersion = "none"
+	p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if _, set := f.search["cuda_max_good"]; set {
+		t.Error("cuda filter sent with min_cuda_version=none")
+	}
+}

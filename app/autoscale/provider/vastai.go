@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +37,9 @@ type vastConfig struct {
 	// VerifiedOnly rents only machines verified by Vast (default true). Unverified
 	// hosts were unreliable in testing: blocked registry, Docker errors, GPU not attachable.
 	VerifiedOnly *bool `json:"verified_only,omitempty"`
+	// MinCUDAVersion keeps hosts whose driver supports at least this CUDA version
+	// (default "12.8", required by the inference image). "none" disables the filter.
+	MinCUDAVersion string `json:"min_cuda_version,omitempty"`
 }
 
 // Defaults for the offer filters when the config leaves them unset.
@@ -202,6 +206,14 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 		minDown = vastDefaultMinDownloadMbps
 	}
 	q["inet_down"] = map[string]interface{}{"gte": minDown}
+	if minCUDA := p.cfg.MinCUDAVersion; minCUDA != "none" {
+		if minCUDA == "" {
+			minCUDA = defaultMinCUDAVersion
+		}
+		if v, err := strconv.ParseFloat(minCUDA, 64); err == nil {
+			q["cuda_max_good"] = map[string]interface{}{"gte": v}
+		}
+	}
 	if p.cfg.VerifiedOnly == nil || *p.cfg.VerifiedOnly {
 		q["verified"] = map[string]interface{}{"eq": true}
 	}
