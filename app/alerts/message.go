@@ -89,7 +89,9 @@ func renderDigest(settings *queueworker.AlertSettings, notes []HistoryEntry, pub
 </tr>`, statusColors[n.Status], statusLabels[n.Status], queueCell, html.EscapeString(ruleTitle(n.Rule)), html.EscapeString(n.Message))
 	}
 	footer := fmt.Sprintf("Sent by runqy at %s.", now.UTC().Format("2006-01-02 15:04 UTC"))
-	if repeat := settings.RepeatIntervalOrDefault(); repeat > 0 {
+	// The reminder line only makes sense when the email carries a firing alert; resolved
+	// alerts and one-off events are not re-sent.
+	if repeat := settings.RepeatIntervalOrDefault(); repeat > 0 && counts[StatusFiring]+counts[StatusRepeat] > 0 {
 		footer += fmt.Sprintf(" Alerts still firing are re-sent every %s.", repeat)
 	}
 	text.WriteString(footer + "\n")

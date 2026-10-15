@@ -288,3 +288,17 @@ func TestDisabledSettingsDoNothing(t *testing.T) {
 		t.Fatal("disabled alerting evaluated rules")
 	}
 }
+
+func TestDigestFooterMentionsRemindersOnlyForFiringAlerts(t *testing.T) {
+	settings := baseSettings()
+	firing := renderDigest(settings, []HistoryEntry{{Queue: "q", Rule: queueworker.AlertNoWorkers, Status: StatusFiring}}, "", t0)
+	if !strings.Contains(firing.Text, "re-sent every 4h") {
+		t.Errorf("firing email lacks the reminder line:\n%s", firing.Text)
+	}
+	for _, status := range []string{StatusEvent, StatusResolved} {
+		m := renderDigest(settings, []HistoryEntry{{Queue: "q", Rule: queueworker.AlertAutoscaleFailure, Status: status}}, "", t0)
+		if strings.Contains(m.Text, "re-sent") || strings.Contains(m.HTML, "re-sent") {
+			t.Errorf("%s email mentions reminders:\n%s", status, m.Text)
+		}
+	}
+}
