@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -54,7 +55,17 @@ var (
 type vastAIProvider struct {
 	cfg    vastConfig
 	client *http.Client
+
+	// Hosts that failed to start our container are avoided for a while: the cheapest
+	// offer is often the same broken machine (full disk, unreachable registry...).
+	mu          sync.Mutex
+	placed      map[string]string    // instance id -> machine id
+	started     map[string]bool      // instance id -> its container reached "running"
+	badMachines map[string]time.Time // machine id -> excluded until
 }
+
+// badMachineTTL is how long a machine whose container never started is excluded.
+const badMachineTTL = 24 * time.Hour
 
 func newVastAIProvider(raw json.RawMessage) (Provider, error) {
 	var cfg vastConfig
@@ -69,7 +80,13 @@ func newVastAIProvider(raw json.RawMessage) (Provider, error) {
 	if cfg.BaseURL == "" {
 		cfg.BaseURL = vastDefaultBaseURL
 	}
-	return &vastAIProvider{cfg: cfg, client: &http.Client{Timeout: 30 * time.Second}}, nil
+	return &vastAIProvider{
+		cfg:         cfg,
+		client:      &http.Client{Timeout: 30 * time.Second},
+		placed:      map[string]string{},
+		started:     map[string]bool{},
+		badMachines: map[string]time.Time{},
+	}, nil
 }
 
 func (p *vastAIProvider) Name() string { return "vastai" }
@@ -97,7 +114,7 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 		return "", err
 	}
 
-	offerID, err := p.cheapestOffer(ctx, gpuName, maxPrice, disk)
+	offerID, machineID, err := p.cheapestOffer(ctx, gpuName, maxPrice, disk)
 	if err != nil {
 		return "", err
 	}
@@ -127,6 +144,9 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 		}
 		return "", fmt.Errorf("vastai create returned no contract id")
 	}
+	p.mu.Lock()
+	p.placed[resp.NewContract.String()] = machineID
+	p.mu.Unlock()
 	return resp.NewContract.String(), nil
 }
 
@@ -151,7 +171,7 @@ func vastEnv(env map[string]string) (string, error) {
 }
 
 // cheapestOffer searches on-demand offers and returns the lowest-price rentable one.
-func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxPrice float64, disk int) (string, error) {
+func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxPrice float64, disk int) (offerID, machineID string, err error) {
 	q := map[string]interface{}{
 		"rentable": map[string]interface{}{"eq": true},
 		"rented":   map[string]interface{}{"eq": false},
@@ -179,20 +199,61 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 		minDown = vastDefaultMinDownloadMbps
 	}
 	q["inet_down"] = map[string]interface{}{"gte": minDown}
+	if bad := p.excludedMachines(time.Now()); len(bad) > 0 {
+		q["machine_id"] = map[string]interface{}{"notin": bad}
+	}
 
 	var resp struct {
 		Offers []struct {
-			ID       json.Number `json:"id"`
-			DPHTotal float64     `json:"dph_total"`
+			ID        json.Number `json:"id"`
+			MachineID json.Number `json:"machine_id"`
+			DPHTotal  float64     `json:"dph_total"`
 		} `json:"offers"`
 	}
 	if err := p.do(ctx, http.MethodPost, "/bundles/", q, &resp); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(resp.Offers) == 0 {
-		return "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d)", gpuName, maxPrice, disk)
+		return "", "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d)", gpuName, maxPrice, disk)
 	}
-	return resp.Offers[0].ID.String(), nil
+	return resp.Offers[0].ID.String(), resp.Offers[0].MachineID.String(), nil
+}
+
+// excludedMachines lists machines still within their exclusion window (and forgets
+// expired ones).
+func (p *vastAIProvider) excludedMachines(now time.Time) []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []string
+	for id, until := range p.badMachines {
+		if now.After(until) {
+			delete(p.badMachines, id)
+			continue
+		}
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// observe records what an instance did: whether its container ever started, and, when
+// it ends without ever starting, that its machine is bad (host fault: full disk,
+// registry unreachable...). A container that started but whose worker never became
+// ready points at the image or the task code, not the host, so it is not penalised.
+func (p *vastAIProvider) observe(instanceID string, running, ended bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if running {
+		p.started[instanceID] = true
+	}
+	if !ended {
+		return
+	}
+	if machine := p.placed[instanceID]; machine != "" && !p.started[instanceID] {
+		p.badMachines[machine] = time.Now().Add(badMachineTTL)
+	}
+	delete(p.placed, instanceID)
+	delete(p.started, instanceID)
 }
 
 // excludeCountries returns the configured exclusion list; nil (unset) means the default,
@@ -236,6 +297,7 @@ func (p *vastAIProvider) Destroy(ctx context.Context, instanceID string) error {
 		return err
 	}
 	if inst == nil {
+		p.observe(instanceID, false, true)
 		return nil
 	}
 	label := ""
@@ -246,10 +308,11 @@ func (p *vastAIProvider) Destroy(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("vastai: refusing to destroy instance %s: label %q was not set by runqy (expected prefix %q)", instanceID, label, runqyLabelPrefix)
 	}
 	err = p.do(ctx, http.MethodDelete, "/instances/"+instanceID+"/", nil, nil)
-	if err != nil && isNotFound(err) {
-		return nil
+	if err != nil && !isNotFound(err) {
+		return err
 	}
-	return err
+	p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), true)
+	return nil
 }
 
 func (p *vastAIProvider) Status(ctx context.Context, instanceID string) (InstanceStatus, error) {
@@ -258,9 +321,12 @@ func (p *vastAIProvider) Status(ctx context.Context, instanceID string) (Instanc
 		return InstanceStatus{}, err
 	}
 	if inst == nil {
+		p.observe(instanceID, false, true)
 		return InstanceStatus{InstanceID: instanceID, Status: StatusTerminated}, nil
 	}
-	return InstanceStatus{InstanceID: instanceID, Status: mapVastStatus(inst.ActualStatus, inst.CurState)}, nil
+	status := mapVastStatus(inst.ActualStatus, inst.CurState)
+	p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), status == StatusTerminated)
+	return InstanceStatus{InstanceID: instanceID, Status: status}, nil
 }
 
 // mapVastStatus maps Vast's actual_status/cur_state to internal provider states.

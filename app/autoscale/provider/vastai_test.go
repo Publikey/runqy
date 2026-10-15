@@ -51,7 +51,7 @@ func (f *fakeVast) handler(t *testing.T) http.HandlerFunc {
 		case r.Method == http.MethodPost && r.URL.Path == "/bundles/":
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &f.search)
-			w.Write([]byte(`{"offers":[{"id":98765,"dph_total":0.31,"gpu_name":"RTX_4090"},{"id":11111,"dph_total":0.45,"gpu_name":"RTX_4090"}]}`))
+			w.Write([]byte(`{"offers":[{"id":98765,"machine_id":54116,"dph_total":0.31,"gpu_name":"RTX 4090"},{"id":11111,"machine_id":777,"dph_total":0.45,"gpu_name":"RTX 4090"}]}`))
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/asks/"):
 			f.createURL = r.URL.Path
 			b, _ := io.ReadAll(r.Body)
@@ -251,5 +251,53 @@ func TestVastAIOfferFilters(t *testing.T) {
 				t.Errorf("inet_down = %v, want gte %v", f.search["inet_down"], tc.minMbs)
 			}
 		})
+	}
+}
+
+func TestVastAIAvoidsMachinesThatNeverStarted(t *testing.T) {
+	f, p := newFakeVast(t)
+	ctx := context.Background()
+	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
+
+	// 1st rental lands on machine 54116, whose Docker daemon fails: the container never
+	// starts and Vast reports the instance exited (seen on staging: containerd write error).
+	id, err := p.Provision(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, excluded := f.search["machine_id"]; excluded {
+		t.Fatalf("no machine should be excluded yet: %v", f.search["machine_id"])
+	}
+	f.status[id] = "exited"
+	if st, _ := p.Status(ctx, id); st.Status != StatusTerminated {
+		t.Fatalf("status = %q", st.Status)
+	}
+	if err := p.Destroy(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next search excludes that host.
+	if _, err := p.Provision(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(f.search["machine_id"]) != fmt.Sprint(map[string]interface{}{"notin": []interface{}{"54116"}}) {
+		t.Fatalf("machine_id filter = %v, want notin [54116]", f.search["machine_id"])
+	}
+}
+
+func TestVastAIDoesNotBlameHostWhenContainerStarted(t *testing.T) {
+	f, p := newFakeVast(t)
+	ctx := context.Background()
+	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
+
+	id, _ := p.Provision(ctx, spec)
+	f.status[id] = "running" // container up; the worker never became ready (image/code issue)
+	p.Status(ctx, id)
+	if err := p.Destroy(ctx, id); err != nil { // boot_timeout teardown
+		t.Fatal(err)
+	}
+	p.Provision(ctx, spec)
+	if _, excluded := f.search["machine_id"]; excluded {
+		t.Fatalf("host excluded although the container started: %v", f.search["machine_id"])
 	}
 }
