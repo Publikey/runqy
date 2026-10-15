@@ -136,13 +136,17 @@ func mapRunPodStatus(s string) string {
 	}
 }
 
+// runqyLabelPrefix starts the name/label of every machine runqy creates. Providers use
+// it to recognise their own instances (Vast.ai's Destroy refuses anything else).
+const runqyLabelPrefix = "runqy-"
+
 // podName derives a stable, human-readable pod name from the spec.
 func podName(spec InstanceSpec) string {
 	suffix := spec.Env["RUNQY_INSTANCE_ID"]
 	if len(suffix) > 12 {
 		suffix = suffix[len(suffix)-12:]
 	}
-	name := "runqy-" + spec.Queue
+	name := runqyLabelPrefix + spec.Queue
 	if suffix != "" {
 		name += "-" + suffix
 	}
@@ -155,7 +159,7 @@ type httpError struct {
 	body string
 }
 
-func (e *httpError) Error() string { return fmt.Sprintf("runpod api error (%d): %s", e.code, e.body) }
+func (e *httpError) Error() string { return fmt.Sprintf("provider api error (%d): %s", e.code, e.body) }
 
 func isNotFound(err error) bool {
 	he, ok := err.(*httpError)
