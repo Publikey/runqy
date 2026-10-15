@@ -224,3 +224,12 @@ func (i *Instance) MetadataMap() map[string]interface{} {
 	}
 	return m
 }
+
+// DisplayStatus is the status shown to users: a "running" machine without a worker yet
+// is still booting (pulling the image, installing dependencies) from runqy's point of view.
+func DisplayStatus(status, workerID string) string {
+	if status == StatusRunning && workerID == "" {
+		return "booting"
+	}
+	return status
+}

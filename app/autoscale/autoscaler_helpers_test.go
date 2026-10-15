@@ -53,3 +53,18 @@ func TestMockProviderLifecycle(t *testing.T) {
 		t.Fatalf("post-destroy status = %q want terminated", st.Status)
 	}
 }
+
+func TestDisplayStatus(t *testing.T) {
+	cases := map[[2]string]string{
+		{StatusRunning, ""}:       "booting",
+		{StatusRunning, "host:1"}: StatusRunning,
+		{StatusProvisioning, ""}:  StatusProvisioning,
+		{StatusTerminated, ""}:    StatusTerminated,
+		{StatusFailed, "host:1"}:  StatusFailed,
+	}
+	for in, want := range cases {
+		if got := DisplayStatus(in[0], in[1]); got != want {
+			t.Errorf("DisplayStatus(%q, %q) = %q, want %q", in[0], in[1], got, want)
+		}
+	}
+}

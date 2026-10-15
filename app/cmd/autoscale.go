@@ -176,7 +176,7 @@ func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		for _, i := range resp.Instances {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, i.Status, i.WorkerID, i.Protected, i.CostAccumulated)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.CostAccumulated)
 		}
 		w.Flush()
 		fmt.Printf("\nTotal accumulated cost: $%.4f\n", resp.TotalCost)
@@ -197,7 +197,7 @@ func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 	}
 	var total float64
 	for _, i := range instances {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, i.Status, i.WorkerID, i.Protected, i.CostAccumulated)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.CostAccumulated)
 		total += i.CostAccumulated
 	}
 	w.Flush()

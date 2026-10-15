@@ -41,6 +41,10 @@ const leaderTTL = queueEvalTimeout + time.Minute
 // maxProvisionBackoff caps the wait between failed provisioning attempts.
 const maxProvisionBackoff = 10 * time.Minute
 
+// maxBootBackoff caps the wait after instances that never became ready. Each such
+// instance was billed for a whole boot_timeout, so retries slow down much more.
+const maxBootBackoff = time.Hour
+
 // workerStatusBootstrapping is the heartbeat status a worker reports from registration
 // until its supervised process signals ready (see runqy-worker heartbeat).
 const workerStatusBootstrapping = "bootstrapping"
@@ -61,6 +65,7 @@ type Autoscaler struct {
 	// Loop-goroutine state (not shared).
 	lastEval   map[string]time.Time         // parent queue -> last evaluation time
 	backoff    map[string]*provisionBackoff // parent queue -> provisioning failure backoff
+	bootFails  map[string]*provisionBackoff // parent queue -> instances that never became ready
 	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
 	wasLeader  bool
@@ -126,6 +131,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		provCache:  make(map[string]cachedProvider),
 		lastEval:   make(map[string]time.Time),
 		backoff:    make(map[string]*provisionBackoff),
+		bootFails:  make(map[string]*provisionBackoff),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
 		stopCh:     make(chan struct{}),
@@ -371,11 +377,13 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 				}
 			case provider.StatusFailed, provider.StatusTerminated:
 				final := StatusTerminated
+				reason := "provider reported " + st.Status + messageSuffix(st.Message)
 				if inst.Status == StatusProvisioning {
 					final = StatusFailed
+					reason += a.recordBootFailure(parent, bootTimeout, now)
 				}
 				log.Printf("[AUTOSCALE] queue %q: instance %s reported %s by provider — tearing down", parent, inst.InstanceID, st.Status)
-				a.teardown(ctx, prov, inst, final, "provider reported "+st.Status+messageSuffix(st.Message))
+				a.teardown(ctx, prov, inst, final, reason)
 				continue
 			}
 		}
@@ -401,9 +409,14 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 		} else if fresh {
 			delete(a.bootSince, inst.InstanceID)
 		}
+		if !stillBooting && fresh {
+			// A worker is ready on this machine: the image and code work, stop slowing down.
+			delete(a.bootFails, parent)
+		}
 		if stillBooting && now.Sub(bootRef) > bootTimeout {
 			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
-			a.teardown(ctx, prov, inst, StatusFailed, fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout))
+			reason := fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout) + a.recordBootFailure(parent, bootTimeout, now)
+			a.teardown(ctx, prov, inst, StatusFailed, reason)
 			continue
 		}
 
@@ -427,11 +440,35 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 	return live
 }
 
+// recordBootFailure counts an instance that never became ready and pauses provisioning
+// for boot_timeout × 2^(failures-1), capped at maxBootBackoff: a broken image or a
+// crashing task would otherwise rent (and pay for) a new machine every boot_timeout,
+// forever. It returns a suffix for the teardown reason.
+func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration, now time.Time) string {
+	b := a.bootFails[parent]
+	if b == nil {
+		b = &provisionBackoff{}
+		a.bootFails[parent] = b
+	}
+	b.failures++
+	delay := bootTimeout << uint(minInt(b.failures-1, 10))
+	if delay > maxBootBackoff || delay <= 0 {
+		delay = maxBootBackoff
+	}
+	b.until = now.Add(delay)
+	log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning paused for %s", parent, b.failures, delay)
+	return fmt.Sprintf("; %d in a row, next instance in %s", b.failures, delay)
+}
+
 // provisionN creates up to n instances, stopping at the first failure and backing off
 // exponentially (poll interval × 2^failures, capped) before the next attempt.
 func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string, n int, pollInterval time.Duration, now time.Time) {
 	if b := a.backoff[parent]; b != nil && now.Before(b.until) {
 		log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d failure(s)", parent, b.until.Format(time.RFC3339), b.failures)
+		return
+	}
+	if b := a.bootFails[parent]; b != nil && now.Before(b.until) {
+		log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d instance(s) that never became ready", parent, b.until.Format(time.RFC3339), b.failures)
 		return
 	}
 	if err := a.checkWorkerEnv(prov.Name()); err != nil {

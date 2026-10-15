@@ -20,11 +20,11 @@ const vastDefaultBaseURL = "https://console.vast.ai/api/v0"
 // vastConfig is the decrypted provider config (stored in autoscale_providers.config).
 type vastConfig struct {
 	APIKey   string  `json:"api_key"`
-	GPUName  string  `json:"gpu_name"`            // Vast format with underscores, e.g. "RTX_4090"; overrides spec.GPU
-	MaxPrice float64 `json:"max_price_per_hour"`  // overrides spec.MaxPricePerHour when > 0
-	DiskGB   int     `json:"disk_gb"`             // fallback when spec.DiskGB is 0
-	OnStart  string  `json:"onstart"`             // optional onstart script contents
-	BaseURL  string  `json:"base_url"`            // optional override (tests)
+	GPUName  string  `json:"gpu_name"`           // Vast format with underscores, e.g. "RTX_4090"; overrides spec.GPU
+	MaxPrice float64 `json:"max_price_per_hour"` // overrides spec.MaxPricePerHour when > 0
+	DiskGB   int     `json:"disk_gb"`            // fallback when spec.DiskGB is 0
+	OnStart  string  `json:"onstart"`            // optional onstart script contents
+	BaseURL  string  `json:"base_url"`           // optional override (tests)
 }
 
 // vastAIProvider talks to the Vast.ai REST API (console.vast.ai/api/v0).
@@ -78,13 +78,13 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 	}
 
 	body := map[string]interface{}{
-		"client_id": "me",
-		"image":     spec.Image,
-		"disk":      disk,
-		"label":     podName(spec),
-		"runtype":   "args", // run the image's own entrypoint (worker auto-starts from env)
-		"env":       denv,
-		"onstart":   p.cfg.OnStart,
+		"client_id":    "me",
+		"image":        spec.Image,
+		"disk":         disk,
+		"label":        podName(spec),
+		"runtype":      "args", // run the image's own entrypoint (worker auto-starts from env)
+		"env":          denv,
+		"onstart":      p.cfg.OnStart,
 		"target_state": "running",
 	}
 

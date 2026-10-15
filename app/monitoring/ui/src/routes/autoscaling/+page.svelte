@@ -36,11 +36,17 @@
 		return i.status !== 'terminated';
 	}
 
+	// A "running" machine without a worker yet is still booting (image pull, dependencies).
+	function displayStatus(i: AutoscaleInstance): string {
+		return i.status === 'running' && !i.worker_id ? 'booting' : i.status;
+	}
+
 	function statusBadgeClass(status: string): string {
 		switch (status) {
 			case 'running':
 				return 'badge preset-filled-success-500 text-xs';
 			case 'provisioning':
+			case 'booting':
 				return 'badge preset-filled-secondary-500 text-xs';
 			case 'draining':
 				return 'badge preset-filled-warning-500 text-xs';
@@ -244,7 +250,7 @@
 								<td>{instance.queue}</td>
 								<td>{instance.provider}</td>
 								<td>
-									<span class={statusBadgeClass(instance.status)}>{instance.status}</span>
+									<span class={statusBadgeClass(displayStatus(instance))}>{displayStatus(instance)}</span>
 								</td>
 								<td class="font-mono text-sm">
 									{#if instance.worker_id}

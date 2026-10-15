@@ -80,6 +80,7 @@ func newTestAutoscaler(t *testing.T) *Autoscaler {
 		instances:  NewStore(db),
 		cfg:        &config.Config{HTTPPort: "3000", APIKey: "admin"},
 		backoff:    make(map[string]*provisionBackoff),
+		bootFails:  make(map[string]*provisionBackoff),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
 	}
@@ -326,5 +327,63 @@ func TestFailuresReportedToEventSink(t *testing.T) {
 		!strings.Contains(sink.messages[0], "inference|autoscale_failure|provisioning failed") ||
 		!strings.Contains(sink.messages[1], "instance stuck destroyed: no ready worker") {
 		t.Fatalf("events = %v", sink.messages)
+	}
+}
+
+func TestBootFailuresBackOffProvisioning(t *testing.T) {
+	a := newTestAutoscaler(t)
+	prov := &fakeProvider{name: "mock"}
+	asc := &queueworker.AutoscaleConfig{MaxWorkers: 2}
+	ctx := context.Background()
+	now := time.Now()
+
+	// An instance that never got a worker is destroyed after boot_timeout (20m in reconcile)...
+	addInstance(t, a, "stuck-1", StatusRunning, "", 30*time.Minute)
+	reconcile(t, a, prov, nil, now)
+	if b := a.bootFails["inference"]; b == nil || b.failures != 1 || b.until.Sub(now) != 20*time.Minute {
+		t.Fatalf("after 1st boot failure: %+v, want 1 failure and a 20m pause", b)
+	}
+	// ...and the next instance is not rented right away (the staging loop rented one every boot_timeout).
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, now.Add(time.Minute))
+	if prov.provisions != 0 {
+		t.Fatal("provisioned during the boot-failure pause")
+	}
+
+	// A second failure doubles the pause.
+	later := now.Add(21 * time.Minute)
+	addInstance(t, a, "stuck-2", StatusRunning, "", 30*time.Minute)
+	reconcile(t, a, prov, nil, later)
+	if b := a.bootFails["inference"]; b.failures != 2 || b.until.Sub(later) != 40*time.Minute {
+		t.Fatalf("after 2nd boot failure: %+v, want 2 failures and a 40m pause", b)
+	}
+	inst, _ := a.instances.GetByInstanceID(ctx, "stuck-2")
+	if !strings.Contains(string(inst.Metadata), "2 in a row, next instance in 40m0s") {
+		t.Errorf("teardown reason should say when the next instance comes: %s", inst.Metadata)
+	}
+
+	// A ready worker on any instance resets the counter: the image works.
+	addInstance(t, a, "good", StatusRunning, "w-good", time.Minute)
+	hbs := map[string]*workerHeartbeat{"good": {workerID: "w-good", status: "running", lastBeat: later.Unix()}}
+	reconcile(t, a, prov, hbs, later)
+	if a.bootFails["inference"] != nil {
+		t.Fatalf("boot-failure pause not reset by a ready worker: %+v", a.bootFails["inference"])
+	}
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, later)
+	if prov.provisions != 1 {
+		t.Fatalf("provisions = %d, want 1 after the reset", prov.provisions)
+	}
+}
+
+func TestLostWorkerIsNotABootFailure(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "was-fine", StatusRunning, "w1", time.Hour)
+	now := time.Now()
+	reconcile(t, a, &fakeProvider{}, nil, now)
+	reconcile(t, a, &fakeProvider{}, nil, now.Add(workerLostTimeout+time.Minute))
+	if s := statusOf(t, a, "was-fine"); s != StatusFailed {
+		t.Fatalf("lost worker: status %q, want failed", s)
+	}
+	if a.bootFails["inference"] != nil {
+		t.Error("a machine that worked then died (e.g. preempted) must not slow down provisioning")
 	}
 }
