@@ -26,7 +26,19 @@ type vastConfig struct {
 	DiskGB   int     `json:"disk_gb"`            // fallback when spec.DiskGB is 0
 	OnStart  string  `json:"onstart"`            // optional onstart script contents
 	BaseURL  string  `json:"base_url"`           // optional override (tests)
+
+	// Offer filters. Machines must download the worker image (several GB) from ghcr.io
+	// and clone the task code from GitHub: both are slow or blocked from some regions.
+	Countries        []string `json:"countries,omitempty"`         // allow-list of ISO country codes (empty = any)
+	ExcludeCountries []string `json:"exclude_countries,omitempty"` // default ["CN"]; set [] to allow every country
+	MinDownloadMbps  float64  `json:"min_download_mbps,omitempty"` // default 100
 }
+
+// Defaults for the offer filters when the config leaves them unset.
+var (
+	vastDefaultExcludeCountries = []string{"CN"}
+	vastDefaultMinDownloadMbps  = 100.0
+)
 
 // vastAIProvider talks to the Vast.ai REST API (console.vast.ai/api/v0), following the
 // documented endpoints (docs.vast.ai/api-reference):
@@ -157,6 +169,16 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 	if disk > 0 {
 		q["disk_space"] = map[string]interface{}{"gte": disk}
 	}
+	if len(p.cfg.Countries) > 0 {
+		q["geolocation"] = map[string]interface{}{"in": p.cfg.Countries}
+	} else if exclude := p.excludeCountries(); len(exclude) > 0 {
+		q["geolocation"] = map[string]interface{}{"notin": exclude}
+	}
+	minDown := p.cfg.MinDownloadMbps
+	if minDown <= 0 {
+		minDown = vastDefaultMinDownloadMbps
+	}
+	q["inet_down"] = map[string]interface{}{"gte": minDown}
 
 	var resp struct {
 		Offers []struct {
@@ -171,6 +193,15 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 		return "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d)", gpuName, maxPrice, disk)
 	}
 	return resp.Offers[0].ID.String(), nil
+}
+
+// excludeCountries returns the configured exclusion list; nil (unset) means the default,
+// while an explicit empty list allows every country.
+func (p *vastAIProvider) excludeCountries() []string {
+	if p.cfg.ExcludeCountries == nil {
+		return vastDefaultExcludeCountries
+	}
+	return p.cfg.ExcludeCountries
 }
 
 // vastInstance is the subset of GET /instances/{id}/ we use.

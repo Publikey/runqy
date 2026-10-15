@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -220,5 +221,35 @@ func TestVastAIGPUNameUnderscoresAccepted(t *testing.T) {
 	}
 	if gn, _ := f.search["gpu_name"].(map[string]interface{}); gn == nil || gn["eq"] != "RTX 3060" {
 		t.Errorf("gpu_name sent as %v, want the real name with a space", f.search["gpu_name"])
+	}
+}
+
+func TestVastAIOfferFilters(t *testing.T) {
+	cases := []struct {
+		name   string
+		cfg    func(c *vastConfig)
+		geo    map[string]interface{}
+		minMbs float64
+	}{
+		{"defaults", func(c *vastConfig) {}, map[string]interface{}{"notin": []interface{}{"CN"}}, 100},
+		{"allow-list wins", func(c *vastConfig) { c.Countries = []string{"FR", "DE"} }, map[string]interface{}{"in": []interface{}{"FR", "DE"}}, 100},
+		{"explicit empty exclusion allows all", func(c *vastConfig) { c.ExcludeCountries = []string{} }, nil, 100},
+		{"custom bandwidth", func(c *vastConfig) { c.MinDownloadMbps = 500 }, map[string]interface{}{"notin": []interface{}{"CN"}}, 500},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, p := newFakeVast(t)
+			tc.cfg(&p.(*vastAIProvider).cfg)
+			if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err != nil {
+				t.Fatal(err)
+			}
+			geo, _ := f.search["geolocation"].(map[string]interface{})
+			if fmt.Sprint(geo) != fmt.Sprint(tc.geo) {
+				t.Errorf("geolocation = %v, want %v", f.search["geolocation"], tc.geo)
+			}
+			if in, _ := f.search["inet_down"].(map[string]interface{}); in == nil || in["gte"] != tc.minMbs {
+				t.Errorf("inet_down = %v, want gte %v", f.search["inet_down"], tc.minMbs)
+			}
+		})
 	}
 }
