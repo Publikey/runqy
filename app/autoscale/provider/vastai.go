@@ -33,6 +33,9 @@ type vastConfig struct {
 	Countries        []string `json:"countries,omitempty"`         // allow-list of ISO country codes (empty = any)
 	ExcludeCountries []string `json:"exclude_countries,omitempty"` // default ["CN"]; set [] to allow every country
 	MinDownloadMbps  float64  `json:"min_download_mbps,omitempty"` // default 100
+	// VerifiedOnly rents only machines verified by Vast (default true). Unverified
+	// hosts were unreliable in testing: blocked registry, Docker errors, GPU not attachable.
+	VerifiedOnly *bool `json:"verified_only,omitempty"`
 }
 
 // Defaults for the offer filters when the config leaves them unset.
@@ -199,6 +202,9 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 		minDown = vastDefaultMinDownloadMbps
 	}
 	q["inet_down"] = map[string]interface{}{"gte": minDown}
+	if p.cfg.VerifiedOnly == nil || *p.cfg.VerifiedOnly {
+		q["verified"] = map[string]interface{}{"eq": true}
+	}
 	if bad := p.excludedMachines(time.Now()); len(bad) > 0 {
 		q["machine_id"] = map[string]interface{}{"notin": bad}
 	}
@@ -240,20 +246,26 @@ func (p *vastAIProvider) excludedMachines(now time.Time) []string {
 // it ends without ever starting, that its machine is bad (host fault: full disk,
 // registry unreachable...). A container that started but whose worker never became
 // ready points at the image or the task code, not the host, so it is not penalised.
-func (p *vastAIProvider) observe(instanceID string, running, ended bool) {
+// It reports whether the instance ended as a host fault.
+func (p *vastAIProvider) observe(instanceID string, running, ended bool) (hostFault bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if running {
 		p.started[instanceID] = true
 	}
 	if !ended {
-		return
+		return false
 	}
-	if machine := p.placed[instanceID]; machine != "" && !p.started[instanceID] {
-		p.badMachines[machine] = time.Now().Add(badMachineTTL)
+	machine, known := p.placed[instanceID]
+	if known && !p.started[instanceID] {
+		hostFault = true
+		if machine != "" {
+			p.badMachines[machine] = time.Now().Add(badMachineTTL)
+		}
 	}
 	delete(p.placed, instanceID)
 	delete(p.started, instanceID)
+	return hostFault
 }
 
 // excludeCountries returns the configured exclusion list; nil (unset) means the default,
@@ -271,6 +283,7 @@ type vastInstance struct {
 	Label        *string     `json:"label"`
 	ActualStatus string      `json:"actual_status"`
 	CurState     string      `json:"cur_state"`
+	StatusMsg    *string     `json:"status_msg"`
 }
 
 // instance fetches one instance; nil means it does not exist (any more).
@@ -325,8 +338,12 @@ func (p *vastAIProvider) Status(ctx context.Context, instanceID string) (Instanc
 		return InstanceStatus{InstanceID: instanceID, Status: StatusTerminated}, nil
 	}
 	status := mapVastStatus(inst.ActualStatus, inst.CurState)
-	p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), status == StatusTerminated)
-	return InstanceStatus{InstanceID: instanceID, Status: status}, nil
+	hostFault := p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), status == StatusTerminated)
+	msg := ""
+	if inst.StatusMsg != nil {
+		msg = *inst.StatusMsg
+	}
+	return InstanceStatus{InstanceID: instanceID, Status: status, Message: msg, HostFault: hostFault}, nil
 }
 
 // mapVastStatus maps Vast's actual_status/cur_state to internal provider states.

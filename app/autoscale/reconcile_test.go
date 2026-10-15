@@ -26,6 +26,7 @@ type fakeProvider struct {
 	mu           sync.Mutex
 	name         string
 	status       map[string]string // provider id -> status (default running)
+	hostFault    map[string]bool   // provider id -> report a host fault with the status
 	provisionErr error
 	destroyErr   error
 	provisions   int
@@ -66,7 +67,7 @@ func (f *fakeProvider) Status(_ context.Context, id string) (provider.InstanceSt
 	if s, ok := f.status[id]; ok {
 		st = s
 	}
-	return provider.InstanceStatus{InstanceID: id, Status: st}, nil
+	return provider.InstanceStatus{InstanceID: id, Status: st, HostFault: f.hostFault[id]}, nil
 }
 
 func newTestAutoscaler(t *testing.T) *Autoscaler {
@@ -84,6 +85,7 @@ func newTestAutoscaler(t *testing.T) *Autoscaler {
 		cfg:        &config.Config{HTTPPort: "3000", APIKey: "admin"},
 		backoff:    make(map[string]*provisionBackoff),
 		bootFails:  make(map[string]*provisionBackoff),
+		hostFails:  make(map[string]*provisionBackoff),
 		envWarned:  make(map[string]string),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
@@ -411,5 +413,45 @@ func TestProvisionPauseLoggedOnce(t *testing.T) {
 	}
 	if n := strings.Count(out, "scale-up 0 -> 1"); n != 1 {
 		t.Errorf("scale-up logged %d times, want once (only when actually attempted):\n%s", n, out)
+	}
+}
+
+func TestHostFaultsRetrySoonOnAnotherHost(t *testing.T) {
+	a := newTestAutoscaler(t)
+	ctx := context.Background()
+	now := time.Now()
+	prov := &fakeProvider{name: "mock",
+		status:    map[string]string{"p-h1": provider.StatusTerminated, "p-h2": provider.StatusTerminated},
+		hostFault: map[string]bool{"p-h1": true, "p-h2": true}}
+
+	// A host that could not start the container: short pause, no boot-failure penalty.
+	addInstance(t, a, "h1", StatusProvisioning, "", time.Minute)
+	reconcile(t, a, prov, nil, now)
+	if b := a.hostFails["inference"]; b == nil || b.until.Sub(now) != hostFaultRetryBase {
+		t.Fatalf("after 1st host fault: %+v, want a %s pause", b, hostFaultRetryBase)
+	}
+	if a.bootFails["inference"] != nil {
+		t.Error("a host fault must not count as a boot failure (25m+ pauses)")
+	}
+	inst, _ := a.instances.GetByInstanceID(ctx, "h1")
+	if !strings.Contains(string(inst.Metadata), "host fault") {
+		t.Errorf("reason should say host fault: %s", inst.Metadata)
+	}
+
+	// The next rental succeeds but that host fails too: the pause still grows, because a
+	// successful rental is not a success here, only a ready worker is.
+	a.provisionN(ctx, "inference", &queueworker.AutoscaleConfig{MaxWorkers: 1}, &fakeProvider{name: "mock"}, "p", 1, 30*time.Second, now.Add(time.Minute), "")
+	later := now.Add(2 * time.Minute)
+	addInstance(t, a, "h2", StatusProvisioning, "", time.Minute)
+	reconcile(t, a, prov, nil, later)
+	if b := a.hostFails["inference"]; b == nil || b.failures != 2 || b.until.Sub(later) != 2*hostFaultRetryBase {
+		t.Fatalf("after 2nd host fault: %+v, want 2 failures and a %s pause", b, 2*hostFaultRetryBase)
+	}
+
+	// A ready worker resets it.
+	addInstance(t, a, "good", StatusRunning, "w", time.Minute)
+	reconcile(t, a, &fakeProvider{}, map[string]*workerHeartbeat{"good": {workerID: "w", status: "running", lastBeat: later.Unix()}}, later)
+	if a.hostFails["inference"] != nil {
+		t.Errorf("host-fault pause not reset by a ready worker")
 	}
 }

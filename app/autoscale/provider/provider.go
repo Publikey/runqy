@@ -30,6 +30,11 @@ type InstanceStatus struct {
 	InstanceID string `json:"instance_id"`
 	Status     string `json:"status"` // one of the Status* constants
 	Message    string `json:"message,omitempty"`
+	// HostFault marks a failed/terminated instance whose container never started:
+	// the machine is at fault (GPU not attachable, Docker error...), not the image.
+	// The autoscaler then retries soon on another host instead of backing off as for
+	// a broken image.
+	HostFault bool `json:"host_fault,omitempty"`
 }
 
 // Provider is a pluggable cloud GPU backend. Implementations must be safe for concurrent

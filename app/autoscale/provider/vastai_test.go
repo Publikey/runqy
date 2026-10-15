@@ -50,6 +50,7 @@ func (f *fakeVast) handler(t *testing.T) http.HandlerFunc {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/bundles/":
 			b, _ := io.ReadAll(r.Body)
+			f.search = nil // keep only this request's filters
 			_ = json.Unmarshal(b, &f.search)
 			w.Write([]byte(`{"offers":[{"id":98765,"machine_id":54116,"dph_total":0.31,"gpu_name":"RTX 4090"},{"id":11111,"machine_id":777,"dph_total":0.45,"gpu_name":"RTX 4090"}]}`))
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/asks/"):
@@ -299,5 +300,19 @@ func TestVastAIDoesNotBlameHostWhenContainerStarted(t *testing.T) {
 	p.Provision(ctx, spec)
 	if _, excluded := f.search["machine_id"]; excluded {
 		t.Fatalf("host excluded although the container started: %v", f.search["machine_id"])
+	}
+}
+
+func TestVastAIVerifiedOnlyByDefault(t *testing.T) {
+	f, p := newFakeVast(t)
+	p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if v, _ := f.search["verified"].(map[string]interface{}); v == nil || v["eq"] != true {
+		t.Errorf("verified filter = %v, want eq true by default", f.search["verified"])
+	}
+	off := false
+	p.(*vastAIProvider).cfg.VerifiedOnly = &off
+	p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if _, set := f.search["verified"]; set {
+		t.Errorf("verified filter still sent with verified_only=false")
 	}
 }
