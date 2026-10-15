@@ -21,7 +21,7 @@ const vastDefaultBaseURL = "https://console.vast.ai/api/v0"
 // vastConfig is the decrypted provider config (stored in autoscale_providers.config).
 type vastConfig struct {
 	APIKey   string  `json:"api_key"`
-	GPUName  string  `json:"gpu_name"`           // Vast format with underscores, e.g. "RTX_4090"; overrides spec.GPU
+	GPUName  string  `json:"gpu_name"`           // e.g. "RTX 4090" (or "RTX_4090"); overrides spec.GPU
 	MaxPrice float64 `json:"max_price_per_hour"` // overrides spec.MaxPricePerHour when > 0
 	DiskGB   int     `json:"disk_gb"`            // fallback when spec.DiskGB is 0
 	OnStart  string  `json:"onstart"`            // optional onstart script contents
@@ -66,8 +66,11 @@ func (p *vastAIProvider) Name() string { return "vastai" }
 func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (string, error) {
 	gpuName := p.cfg.GPUName
 	if gpuName == "" {
-		gpuName = strings.ReplaceAll(strings.TrimSpace(spec.GPU), " ", "_")
+		gpuName = spec.GPU
 	}
+	// The API matches Vast's real GPU names, with spaces ("RTX 3060"). Vast's CLI and
+	// docs write underscores ("RTX_3060") and convert them client-side; accept both.
+	gpuName = strings.TrimSpace(strings.ReplaceAll(gpuName, "_", " "))
 	maxPrice := spec.MaxPricePerHour
 	if p.cfg.MaxPrice > 0 {
 		maxPrice = p.cfg.MaxPrice

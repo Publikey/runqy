@@ -106,11 +106,12 @@ func TestVastAILifecycle(t *testing.T) {
 	if err != nil || id != "55555" {
 		t.Fatalf("provision id=%q err=%v", id, err)
 	}
-	// Documented search: flat filters, on-demand, GPU name with underscores.
+	// Documented search: flat filters, on-demand.
 	if _, wrapped := f.search["q"]; wrapped {
 		t.Errorf("search body must not be wrapped in \"q\": %v", f.search)
 	}
-	if gn, _ := f.search["gpu_name"].(map[string]interface{}); gn == nil || gn["eq"] != "RTX_4090" {
+	// Real GPU name with spaces: the live API returns no offer for "RTX_4090".
+	if gn, _ := f.search["gpu_name"].(map[string]interface{}); gn == nil || gn["eq"] != "RTX 4090" {
 		t.Errorf("gpu_name filter wrong: %v", f.search["gpu_name"])
 	}
 	if f.search["type"] != "ondemand" {
@@ -208,5 +209,16 @@ func TestMapVastStatus(t *testing.T) {
 		if got := mapVastStatus(c.actual, c.cur); got != c.want {
 			t.Errorf("mapVastStatus(%q,%q)=%q want %q", c.actual, c.cur, got, c.want)
 		}
+	}
+}
+
+func TestVastAIGPUNameUnderscoresAccepted(t *testing.T) {
+	f, p := newFakeVast(t)
+	p.(*vastAIProvider).cfg.GPUName = "RTX_3060" // as written in Vast's docs and CLI
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err != nil {
+		t.Fatal(err)
+	}
+	if gn, _ := f.search["gpu_name"].(map[string]interface{}); gn == nil || gn["eq"] != "RTX 3060" {
+		t.Errorf("gpu_name sent as %v, want the real name with a space", f.search["gpu_name"])
 	}
 }
