@@ -140,3 +140,23 @@ func TestMapRunPodStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestRunPodGPUTypePreferenceList(t *testing.T) {
+	var body map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"pod-1"}`))
+	}))
+	defer srv.Close()
+	cfg, _ := json.Marshal(runpodConfig{APIKey: "k", BaseURL: srv.URL, GPUTypeID: "ignored",
+		GPUTypeIDs: []string{"NVIDIA GeForce RTX 3070", "NVIDIA RTX A4000"}})
+	p, _ := Build("runpod", cfg)
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(body["gpuTypeIds"]); got != "[NVIDIA GeForce RTX 3070 NVIDIA RTX A4000]" {
+		t.Errorf("gpuTypeIds = %s, want the preference list in order", got)
+	}
+}

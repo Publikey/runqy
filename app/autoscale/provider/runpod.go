@@ -19,13 +19,17 @@ const runpodDefaultBaseURL = "https://rest.runpod.io/v1"
 
 // runpodConfig is the decrypted provider config (stored in autoscale_providers.config).
 type runpodConfig struct {
-	APIKey          string `json:"api_key"`
-	GPUTypeID       string `json:"gpu_type_id"`       // exact RunPod id, e.g. "NVIDIA GeForce RTX 4090"
-	CloudType       string `json:"cloud_type"`        // "SECURE" (default) or "COMMUNITY"
-	ContainerDiskGB int    `json:"container_disk_gb"` // fallback when InstanceSpec.DiskGB is 0
-	VolumeGB        int    `json:"volume_in_gb"`      // optional persistent volume
-	VolumeMountPath string `json:"volume_mount_path"` // optional, e.g. "/workspace"
-	BaseURL         string `json:"base_url"`          // optional override (tests)
+	APIKey    string `json:"api_key"`
+	GPUTypeID string `json:"gpu_type_id"` // exact RunPod id, e.g. "NVIDIA GeForce RTX 4090"
+	// GPUTypeIDs lists acceptable GPU types in order of preference; RunPod rents the
+	// first one available. Takes precedence over gpu_type_id. Cheap types are often
+	// out of stock, so a list makes rentals far more likely to succeed.
+	GPUTypeIDs      []string `json:"gpu_type_ids,omitempty"`
+	CloudType       string   `json:"cloud_type"`        // "SECURE" (default) or "COMMUNITY"
+	ContainerDiskGB int      `json:"container_disk_gb"` // fallback when InstanceSpec.DiskGB is 0
+	VolumeGB        int      `json:"volume_in_gb"`      // optional persistent volume
+	VolumeMountPath string   `json:"volume_mount_path"` // optional, e.g. "/workspace"
+	BaseURL         string   `json:"base_url"`          // optional override (tests)
 	// MinCUDAVersion restricts hosts to drivers supporting at least this CUDA version
 	// (default "12.8", required by the inference image). "none" disables the filter.
 	MinCUDAVersion string `json:"min_cuda_version,omitempty"`
@@ -84,9 +88,15 @@ type createPodResponse struct {
 }
 
 func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (string, error) {
-	gpuType := p.cfg.GPUTypeID
-	if gpuType == "" {
-		gpuType = spec.GPU
+	gpuTypes := p.cfg.GPUTypeIDs
+	if len(gpuTypes) == 0 {
+		gpuType := p.cfg.GPUTypeID
+		if gpuType == "" {
+			gpuType = spec.GPU
+		}
+		if gpuType != "" {
+			gpuTypes = []string{gpuType}
+		}
 	}
 	disk := spec.DiskGB
 	if disk <= 0 {
@@ -101,8 +111,8 @@ func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 		"containerDiskInGb": disk,
 		"env":               spec.Env, // RunPod REST takes env as a {KEY:VALUE} object
 	}
-	if gpuType != "" {
-		body["gpuTypeIds"] = []string{gpuType}
+	if len(gpuTypes) > 0 {
+		body["gpuTypeIds"] = gpuTypes
 	}
 	// RunPod creates (and bills) a 20 GB persistent volume when volumeInGb is omitted:
 	// workers do not need one unless configured.
