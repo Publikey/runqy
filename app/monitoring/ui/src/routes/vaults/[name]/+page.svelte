@@ -28,7 +28,7 @@
 		action: () => {}
 	});
 
-	let vaultName = $derived($page.params.name);
+	let vaultName = $derived($page.params.name ?? '');
 
 	async function loadData() {
 		try {

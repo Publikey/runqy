@@ -119,8 +119,8 @@ type ReloadResponse struct {
 
 // CreateQueueRequest is the request body for creating a queue
 type CreateQueueRequest struct {
-	Name       string                      `json:"name" binding:"required"`
-	Priority   int                         `json:"priority" binding:"required,min=1"`
+	Name       string                        `json:"name" binding:"required"`
+	Priority   int                           `json:"priority" binding:"required,min=1"`
 	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
@@ -412,6 +412,16 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
 				return
 			}
+			// Reject malformed autoscale config.
+			if err := req.Deployment.Autoscale.Validate(); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
+				return
+			}
+			// Reject malformed alert overrides.
+			if err := req.Deployment.Alerts.Validate(); err != nil {
+				c.JSON(http.StatusBadRequest, models.APIErrorResponse{Errors: []string{err.Error()}})
+				return
+			}
 		}
 
 		ctx := c.Request.Context()
@@ -598,6 +608,15 @@ func ReloadFromYAMLContext(ctx context.Context, store *queueworker.Store, dir st
 	return reloadFromYAML(ctx, store, dir)
 }
 
+// alertSettingsSink stores the global `alerts` block found while loading queue YAML. It
+// is set by the server (SetAlertSettingsSink); when nil the block is ignored.
+var alertSettingsSink func(ctx context.Context, s *queueworker.AlertSettings) error
+
+// SetAlertSettingsSink registers where the YAML `alerts` block is saved on load/reload.
+func SetAlertSettingsSink(fn func(ctx context.Context, s *queueworker.AlertSettings) error) {
+	alertSettingsSink = fn
+}
+
 // reloadFromYAML loads configurations from YAML files and saves to DB
 func reloadFromYAML(ctx context.Context, store *queueworker.Store, dir string) ([]string, []string) {
 	var reloaded []string
@@ -645,6 +664,20 @@ func reloadFromYAML(ctx context.Context, store *queueworker.Store, dir string) (
 			log.Printf("[QUEUEWORKER] Warning: failed to register asynq queues: %v", err)
 		} else {
 			log.Printf("[QUEUEWORKER] Registered queues in asynq: %v", reloaded)
+		}
+	}
+
+	// Global alert settings: the YAML block (if any) replaces the stored settings.
+	if alertSettingsSink != nil {
+		settings, err := queueworker.GlobalAlertSettings(yamls)
+		if err != nil {
+			errors = append(errors, "alerts: "+err.Error())
+		} else if settings != nil {
+			if err := alertSettingsSink(ctx, settings); err != nil {
+				errors = append(errors, "alerts: failed to save settings: "+err.Error())
+			} else {
+				log.Printf("[ALERTS] Settings loaded from YAML (enabled=%v, provider=%s)", settings.Enabled, settings.Provider)
+			}
 		}
 	}
 

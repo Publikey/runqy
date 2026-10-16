@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { parseWorkerQueues } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -35,16 +36,6 @@
 		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
 		if (worker.status === 'running') return 'idle';
 		return 'stopped'; // fallback for unknown statuses
-	}
-
-	// Parse queues string like "map[queue1:5 queue2:5]" to array of {name, priority}
-	function parseQueues(queuesStr: string): { name: string; priority: number }[] {
-		const match = queuesStr.match(/map\[(.*)\]/);
-		if (!match) return [];
-		return match[1].split(' ').map(q => {
-			const [name, priorityStr] = q.split(':');
-			return { name, priority: parseInt(priorityStr, 10) || 0 };
-		}).filter(q => q.name);
 	}
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -262,7 +253,7 @@
 								</td>
 								<td>
 									<div class="flex flex-wrap gap-1">
-										{#each parseQueues(worker.queues) as queue (queue.name)}
+										{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
 											<span class="badge preset-outlined-primary-500 text-xs">
 												{queue.name}
 												{#if queue.priority === 0 && getWorkerStatus(worker) === 'bootstrapping'}

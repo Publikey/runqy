@@ -112,8 +112,9 @@ func LoadFile(path string) (*QueueWorkersYAML, error) {
 		return nil, fmt.Errorf("yaml parse error: %w", err)
 	}
 
-	// Skip files that don't have the expected structure
-	if cfg.Queues == nil || len(cfg.Queues) == 0 {
+	// Skip files that don't have the expected structure (a file may hold only the
+	// global alerts block)
+	if len(cfg.Queues) == 0 && cfg.Alerts == nil {
 		return nil, nil
 	}
 
@@ -166,10 +167,24 @@ func (c *QueueWorkersYAML) Validate() error {
 		if q.Deployment.StartupCmd == "" {
 			return fmt.Errorf("queue '%s': deployment.startup_cmd is required", queueName)
 		}
+		// Workers refuse a deployment without a branch; fail here rather than at worker boot.
+		if q.Deployment.Branch == "" {
+			return fmt.Errorf("queue '%s': deployment.branch is required", queueName)
+		}
 		// Reject malformed task lifecycle limits rather than silently ignoring them.
 		if err := q.Deployment.Limits.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': deployment.%w", queueName, err)
 		}
+		// Reject malformed autoscale config rather than silently ignoring it.
+		if err := q.Autoscale.Validate(); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
+		if err := q.Alerts.Validate(); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
+	}
+	if err := c.Alerts.Validate(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -192,6 +207,8 @@ func (q *QueueYAML) ToQueueAndSubQueues(baseName string) (*Queue, []SubQueue) {
 			Vaults:             q.Deployment.Vaults,
 			GitToken:           q.Deployment.GitToken,
 			Limits:             q.Deployment.Limits,
+			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             q.Alerts,    // same for the alerts override
 		}
 	}
 
@@ -247,6 +264,8 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 			Vaults:             q.Deployment.Vaults,
 			GitToken:           q.Deployment.GitToken,
 			Limits:             q.Deployment.Limits,
+			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             q.Alerts,    // same for the alerts override
 		}
 	}
 
@@ -254,9 +273,9 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 		// Create a config for each sub-queue
 		for _, sq := range q.SubQueues {
 			cfg := &QueueConfig{
-				Name:       BuildFullQueueName(baseName, sq.Name),
-				Priority:   sq.Priority,
-	
+				Name:     BuildFullQueueName(baseName, sq.Name),
+				Priority: sq.Priority,
+
 				Deployment: deployment,
 			}
 			configs = append(configs, cfg)
@@ -264,8 +283,8 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 	} else {
 		// No sub-queues, create single config with .default suffix
 		cfg := &QueueConfig{
-			Name:       BuildFullQueueName(baseName, DefaultSubQueueName),
-			Priority:   q.Priority,
+			Name:     BuildFullQueueName(baseName, DefaultSubQueueName),
+			Priority: q.Priority,
 
 			Deployment: deployment,
 		}

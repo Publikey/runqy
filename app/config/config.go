@@ -86,7 +86,9 @@ func Load() *Config {
 		PostgresDB:       getEnv("DATABASE_DBNAME", "sdxl_queuing_dev"),
 		PostgresSSL:      getEnv("DATABASE_SSL", "disable"),
 
-		// SQLite (UseSQLite is set by CLI flag, not env var)
+		// SQLite: --sqlite flag, or RUNQY_USE_SQLITE=true where the command line is hard
+		// to change (container platforms).
+		UseSQLite:    strings.EqualFold(os.Getenv("RUNQY_USE_SQLITE"), "true"),
 		SQLiteDBPath: getEnv("SQLITE_DB_PATH", "runqy.db"),
 
 		// Monitoring

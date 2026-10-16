@@ -10,19 +10,23 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/api"
 	"github.com/Publikey/runqy/auth"
+	"github.com/Publikey/runqy/autoscale"
+	"github.com/Publikey/runqy/autoscale/provider"
 	_ "github.com/Publikey/runqy/docs"
+	"github.com/Publikey/runqy/health"
 	"github.com/Publikey/runqy/models"
 	"github.com/Publikey/runqy/monitoring"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/Publikey/runqy/watcher"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/third_party/asynq/metrics"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/spf13/cobra"
@@ -289,6 +293,25 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Initialize queue worker store (database for configs, Redis for asynq)
 	qwStore := queueworker.NewStore(db, redisAddr.RDB)
 
+	// Initialize autoscaling: encrypted provider-config store + instance tracking store
+	autoscaleProviderStore := provider.NewStore(db)
+	autoscaleInstanceStore := autoscale.NewStore(db)
+	autoScaler := autoscale.New(autoscaleInstanceStore, autoscaleProviderStore, qwStore, inspector, redisAddr.RDB, cfg)
+	autoScaler.SetEventSink(alerts.NewEventRecorder(redisAddr.RDB))
+	autoScaler.Start()
+
+	// Initialize alerting: settings (DB, also fed by the YAML `alerts` block on load/reload)
+	// and the leader-locked evaluator.
+	alertSettingsStore := alerts.NewSettingsStore(db)
+	api.SetAlertSettingsSink(alertSettingsStore.Save)
+	publicURL := os.Getenv("RUNQY_PUBLIC_URL")
+	alertsAPI := &alerts.API{Store: alertSettingsStore, Redis: redisAddr.RDB, Vault: vaultStore, PublicURL: publicURL}
+	alertEngine := alerts.NewEngine(health.NewCollector(qwStore, inspector, redisAddr.RDB), alertSettingsStore, redisAddr.RDB, vaultStore, publicURL)
+	alertEngine.Start()
+	if debugMode {
+		log.Println("[AUTOSCALE] Autoscaler started")
+	}
+
 	// Initialize monitoring UI (unless disabled)
 	var h *monitoring.HTTPHandler
 	if !disableUI {
@@ -299,15 +322,18 @@ func runServe(cmd *cobra.Command, args []string) {
 
 		var monErr error
 		h, monErr = monitoring.New(monitoring.Options{
-			RootPath:          "/monitoring",
-			RedisConnOpt:      redisAddr.AsynqOpt,
-			ReadOnly:          cfg.ReadOnly,
-			DB:                db,
-			VaultStore:        vaultStore,
-			QueueStore:        qwStore,
-			AuthStore:         authStore,
-			PrometheusAddress: cfg.PrometheusAddress,
-			Config:            cfg,
+			RootPath:               "/monitoring",
+			RedisConnOpt:           redisAddr.AsynqOpt,
+			ReadOnly:               cfg.ReadOnly,
+			DB:                     db,
+			VaultStore:             vaultStore,
+			QueueStore:             qwStore,
+			AuthStore:              authStore,
+			AutoscaleStore:         autoscaleInstanceStore,
+			AutoscaleProviderStore: autoscaleProviderStore,
+			AlertsAPI:              alertsAPI,
+			PrometheusAddress:      cfg.PrometheusAddress,
+			Config:                 cfg,
 		})
 		if monErr != nil {
 			log.Fatalf("Failed to initialize monitoring UI: %v", monErr)
@@ -420,6 +446,8 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt)
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
+	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, cfg.APIKey)
+	api.SetupAlertsAPI(router, alertsAPI, cfg.APIKey)
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.StaticFile("/swagger.yaml", "./docs/swagger.yaml")
@@ -462,6 +490,10 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	sig := <-quit
 	log.Printf("Received %v, shutting down...", sig)
+
+	// Stop background loops before the inspector/redis they depend on are closed (deferred).
+	autoScaler.Stop()
+	alertEngine.Stop()
 
 	// Stop watchers with timeout to prevent blocking forever
 	watcherDone := make(chan struct{})

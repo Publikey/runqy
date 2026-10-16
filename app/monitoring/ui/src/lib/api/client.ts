@@ -7,7 +7,6 @@ import type {
 	TaskListResponse,
 	TaskState,
 	Worker,
-	WorkerInfo,
 	ServerInfo,
 	RedisInfo,
 	DailyStats,
@@ -19,7 +18,11 @@ import type {
 	QueueStatsResponse,
 	QueueConfigDetail,
 	DeploymentConfig,
-	PlaygroundEnqueueResponse
+	PlaygroundEnqueueResponse,
+	AutoscaleStatus,
+	AutoscaleProvider,
+	AlertsOverview,
+	AlertSettings
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -205,10 +208,6 @@ export async function runAllArchivedTasks(qname: string): Promise<{ run_count: n
 // Worker API
 export async function getWorkers(): Promise<{ workers: Worker[] }> {
 	return fetchJson(`${BASE_URL}/workers`);
-}
-
-export async function getWorkerInfo(workerId: string): Promise<WorkerInfo> {
-	return fetchJson(`${BASE_URL}/workers/${encodeURIComponent(workerId)}`);
 }
 
 export async function getWorkerLogs(workerId: string, n: number = 200): Promise<{ lines: string[]; count: number }> {
@@ -402,6 +401,67 @@ export async function restoreQueueConfig(name: string): Promise<{ message: strin
 	});
 }
 
+// Autoscale API
+export async function getAutoscaleStatus(): Promise<AutoscaleStatus> {
+	return fetchJson(`${BASE_URL}/autoscale/status`);
+}
+
+export async function protectInstance(id: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/protect`, {
+		method: 'POST'
+	});
+}
+
+export async function unprotectInstance(id: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/unprotect`, {
+		method: 'POST'
+	});
+}
+
+export async function getAutoscaleProviderTypes(): Promise<{ types: string[] }> {
+	return fetchJson(`${BASE_URL}/autoscale/provider-types`);
+}
+
+export async function getAutoscaleProviders(): Promise<{ providers: AutoscaleProvider[]; count: number }> {
+	return fetchJson(`${BASE_URL}/autoscale/providers`);
+}
+
+export async function getAutoscaleProvider(name: string): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`);
+}
+
+export async function createAutoscaleProvider(body: {
+	name: string;
+	provider_type: string;
+	config: Record<string, unknown>;
+	enabled?: boolean;
+}): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers`, {
+		method: 'POST',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function updateAutoscaleProvider(
+	name: string,
+	body: {
+		provider_type: string;
+		config: Record<string, unknown>;
+		enabled: boolean;
+	}
+): Promise<AutoscaleProvider> {
+	return fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`, {
+		method: 'PUT',
+		body: JSON.stringify(body)
+	});
+}
+
+export async function deleteAutoscaleProvider(name: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/providers/${encodeURIComponent(name)}`, {
+		method: 'DELETE'
+	});
+}
+
 // Playground API
 export async function playgroundEnqueue(
 	queue: string,
@@ -412,5 +472,26 @@ export async function playgroundEnqueue(
 	return fetchJson(`${BASE_URL}/playground/enqueue`, {
 		method: 'POST',
 		body: JSON.stringify({ queue, payload, count, timeout })
+	});
+}
+
+// Alerting API
+export async function getAlertsOverview(history: number = 50): Promise<AlertsOverview> {
+	return fetchJson(`${BASE_URL}/alerts?history=${history}`);
+}
+
+export async function getAlertSettings(): Promise<{ settings: AlertSettings }> {
+	return fetchJson(`${BASE_URL}/alerts/settings`);
+}
+
+export async function saveAlertSettings(settings: AlertSettings): Promise<{ message: string; settings: AlertSettings }> {
+	return fetchJson(`${BASE_URL}/alerts/settings`, { method: 'PUT', body: JSON.stringify(settings) });
+}
+
+// Sends a test email with the given (possibly unsaved) settings, or the saved ones.
+export async function sendTestAlert(settings?: AlertSettings): Promise<{ message: string }> {
+	return fetchJson(`${BASE_URL}/alerts/test`, {
+		method: 'POST',
+		body: settings ? JSON.stringify(settings) : undefined
 	});
 }

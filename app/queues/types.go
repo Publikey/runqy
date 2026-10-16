@@ -60,6 +60,9 @@ func NormalizeQueueName(name string) string {
 // QueueWorkersYAML is the root config structure
 type QueueWorkersYAML struct {
 	Queues map[string]QueueYAML `yaml:"queues"`
+	// Alerts is the optional global alerting configuration. It is applied to the stored
+	// alert settings on load/reload; at most one loaded file may define it.
+	Alerts *AlertSettings `yaml:"alerts,omitempty"`
 }
 
 // QueueYAML represents a single queue configuration in YAML
@@ -67,9 +70,11 @@ type QueueWorkersYAML struct {
 // 1. With sub_queues: creates multiple queues like "inference.high", "inference.low"
 // 2. Without sub_queues: uses priority field directly, creates "name.default"
 type QueueYAML struct {
-	Priority   int             `yaml:"priority,omitempty"`   // Used when no sub_queues defined
-	Deployment *DeploymentYAML `yaml:"deployment,omitempty"` // Deployment configuration
-	SubQueues  []SubQueueYAML  `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
+	Priority   int                `yaml:"priority,omitempty"`   // Used when no sub_queues defined
+	Deployment *DeploymentYAML    `yaml:"deployment,omitempty"` // Deployment configuration
+	Autoscale  *AutoscaleConfig   `yaml:"autoscale,omitempty"`  // GPU autoscaling configuration (sibling of deployment)
+	Alerts     *QueueAlertsConfig `yaml:"alerts,omitempty"`     // Alert overrides for this queue (sibling of deployment)
+	SubQueues  []SubQueueYAML     `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
 
 	// Input and Output describe the schema of the task payload for this queue
 	Input  []FieldSchema `yaml:"input,omitempty"`
@@ -179,6 +184,30 @@ type DeploymentConfig struct {
 	Vaults             []string      `json:"vaults,omitempty"`    // List of vault names to inject as env vars
 	GitToken           string        `json:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
 	Limits             *LimitsConfig `json:"limits,omitempty"`    // Per-queue task lifecycle overrides (stored in deployment JSONB)
+
+	// Autoscale is the per-queue GPU autoscaling config. It is stored alongside the rest of
+	// the deployment JSON so it round-trips through the DB, REST API/CLI, and the UI. In YAML
+	// it is authored as a sibling of `deployment` (QueueYAML.Autoscale) and folded in here on load.
+	Autoscale *AutoscaleConfig `json:"autoscale,omitempty"`
+
+	// Alerts is the per-queue alert override, stored like Autoscale (authored in YAML as a
+	// sibling of `deployment`, QueueYAML.Alerts).
+	Alerts *QueueAlertsConfig `json:"alerts,omitempty"`
+}
+
+// ValidateOverrides checks the optional per-queue blocks (limits, autoscale, alerts) so
+// every entry point (YAML, REST API, dashboard) rejects the same malformed values.
+func (d *DeploymentConfig) ValidateOverrides() error {
+	if d == nil {
+		return nil
+	}
+	if err := d.Limits.Validate(); err != nil {
+		return err
+	}
+	if err := d.Autoscale.Validate(); err != nil {
+		return err
+	}
+	return d.Alerts.Validate()
 }
 
 // QueueSummary is a lightweight version for listing queues

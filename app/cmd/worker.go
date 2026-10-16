@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Publikey/runqy/models"
+	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/spf13/cobra"
 )
 
@@ -129,7 +130,7 @@ func runWorkerList(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			workerID,
 			status,
-			truncate(queues, 30),
+			truncate(queueworker.FormatWorkerQueues(queues), 30),
 			concurrency,
 			lastBeatAgo,
 			staleStr,
@@ -177,7 +178,7 @@ func runWorkerListRemote() error {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
 			worker.WorkerID,
 			worker.Status,
-			truncate(worker.Queues, 30),
+			truncate(queueworker.FormatWorkerQueues(worker.Queues), 30),
 			worker.Concurrency,
 			lastBeatAgo,
 			staleStr,
@@ -222,7 +223,7 @@ func runWorkerInfo(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Worker ID:   %s\n", workerID)
 	fmt.Printf("Status:      %s\n", data["status"])
-	fmt.Printf("Queues:      %s\n", data["queues"])
+	fmt.Printf("Queues:      %s\n", queueworker.FormatWorkerQueues(data["queues"]))
 	fmt.Printf("Concurrency: %s\n", data["concurrency"])
 
 	if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil && startedAt > 0 {
@@ -262,7 +263,7 @@ func runWorkerInfoRemote(workerID string) error {
 
 	fmt.Printf("Worker ID:   %s\n", worker.WorkerID)
 	fmt.Printf("Status:      %s\n", worker.Status)
-	fmt.Printf("Queues:      %s\n", worker.Queues)
+	fmt.Printf("Queues:      %s\n", queueworker.FormatWorkerQueues(worker.Queues))
 	fmt.Printf("Concurrency: %d\n", worker.Concurrency)
 
 	if worker.StartedAt > 0 {

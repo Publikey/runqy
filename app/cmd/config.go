@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Publikey/runqy/alerts"
 	"github.com/Publikey/runqy/models"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/spf13/cobra"
@@ -339,6 +340,17 @@ func runConfigReload(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Global alert settings (top-level `alerts` block)
+	if settings, err := queueworker.GlobalAlertSettings(yamls); err != nil {
+		errors = append(errors, "alerts: "+err.Error())
+	} else if settings != nil {
+		if err := alerts.NewSettingsStore(pgDB).Save(ctx, settings); err != nil {
+			errors = append(errors, "alerts: failed to save settings: "+err.Error())
+		} else {
+			fmt.Println("Alert settings loaded from YAML.")
+		}
+	}
+
 	fmt.Printf("Reloaded %d queue configuration(s):\n", len(reloaded))
 	for _, name := range reloaded {
 		fmt.Printf("  - %s\n", name)
@@ -425,9 +437,11 @@ func runConfigValidate(cmd *cobra.Command, args []string) error {
 
 // SimpleQueueYAML represents a simple single-queue YAML format
 type SimpleQueueYAML struct {
-	Name       string                    `yaml:"name"`
-	Priority   int                       `yaml:"priority"`
-	Deployment *queueworker.DeploymentYAML `yaml:"deployment,omitempty"`
+	Name       string                         `yaml:"name"`
+	Priority   int                            `yaml:"priority"`
+	Deployment *queueworker.DeploymentYAML    `yaml:"deployment,omitempty"`
+	Autoscale  *queueworker.AutoscaleConfig   `yaml:"autoscale,omitempty"`
+	Alerts     *queueworker.QueueAlertsConfig `yaml:"alerts,omitempty"`
 }
 
 func runConfigCreate(cmd *cobra.Command, args []string) error {
@@ -591,22 +605,11 @@ func runConfigCreateRemote() error {
 		var errors []string
 
 		for _, config := range configs {
+			// Pass the deployment through as-is: it already carries limits, autoscale, etc.
 			req := &CreateQueueRequest{
-				Name:     config.Name,
-				Priority: config.Priority,
-			}
-			if config.Deployment != nil {
-				req.Deployment = &DeploymentConfigAPI{
-					GitURL:             config.Deployment.GitURL,
-					Branch:             config.Deployment.Branch,
-					CodePath:           config.Deployment.CodePath,
-					StartupCmd:         config.Deployment.StartupCmd,
-					Mode:               config.Deployment.Mode,
-					StartupTimeoutSecs: config.Deployment.StartupTimeoutSecs,
-					RedisStorage:       config.Deployment.RedisStorage,
-					Vaults:             config.Deployment.Vaults,
-					GitToken:           config.Deployment.GitToken,
-				}
+				Name:       config.Name,
+				Priority:   config.Priority,
+				Deployment: config.Deployment,
 			}
 
 			resp, err := apiClient.CreateQueue(req, createForce)
@@ -661,7 +664,7 @@ func runConfigCreateRemote() error {
 	req := &CreateQueueRequest{
 		Name:     createName,
 		Priority: createPriority,
-		Deployment: &DeploymentConfigAPI{
+		Deployment: &queueworker.DeploymentConfig{
 			GitURL:     createGitURL,
 			Branch:     createBranch,
 			CodePath:   createCodePath,
@@ -748,6 +751,9 @@ func loadConfigsFromFile(filePath string) ([]*queueworker.QueueConfig, error) {
 			RedisStorage:       simple.Deployment.RedisStorage,
 			Vaults:             simple.Deployment.Vaults,
 			GitToken:           simple.Deployment.GitToken,
+			Limits:             simple.Deployment.Limits,
+			Autoscale:          simple.Autoscale, // fold the sibling autoscale block into the deployment JSON
+			Alerts:             simple.Alerts,
 		}
 	}
 

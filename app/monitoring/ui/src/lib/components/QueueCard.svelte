@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { workerQueueNames } from '$lib/utils/workerQueues';
 	import type { Queue, Worker } from '$lib/api/types';
 	import { formatNumber, formatBytes, formatDuration, truncateId } from '$lib/utils/format';
 
@@ -16,17 +17,10 @@
 
 	let menuOpen = $state(false);
 
-	// Parse worker queues string like "map[queue1:5 queue2:5]" to get queue names
-	function parseWorkerQueues(queuesStr: string): string[] {
-		const match = queuesStr.match(/map\[(.*)]/);
-		if (!match) return [];
-		return match[1].split(' ').map(q => q.split(':')[0]).filter(Boolean);
-	}
-
 	// Find workers listening on this queue
 	let listeningWorkers = $derived(
 		workers.filter(w => {
-			const workerQueues = parseWorkerQueues(w.queues);
+			const workerQueues = workerQueueNames(w.queues);
 			return workerQueues.includes(queue.queue);
 		})
 	);

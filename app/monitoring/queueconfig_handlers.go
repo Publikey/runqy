@@ -159,6 +159,10 @@ func newCreateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 				writeJSONError(w, "startup_cmd is required for deployment", http.StatusBadRequest)
 				return
 			}
+			if err := req.Deployment.ValidateOverrides(); err != nil {
+				writeJSONError(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 
 		ctx := r.Context()
@@ -248,6 +252,10 @@ func newUpdateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 			}
 			if req.Deployment.StartupCmd == "" {
 				writeJSONError(w, "startup_cmd is required for deployment", http.StatusBadRequest)
+				return
+			}
+			if err := req.Deployment.ValidateOverrides(); err != nil {
+				writeJSONError(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 		}

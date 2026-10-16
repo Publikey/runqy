@@ -27,7 +27,7 @@
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
-	let qname = $derived(decodeURIComponent($page.params.qname));
+	let qname = $derived(decodeURIComponent($page.params.qname ?? ''));
 
 	type TabState = 'active' | 'pending' | 'retry' | 'archived' | 'completed';
 	const tabs: { label: string; state: TabState }[] = [

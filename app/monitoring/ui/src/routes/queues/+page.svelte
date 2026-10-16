@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { workerQueueNames } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -67,17 +68,10 @@
 		expandedGroups = newSet;
 	}
 
-	// Parse worker queues string like "map[queue1:5 queue2:5]" to get queue names
-	function parseWorkerQueues(queuesStr: string): string[] {
-		const match = queuesStr.match(/map\[(.*)]/);
-		if (!match) return [];
-		return match[1].split(' ').map(q => q.split(':')[0]).filter(Boolean);
-	}
-
 	// Get workers for a specific queue
 	function getWorkersForQueue(queueName: string): Worker[] {
 		return $workersStore.workers.filter(w => {
-			const workerQueues = parseWorkerQueues(w.queues);
+			const workerQueues = workerQueueNames(w.queues);
 			return workerQueues.includes(queueName);
 		});
 	}

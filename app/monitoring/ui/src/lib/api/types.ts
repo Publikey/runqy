@@ -67,7 +67,7 @@ export interface Worker {
 	started_at: number;  // Unix timestamp
 	last_beat: number;   // Unix timestamp
 	concurrency: number;
-	queues: string;      // String like "map[queue1:5 queue2:5]"
+	queues: string;      // JSON {"queue":priority}; legacy workers: "map[queue1:5 queue2:5]" (see parseWorkerQueues)
 	status: string;
 	is_stale: boolean;
 	metrics?: WorkerMetrics;
@@ -265,6 +265,77 @@ export interface DeploymentConfig {
 	vaults?: string[];
 	git_token?: string;
 	limits?: QueueLimitsConfig;
+	autoscale?: AutoscaleConfig;
+	alerts?: QueueAlertsConfig;
+}
+
+// Autoscaling types
+export type AutoscaleInstanceStatus =
+	| 'provisioning'
+	| 'running'
+	| 'draining'
+	| 'destroying'
+	| 'terminated'
+	| 'failed';
+
+export interface AutoscaleInstance {
+	instance_id: string;
+	provider: string;
+	queue: string;
+	status: AutoscaleInstanceStatus | string;
+	worker_id: string;
+	protected: boolean;
+	price_per_hour: number;
+	cost_accumulated: number;
+	created_at: string;
+	last_job_at?: string;
+	updated_at: string;
+}
+
+export interface AutoscaleStatus {
+	instances: AutoscaleInstance[];
+	count: number;
+	total_cost: number;
+}
+
+export interface AutoscaleProvider {
+	name: string;
+	provider_type: string;
+	config: Record<string, unknown>;
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export type ScaleTriggerType = 'no_workers' | 'queue_depth' | 'latency' | 'schedule' | 'idle';
+
+export interface ScaleTrigger {
+	trigger: ScaleTriggerType;
+	threshold?: number;
+	cron?: string;
+	workers?: number;
+	duration?: string; // schedule scale_up: how long to hold the target
+	timeout?: string;
+	max_latency?: string; // latency: oldest pending job age that triggers a scale-up
+}
+
+export interface AutoscaleInstanceSpec {
+	gpu?: string;
+	image?: string;
+	disk_gb?: number;
+	max_price_per_hour?: number;
+}
+
+export interface AutoscaleConfig {
+	enabled: boolean;
+	provider: string;
+	min_workers: number;
+	max_workers: number;
+	poll_interval: string;
+	boot_timeout?: string;
+	scale_up: ScaleTrigger[];
+	scale_down: ScaleTrigger[];
+	instance: AutoscaleInstanceSpec;
 }
 
 export interface FieldSchema {
@@ -289,4 +360,71 @@ export interface QueueConfigDetail {
 export interface PlaygroundEnqueueResponse {
 	tasks: { id: string; queue: string }[];
 	count: number;
+}
+
+// ---- Alerting ----
+
+export type AlertRuleType = 'no_workers' | 'latency' | 'pending' | 'worker_unhealthy' | 'autoscale_failure';
+
+export interface AlertRule {
+	type: AlertRuleType;
+	for?: string; // condition must hold this long before firing
+	max_latency?: string; // latency
+	threshold?: number; // pending
+	when_idle?: boolean; // no_workers: also fire when nothing is pending
+	disabled?: boolean; // queue override: turn this rule type off
+}
+
+export interface QueueAlertsConfig {
+	disabled?: boolean; // mute every alert for this queue
+	rules?: AlertRule[];
+}
+
+export interface AlertSettings {
+	enabled: boolean;
+	provider: 'smtp' | 'sendgrid';
+	from: string;
+	recipients: string[];
+	smtp?: {
+		host: string;
+		port?: number;
+		username?: string;
+		password?: string; // literal (masked when read), vault://vault/key, or empty for RUNQY_SMTP_PASSWORD
+		tls?: 'starttls' | 'tls' | 'none' | '';
+	};
+	sendgrid?: {
+		api_key?: string; // literal (masked when read), vault://vault/key, or empty for RUNQY_SENDGRID_API_KEY
+	};
+	rules?: AlertRule[];
+	repeat_interval?: string;
+	send_resolved?: boolean;
+}
+
+export interface ActiveAlert {
+	queue: string;
+	rule: AlertRuleType;
+	firing: boolean;
+	since: string;
+	fired_at?: string;
+	message: string;
+}
+
+export interface AlertHistoryEntry {
+	time: string;
+	queue: string;
+	rule: AlertRuleType;
+	status: 'firing' | 'resolved' | 'repeat' | 'event';
+	message: string;
+}
+
+export interface AlertsOverview {
+	enabled: boolean;
+	active: ActiveAlert[];
+	history: AlertHistoryEntry[];
+	status: {
+		last_eval?: string;
+		last_sent?: string;
+		last_error?: string;
+		last_error_at?: string;
+	};
 }

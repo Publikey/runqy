@@ -1,0 +1,49 @@
+# autoscale.yaml — GPU autoscaling example
+#
+# The server provisions GPU workers on a cloud provider while the queue has work,
+# and destroys them once they go idle.
+#
+# 1. Create a provider (start with the dry-run "mock" provider, which boots nothing):
+#      runqy autoscale providers create my-mock --type mock
+#    Real providers (runpod, vastai) also need, on the server:
+#      RUNQY_PUBLIC_URL      URL the rented machines use to reach this server
+#      RUNQY_WORKER_API_KEY  worker-scoped key sent to them (the admin key never is)
+#      RUNQY_VAULT_MASTER_KEY  provider credentials are stored encrypted
+# 2. Load this queue: runqy config create -f examples/autoscale.yaml
+# 3. Watch it: runqy autoscale status (or the Autoscaling page of the dashboard)
+
+queues:
+  asdemo:
+    priority: 10
+    deployment:
+      git_url: "https://github.com/Publikey/test-dummy-task.git"
+      branch: "master"
+      code_path: "dummy-task"
+      startup_cmd: "python main.py"
+    autoscale:
+      enabled: true
+      provider: my-mock
+      min_workers: 0
+      max_workers: 3
+      poll_interval: "30s"
+      boot_timeout: "20m"        # destroy an instance with no ready worker after this
+      scale_up:
+        - trigger: no_workers    # jobs pending and nobody listening -> 1 worker
+        - trigger: queue_depth   # more than 3 pending -> one more worker (never stacks while one boots)
+          threshold: 3
+        - trigger: latency       # oldest pending job older than 2m -> one more worker
+          max_latency: "2m"
+        - trigger: schedule      # pre-warm 2 workers on weekdays at 08:00, held for 10h
+          cron: "0 8 * * 1-5"
+          workers: 2
+          duration: "10h"
+      scale_down:
+        - trigger: idle          # destroy a worker idle for 5m (busy workers are never destroyed)
+          timeout: "5m"
+        - trigger: schedule      # back to min_workers every night
+          cron: "0 22 * * *"
+      instance:
+        gpu: "RTX 4090"
+        image: "ghcr.io/publikey/runqy-worker:inference"
+        disk_gb: 50
+        max_price_per_hour: 0.60
