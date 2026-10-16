@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	queueworker "github.com/Publikey/runqy/queues"
 )
 
@@ -264,6 +265,7 @@ type WorkerInfoAPI struct {
 	Queues      string `json:"queues"`
 	Status      string `json:"status"`
 	IsStale     bool   `json:"is_stale"`
+	control.WorkerFields
 }
 
 // WorkersResponse is the API response for listing workers

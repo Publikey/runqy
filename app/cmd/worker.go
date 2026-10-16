@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	"github.com/Publikey/runqy/models"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/spf13/cobra"
@@ -241,6 +242,8 @@ func runWorkerInfo(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	printWorkerControl(control.ParseWorkerFields(data))
+
 	// Print any additional fields
 	fmt.Println()
 	fmt.Println("All fields:")
@@ -280,8 +283,30 @@ func runWorkerInfoRemote(workerID string) error {
 			fmt.Println("WARNING: Worker is STALE (no heartbeat for >30s)")
 		}
 	}
+	printWorkerControl(worker.WorkerFields)
 
 	return nil
+}
+
+// printWorkerControl prints the version and control channel state of a worker.
+func printWorkerControl(f control.WorkerFields) {
+	if f.Version != "" {
+		fmt.Printf("Version:     %s\n", f.Version)
+	}
+	if len(f.ControlActions) == 0 {
+		fmt.Println("Control:     not supported (worker predates the control channel)")
+		return
+	}
+	if len(f.Held) > 0 {
+		fmt.Printf("Held:        %s (not taking new tasks)\n", strings.Join(f.Held, ", "))
+	}
+	if c := f.LastCommand; c != nil {
+		line := fmt.Sprintf("%s %s", c.Action, c.State)
+		if c.Message != "" {
+			line += ": " + c.Message
+		}
+		fmt.Printf("Last cmd:    %s (%s ago)\n", line, formatDuration(time.Since(time.Unix(c.At, 0))))
+	}
 }
 
 func formatDuration(d time.Duration) string {

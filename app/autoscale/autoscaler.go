@@ -11,6 +11,7 @@ import (
 
 	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/control"
 	"github.com/Publikey/runqy/health"
 	"github.com/Publikey/runqy/leader"
 	queueworker "github.com/Publikey/runqy/queues"
@@ -49,6 +50,12 @@ const maxBootBackoff = time.Hour
 // until its supervised process signals ready (see runqy-worker heartbeat).
 const workerStatusBootstrapping = "bootstrapping"
 
+// Statuses of a worker drained through the control channel.
+const (
+	workerStatusDraining = "draining" // not taking tasks, some still in flight
+	workerStatusDrained  = "drained"  // not taking tasks, nothing in flight
+)
+
 // Autoscaler is the background control loop that scales GPU workers per queue.
 type Autoscaler struct {
 	instances *Store
@@ -71,6 +78,7 @@ type Autoscaler struct {
 	backoffs   backoffStore                 // persists the three backoff maps (nil: memory only)
 	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
+	drainSent  map[string]string            // instance id -> worker id asked to drain before a scale-down
 	wasLeader  bool
 
 	events EventSink // optional: failures reported to alerting
@@ -141,6 +149,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		backoffs:   redisBackoffStore{rdb: rdb},
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
+		drainSent:  make(map[string]string),
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
@@ -245,6 +254,7 @@ func (a *Autoscaler) holdLeadership() bool {
 	if isLeader && !a.wasLeader {
 		a.staleSince = make(map[string]time.Time)
 		a.bootSince = make(map[string]bootObservation)
+		a.drainSent = make(map[string]string)
 		a.loadBackoffs(ctx, time.Now())
 	}
 	a.wasLeader = isLeader
@@ -320,10 +330,62 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		a.provisionN(ctx, parent, asc, prov, rec.Name, plan.provision, window, now, scaleLog)
 		return
 	}
-	for _, inst := range plan.destroy {
-		log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s", parent, inst.InstanceID)
-		a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+	a.scaleDown(ctx, prov, parent, live, plan.destroy, byInstance)
+}
+
+// scaleDown destroys the instances the plan removes. A worker that listens on the
+// control channel is drained first (it stops taking tasks) and destroyed once its
+// heartbeat says "drained", so no task is picked up just before the machine goes away.
+// Older workers are destroyed right away, as before. Instances the plan no longer
+// removes (load came back) are resumed.
+func (a *Autoscaler) scaleDown(ctx context.Context, prov provider.Provider, parent string, live, destroy []*Instance, byInstance map[string]*workerHeartbeat) {
+	removing := make(map[string]bool, len(destroy))
+	for _, inst := range destroy {
+		removing[inst.InstanceID] = true
+		hb := byInstance[inst.InstanceID]
+		if hb == nil || !hb.control.Supports(control.ActionDrain) || hb.status == workerStatusDrained {
+			delete(a.drainSent, inst.InstanceID)
+			log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s", parent, inst.InstanceID)
+			a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+			continue
+		}
+		if hb.status == workerStatusDraining && a.drainSent[inst.InstanceID] == hb.workerID {
+			continue // waiting for in-flight tasks
+		}
+		if err := a.sendControl(ctx, hb.workerID, control.ActionDrain); err != nil {
+			log.Printf("[AUTOSCALE] queue %q: cannot drain %s, destroying it: %v", parent, inst.InstanceID, err)
+			a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+			continue
+		}
+		if a.drainSent[inst.InstanceID] != hb.workerID {
+			log.Printf("[AUTOSCALE] queue %q: scale-down draining %s (worker %s) before teardown", parent, inst.InstanceID, hb.workerID)
+		}
+		a.drainSent[inst.InstanceID] = hb.workerID
 	}
+
+	// Load came back: resume the instances still draining that the plan now keeps.
+	for _, inst := range live {
+		workerID, sent := a.drainSent[inst.InstanceID]
+		if !sent || removing[inst.InstanceID] {
+			continue
+		}
+		delete(a.drainSent, inst.InstanceID)
+		if err := a.sendControl(ctx, workerID, control.ActionResume); err != nil {
+			log.Printf("[AUTOSCALE] queue %q: cannot resume %s: %v", parent, inst.InstanceID, err)
+			continue
+		}
+		log.Printf("[AUTOSCALE] queue %q: scale-down of %s cancelled, worker resumed", parent, inst.InstanceID)
+	}
+}
+
+// sendControl publishes a command on a worker's control channel (no-op without Redis,
+// as in unit tests).
+func (a *Autoscaler) sendControl(ctx context.Context, workerID, action string) error {
+	if a.rdb == nil {
+		return nil
+	}
+	_, err := control.Publish(ctx, a.rdb, control.WorkerChannel(workerID), control.Message{Action: action})
+	return err
 }
 
 // viewInstance builds the decision view of a live instance from its row and its worker's
@@ -739,6 +801,7 @@ type workerHeartbeat struct {
 	lastBeat   int64
 	active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
 	lastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
+	control    control.WorkerFields
 }
 
 // listWorkers reads all worker heartbeats from Redis.
@@ -758,6 +821,7 @@ func (a *Autoscaler) listWorkers(ctx context.Context) ([]workerHeartbeat, error)
 			lastBeat:   w.LastBeat,
 			active:     w.Active,
 			lastTaskAt: w.LastTaskAt,
+			control:    w.Control,
 		}
 	}
 	return out, nil

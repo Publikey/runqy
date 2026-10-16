@@ -6,9 +6,11 @@
 	import { base } from '$app/paths';
 	import { workersStore } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
-	import { getWorkerLogs } from '$lib/api/client';
+	import { getWorkerLogs, sendControl } from '$lib/api/client';
 	import { formatRelativeTime } from '$lib/utils/format';
-	import type { Worker, LogLine } from '$lib/api/types';
+	import { toaster } from '$lib/stores/toaster';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import type { Worker, LogLine, ControlAction } from '$lib/api/types';
 
 	let workerId = $derived(decodeURIComponent($page.params.worker_id ?? ''));
 
@@ -49,10 +51,55 @@
 		)
 	);
 
+	// Control channel (drain, resume, code/worker update, config reload)
+	let canControl = $derived((worker?.control_actions?.length ?? 0) > 0);
+	let held = $derived(worker?.held ?? []);
+	let lastCommand = $derived(worker?.last_command);
+	let updateVersion = $state('');
+	let sending = $state(false);
+	let confirmDialog = $state({ open: false, title: '', message: '', confirmText: 'Confirm', action: () => {} });
+
+	const actionLabels: Record<ControlAction, string> = {
+		drain: 'Drain',
+		resume: 'Resume',
+		code_update: 'Update code',
+		worker_update: 'Update worker',
+		config_reload: 'Reload config'
+	};
+
+	async function control(action: ControlAction, version?: string) {
+		sending = true;
+		try {
+			const res = await sendControl({ action, target: workerId, version });
+			if (res.receivers === 0) {
+				toaster.error({ title: 'Not delivered', description: 'The worker is not listening on its control channel.' });
+			} else {
+				toaster.success({ title: `${actionLabels[action]} sent`, description: 'The result appears below after the next heartbeat.' });
+			}
+			workersStore.fetch();
+		} catch (e) {
+			toaster.error({ title: 'Error', description: e instanceof Error ? e.message : 'Failed to send command' });
+		} finally {
+			sending = false;
+		}
+	}
+
+	function confirmControl(action: ControlAction, message: string, version?: string) {
+		confirmDialog = {
+			open: true,
+			title: actionLabels[action],
+			message,
+			confirmText: actionLabels[action],
+			action: () => control(action, version)
+		};
+	}
+
 	let status = $derived.by(() => {
 		if (!worker) return 'unknown';
 		if (worker.is_stale) return 'stale';
 		if (worker.status === 'bootstrapping') return 'bootstrapping';
+		if (worker.status === 'draining') return 'draining';
+		if (worker.status === 'drained') return 'drained';
 		if (worker.status === 'stopped') return 'stopped';
 		if (worker.status === 'running' && processingServerIds.has(worker.worker_id)) return 'processing';
 		if (worker.status === 'running') return 'idle';
@@ -160,9 +207,14 @@
 						<span class="badge preset-filled-warning-500 text-xs">Stale</span>
 					{:else if status === 'bootstrapping'}
 						<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
+					{:else if status === 'draining'}
+						<span class="badge preset-filled-warning-500 text-xs">Draining</span>
+					{:else if status === 'drained'}
+						<span class="badge preset-filled-surface-500 text-xs">Drained</span>
 					{:else}
 						<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
 					{/if}
+					{#if worker.version}<span class="ml-2">Version: {worker.version}</span>{/if}
 					<span class="ml-2">Concurrency: {worker.concurrency}</span>
 					<span class="ml-2">Started: {formatRelativeTime(new Date(worker.started_at * 1000))}</span>
 					<span class="ml-2">Last beat: {formatRelativeTime(new Date(worker.last_beat * 1000))}</span>
@@ -220,6 +272,67 @@
 			</div>
 		{/if}
 
+		<!-- Control -->
+		<div class="rq-card p-5 space-y-4">
+			<div class="flex items-center justify-between">
+				<h2 class="text-lg font-semibold">Control</h2>
+				{#if held.length > 0}
+					<span class="badge preset-filled-warning-500 text-xs">Not taking tasks: {held.join(', ')}</span>
+				{/if}
+			</div>
+			{#if !canControl}
+				<p class="text-sm text-surface-500">
+					This worker predates the control channel. Upgrade it to runqy-worker v0.4.0 or later to drain or update it from here.
+				</p>
+			{:else}
+				<div class="flex flex-wrap gap-2">
+					{#if held.length > 0}
+						<button type="button" class="rq-btn-ghost" disabled={sending} onclick={() => control('resume')}>Resume</button>
+					{:else}
+						<button
+							type="button"
+							class="rq-btn-ghost"
+							disabled={sending}
+							onclick={() => confirmControl('drain', 'The worker stops taking new tasks; tasks in flight finish. Use Resume to undo.')}
+						>Drain</button>
+					{/if}
+					<button
+						type="button"
+						class="rq-btn-ghost"
+						disabled={sending}
+						onclick={() => confirmControl('code_update', 'The worker waits for its tasks to finish, updates the code to the latest commit of the queue branch, reinstalls dependencies and restarts the task process (models reload).')}
+					>Update code</button>
+					<button type="button" class="rq-btn-ghost" disabled={sending} onclick={() => control('config_reload')}>Reload config</button>
+				</div>
+				<div class="flex flex-wrap items-center gap-2">
+					<input class="input w-40" placeholder="Version, e.g. 0.4.1" bind:value={updateVersion} />
+					<button
+						type="button"
+						class="rq-btn-ghost"
+						disabled={sending || !updateVersion.trim()}
+						onclick={() => confirmControl('worker_update', `The worker downloads runqy-worker ${updateVersion.trim()}, waits for its tasks to finish and restarts into it in the same container.`, updateVersion.trim())}
+					>Update worker</button>
+				</div>
+				{#if lastCommand}
+					<div class="text-sm">
+						<span class="text-surface-500">Last command:</span>
+						<span class="font-mono">{lastCommand.action}</span>
+						{#if lastCommand.state === 'done'}
+							<span class="badge preset-filled-success-500 text-xs">done</span>
+						{:else if lastCommand.state === 'failed'}
+							<span class="badge preset-filled-error-500 text-xs">failed</span>
+						{:else}
+							<span class="badge preset-filled-secondary-500 text-xs">running</span>
+						{/if}
+						<span class="text-surface-500">{formatRelativeTime(new Date(lastCommand.at * 1000))}</span>
+						{#if lastCommand.message}
+							<div class="text-surface-500 mt-1 break-all">{lastCommand.message}</div>
+						{/if}
+					</div>
+				{/if}
+			{/if}
+		</div>
+
 		<!-- Log Viewer -->
 		<div class="rq-card">
 			<div class="flex items-center justify-between p-4" style="border-bottom: 1px solid var(--runqy-border-subtle);">
@@ -263,3 +376,11 @@
 		</div>
 	{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={confirmDialog.open}
+	title={confirmDialog.title}
+	message={confirmDialog.message}
+	confirmText={confirmDialog.confirmText}
+	onconfirm={confirmDialog.action}
+/>

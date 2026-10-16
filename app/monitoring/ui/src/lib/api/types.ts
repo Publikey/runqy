@@ -71,6 +71,36 @@ export interface Worker {
 	status: string;
 	is_stale: boolean;
 	metrics?: WorkerMetrics;
+	instance_id?: string;
+	version?: string;
+	control_actions?: string[]; // absent: worker predates the control channel
+	held?: string[]; // parent queues not taking new tasks (drain, code update)
+	last_command?: WorkerLastCommand;
+}
+
+export type ControlAction = 'drain' | 'resume' | 'code_update' | 'worker_update' | 'config_reload';
+
+export interface WorkerLastCommand {
+	id: string;
+	action: ControlAction;
+	state: 'running' | 'done' | 'failed';
+	message?: string;
+	at: number;
+}
+
+export interface ControlRequest {
+	action: ControlAction;
+	target?: string; // worker id or queue name; empty = all workers
+	version?: string; // worker_update
+	timeout?: string;
+}
+
+export interface ControlResult {
+	id: string;
+	action: ControlAction;
+	channel: string;
+	target: string;
+	receivers: number;
 }
 
 export interface WorkerMetrics {

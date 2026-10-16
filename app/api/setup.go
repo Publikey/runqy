@@ -7,6 +7,7 @@ import (
 	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/control"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/vaults"
@@ -95,6 +96,11 @@ func SetupAlertsAPI(r *gin.Engine, a *alerts.API, apiKey string) {
 	grp.GET("/settings", gin.WrapF(a.GetSettings))
 	grp.PUT("/settings", gin.WrapF(a.PutSettings))
 	grp.POST("/test", gin.WrapF(a.Test))
+}
+
+// SetupControlAPI registers POST /api/control (admin): send a command to workers.
+func SetupControlAPI(r *gin.Engine, a *control.API, apiKey string) {
+	r.POST("/api/control", Authorize(apiKey), gin.WrapF(a.Send))
 }
 
 func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerStore *provider.Store, apiKey string) {

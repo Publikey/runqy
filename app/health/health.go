@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/redis/go-redis/v9"
@@ -30,6 +31,7 @@ type Worker struct {
 	LastBeat   int64 // unix seconds
 	Active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
 	LastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
+	Control    control.WorkerFields
 }
 
 // Fresh reports whether the worker heartbeated within StaleAfter of now.
@@ -57,6 +59,7 @@ func ParseWorker(id string, data map[string]string) Worker {
 	if t, err := strconv.ParseInt(data["last_task_at"], 10, 64); err == nil {
 		w.LastTaskAt = t
 	}
+	w.Control = control.ParseWorkerFields(data)
 	return w
 }
 

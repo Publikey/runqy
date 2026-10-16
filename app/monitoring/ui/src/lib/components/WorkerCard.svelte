@@ -17,6 +17,7 @@
 	let status = $derived.by(() => {
 		if (worker.is_stale) return 'stale';
 		if (worker.status === 'bootstrapping') return 'bootstrapping';
+		if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
 		if (worker.status === 'stopped') return 'stopped';
 		if (worker.status === 'running' && isProcessing) return 'processing';
 		if (worker.status === 'running') return 'idle';
@@ -69,6 +70,10 @@
 				<span class="badge preset-filled-warning-500 text-xs">Stale</span>
 			{:else if status === 'bootstrapping'}
 				<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
+			{:else if status === 'draining'}
+				<span class="badge preset-filled-warning-500 text-xs">Draining</span>
+			{:else if status === 'drained'}
+				<span class="badge preset-filled-surface-500 text-xs">Drained</span>
 			{:else}
 				<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
 			{/if}
