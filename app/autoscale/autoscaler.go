@@ -68,6 +68,7 @@ type Autoscaler struct {
 	envWarned  map[string]string            // parent queue -> last missing-prerequisite error logged
 	bootFails  map[string]*provisionBackoff // parent queue -> instances that never became ready
 	hostFails  map[string]*provisionBackoff // parent queue -> instances whose host could not start the container
+	backoffs   backoffStore                 // persists the three backoff maps (nil: memory only)
 	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
 	wasLeader  bool
@@ -137,6 +138,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		envWarned:  make(map[string]string),
 		bootFails:  make(map[string]*provisionBackoff),
 		hostFails:  make(map[string]*provisionBackoff),
+		backoffs:   redisBackoffStore{rdb: rdb},
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
 		stopCh:     make(chan struct{}),
@@ -243,6 +245,7 @@ func (a *Autoscaler) holdLeadership() bool {
 	if isLeader && !a.wasLeader {
 		a.staleSince = make(map[string]time.Time)
 		a.bootSince = make(map[string]bootObservation)
+		a.loadBackoffs(ctx, time.Now())
 	}
 	a.wasLeader = isLeader
 	return isLeader
@@ -388,7 +391,7 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 					if st.HostFault {
 						// The machine failed, not the image: the provider avoids that host,
 						// retry soon on another one.
-						reason += a.recordFailure(a.hostFails, parent, hostFaultRetryBase, maxProvisionBackoff, now, "host fault")
+						reason += a.recordFailure(backoffHost, parent, hostFaultRetryBase, maxProvisionBackoff, now, "host fault")
 					} else {
 						reason += a.recordBootFailure(parent, bootTimeout, now)
 					}
@@ -422,8 +425,8 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 		}
 		if !stillBooting && fresh {
 			// A worker is ready on this machine: image, code and host work, stop slowing down.
-			delete(a.bootFails, parent)
-			delete(a.hostFails, parent)
+			a.clearBackoff(backoffBoot, parent)
+			a.clearBackoff(backoffHost, parent)
 		}
 		if stillBooting && now.Sub(bootRef) > bootTimeout {
 			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
@@ -459,7 +462,8 @@ const hostFaultRetryBase = 30 * time.Second
 // recordFailure counts a failure in the given backoff map (provider errors, or hosts
 // that could not start the container) and pauses provisioning for base × 2^(failures-1),
 // capped at max. It returns a suffix for logs, events and teardown reasons.
-func (a *Autoscaler) recordFailure(m map[string]*provisionBackoff, parent string, base, max time.Duration, now time.Time, cause string) string {
+func (a *Autoscaler) recordFailure(kind, parent string, base, max time.Duration, now time.Time, cause string) string {
+	m := a.backoffMap(kind)
 	b := m[parent]
 	if b == nil {
 		b = &provisionBackoff{}
@@ -472,6 +476,7 @@ func (a *Autoscaler) recordFailure(m map[string]*provisionBackoff, parent string
 	}
 	b.until = now.Add(delay)
 	b.announced = false
+	a.persistBackoff(kind, parent)
 	log.Printf("[AUTOSCALE] queue %q: provision failed (%d in a row), next attempt in %s: %s", parent, b.failures, delay, cause)
 	return fmt.Sprintf(" (%d in a row, next attempt in %s): %s", b.failures, delay, cause)
 }
@@ -493,6 +498,7 @@ func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration,
 	}
 	b.until = now.Add(delay)
 	b.announced = false
+	a.persistBackoff(backoffBoot, parent)
 	log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning paused for %s", parent, b.failures, delay)
 	return fmt.Sprintf("; %d in a row, next instance in %s", b.failures, delay)
 }
@@ -538,11 +544,11 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 	}
 	for i := 0; i < n; i++ {
 		if err := a.provision(ctx, parent, asc, prov, providerName); err != nil {
-			suffix := a.recordFailure(a.backoff, parent, pollInterval, maxProvisionBackoff, now, err.Error())
+			suffix := a.recordFailure(backoffProvision, parent, pollInterval, maxProvisionBackoff, now, err.Error())
 			a.reportFailure(parent, "provisioning failed"+suffix)
 			return
 		}
-		delete(a.backoff, parent)
+		a.clearBackoff(backoffProvision, parent)
 	}
 }
 
@@ -782,6 +788,13 @@ func (a *Autoscaler) getProvider(rec *provider.Record) (provider.Provider, error
 	p, err := provider.Build(rec.ProviderType, rec.Config)
 	if err != nil {
 		return nil, err
+	}
+	// Restore the provider's runtime state (e.g. Vast.ai hosts to avoid): it must
+	// outlive a restart, a new leader and this rebuild after a config update.
+	if sp, ok := p.(provider.Stateful); ok && a.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sp.SetStateStore(ctx, newProviderState(a.rdb, rec.Name))
+		cancel()
 	}
 	a.provCache[rec.Name] = cachedProvider{prov: p, updatedAt: rec.UpdatedAt}
 	return p, nil
