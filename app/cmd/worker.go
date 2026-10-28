@@ -9,6 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	"github.com/Publikey/runqy/models"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/spf13/cobra"
@@ -91,7 +92,7 @@ func runWorkerList(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
+	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tVERSION\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
 
 	now := time.Now().Unix()
 
@@ -127,9 +128,10 @@ func runWorkerList(cmd *cobra.Command, args []string) error {
 			lastBeatAgo = formatDuration(ago)
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			workerID,
 			status,
+			workerVersion(data["version"]),
 			truncate(queueworker.FormatWorkerQueues(queues), 30),
 			concurrency,
 			lastBeatAgo,
@@ -155,7 +157,7 @@ func runWorkerListRemote() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
+	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tVERSION\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
 
 	now := time.Now().Unix()
 
@@ -175,9 +177,10 @@ func runWorkerListRemote() error {
 			lastBeatAgo = formatDuration(ago)
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 			worker.WorkerID,
 			worker.Status,
+			workerVersion(worker.Version),
 			truncate(queueworker.FormatWorkerQueues(worker.Queues), 30),
 			worker.Concurrency,
 			lastBeatAgo,
@@ -241,6 +244,8 @@ func runWorkerInfo(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	printWorkerControl(control.ParseWorkerFields(data))
+
 	// Print any additional fields
 	fmt.Println()
 	fmt.Println("All fields:")
@@ -280,8 +285,38 @@ func runWorkerInfoRemote(workerID string) error {
 			fmt.Println("WARNING: Worker is STALE (no heartbeat for >30s)")
 		}
 	}
+	printWorkerControl(worker.WorkerFields)
 
 	return nil
+}
+
+// workerVersion is the version column: workers before v0.4.0 do not report one.
+func workerVersion(v string) string {
+	if v == "" {
+		return "<0.4.0"
+	}
+	return v
+}
+
+// printWorkerControl prints the version and control channel state of a worker.
+func printWorkerControl(f control.WorkerFields) {
+	if f.Version != "" {
+		fmt.Printf("Version:     %s\n", f.Version)
+	}
+	if len(f.ControlActions) == 0 {
+		fmt.Println("Control:     not supported (worker predates the control channel)")
+		return
+	}
+	if len(f.Held) > 0 {
+		fmt.Printf("Held:        %s (not taking new tasks)\n", strings.Join(f.Held, ", "))
+	}
+	if c := f.LastCommand; c != nil {
+		line := fmt.Sprintf("%s %s", c.Action, c.State)
+		if c.Message != "" {
+			line += ": " + c.Message
+		}
+		fmt.Printf("Last cmd:    %s (%s ago)\n", line, formatDuration(time.Since(time.Unix(c.At, 0))))
+	}
 }
 
 func formatDuration(d time.Duration) string {

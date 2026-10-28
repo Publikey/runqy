@@ -31,6 +31,7 @@
 	function getWorkerStatus(worker: typeof $workersStore.workers[0]): string {
 		if (worker.is_stale) return 'stale';
 		if (worker.status === 'bootstrapping') return 'bootstrapping';
+		if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
 		if (worker.status === 'stopped') return 'stopped';
 		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
 		if (worker.status === 'running') return 'idle';
@@ -253,7 +254,7 @@
 					<tbody>
 						{#each [1, 2, 3] as i (i)}
 							<tr>
-								<td colspan="9">
+								<td colspan="10">
 									<div class="animate-pulse h-4 bg-surface-300 dark:bg-surface-600 rounded"></div>
 								</td>
 							</tr>
@@ -290,6 +291,7 @@
 					<tr>
 						<th>Worker ID</th>
 						<th>Status</th>
+						<th>Version</th>
 						<th>Concurrency</th>
 						<th>CPU</th>
 						<th>RAM</th>
@@ -314,10 +316,15 @@
 									<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
 								{:else if getWorkerStatus(worker) === 'stale'}
 									<span class="badge preset-filled-warning-500 text-xs">Stale</span>
+								{:else if getWorkerStatus(worker) === 'draining'}
+									<span class="badge preset-filled-warning-500 text-xs">Draining</span>
+								{:else if getWorkerStatus(worker) === 'drained'}
+									<span class="badge preset-filled-surface-500 text-xs">Drained</span>
 								{:else}
 									<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
 								{/if}
 							</td>
+							<td class="font-mono text-sm">{worker.version || '<0.4.0'}</td>
 							<td class="font-mono">{worker.concurrency}</td>
 							<td>
 								{#if wm}

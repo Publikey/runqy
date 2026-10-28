@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -69,6 +70,73 @@ type vastAIProvider struct {
 	placed      map[string]string    // instance id -> machine id
 	started     map[string]bool      // instance id -> its container reached "running"
 	badMachines map[string]time.Time // machine id -> excluded until
+	state       StateStore           // optional: persists the three maps above
+}
+
+// vastState is what the provider persists through its StateStore.
+type vastState struct {
+	Placed      map[string]string    `json:"placed,omitempty"`
+	Started     map[string]bool      `json:"started,omitempty"`
+	BadMachines map[string]time.Time `json:"bad_machines,omitempty"`
+}
+
+// SetStateStore restores the saved placements and excluded machines, then keeps them
+// saved: without it a restart would forget broken hosts and rent the same one again.
+func (p *vastAIProvider) SetStateStore(ctx context.Context, s StateStore) {
+	var st vastState
+	ok, err := s.Load(ctx, &st)
+	if err != nil {
+		log.Printf("[AUTOSCALE] vastai: cannot load saved state: %v", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.state = s
+	if !ok {
+		return
+	}
+	for id, m := range st.Placed {
+		if _, known := p.placed[id]; !known {
+			p.placed[id] = m
+		}
+	}
+	for id, v := range st.Started {
+		if v {
+			p.started[id] = true
+		}
+	}
+	now := time.Now()
+	for m, until := range st.BadMachines {
+		if until.After(now) && until.After(p.badMachines[m]) {
+			p.badMachines[m] = until
+		}
+	}
+}
+
+// saveState persists the current maps (best effort: a failure only costs the memory
+// of bad hosts across a restart).
+func (p *vastAIProvider) saveState(ctx context.Context) {
+	p.mu.Lock()
+	s := p.state
+	st := vastState{Placed: map[string]string{}, Started: map[string]bool{}, BadMachines: map[string]time.Time{}}
+	for k, v := range p.placed {
+		st.Placed[k] = v
+	}
+	for k, v := range p.started {
+		st.Started[k] = v
+	}
+	now := time.Now()
+	for k, v := range p.badMachines {
+		if v.After(now) {
+			st.BadMachines[k] = v
+		}
+	}
+	p.mu.Unlock()
+	if s == nil {
+		return
+	}
+	if err := s.Save(ctx, st); err != nil {
+		log.Printf("[AUTOSCALE] vastai: cannot save state: %v", err)
+	}
 }
 
 // badMachineTTL is how long a machine whose container never started is excluded.
@@ -154,6 +222,7 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 	p.mu.Lock()
 	p.placed[resp.NewContract.String()] = machineID
 	p.mu.Unlock()
+	p.saveState(ctx)
 	return resp.NewContract.String(), nil
 }
 
@@ -259,11 +328,20 @@ func (p *vastAIProvider) excludedMachines(now time.Time) []string {
 // registry unreachable...). A container that started but whose worker never became
 // ready points at the image or the task code, not the host, so it is not penalised.
 // It reports whether the instance ended as a host fault.
-func (p *vastAIProvider) observe(instanceID string, running, ended bool) (hostFault bool) {
+func (p *vastAIProvider) observe(ctx context.Context, instanceID string, running, ended bool) (hostFault bool) {
+	changed := false
+	defer func() {
+		if changed {
+			p.saveState(ctx)
+		}
+	}()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if running {
-		p.started[instanceID] = true
+	if running && !p.started[instanceID] {
+		if _, known := p.placed[instanceID]; known {
+			p.started[instanceID] = true
+			changed = true
+		}
 	}
 	if !ended {
 		return false
@@ -274,6 +352,9 @@ func (p *vastAIProvider) observe(instanceID string, running, ended bool) (hostFa
 		if machine != "" {
 			p.badMachines[machine] = time.Now().Add(badMachineTTL)
 		}
+	}
+	if _, tracked := p.started[instanceID]; known || tracked {
+		changed = true
 	}
 	delete(p.placed, instanceID)
 	delete(p.started, instanceID)
@@ -322,7 +403,7 @@ func (p *vastAIProvider) Destroy(ctx context.Context, instanceID string) error {
 		return err
 	}
 	if inst == nil {
-		p.observe(instanceID, false, true)
+		p.observe(ctx, instanceID, false, true)
 		return nil
 	}
 	label := ""
@@ -336,7 +417,7 @@ func (p *vastAIProvider) Destroy(ctx context.Context, instanceID string) error {
 	if err != nil && !isNotFound(err) {
 		return err
 	}
-	p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), true)
+	p.observe(ctx, instanceID, strings.EqualFold(inst.ActualStatus, "running"), true)
 	return nil
 }
 
@@ -346,11 +427,11 @@ func (p *vastAIProvider) Status(ctx context.Context, instanceID string) (Instanc
 		return InstanceStatus{}, err
 	}
 	if inst == nil {
-		p.observe(instanceID, false, true)
+		p.observe(ctx, instanceID, false, true)
 		return InstanceStatus{InstanceID: instanceID, Status: StatusTerminated}, nil
 	}
 	status := mapVastStatus(inst.ActualStatus, inst.CurState)
-	hostFault := p.observe(instanceID, strings.EqualFold(inst.ActualStatus, "running"), status == StatusTerminated)
+	hostFault := p.observe(ctx, instanceID, strings.EqualFold(inst.ActualStatus, "running"), status == StatusTerminated)
 	msg := ""
 	if inst.StatusMsg != nil {
 		msg = *inst.StatusMsg

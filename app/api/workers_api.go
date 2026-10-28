@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	"github.com/Publikey/runqy/models"
 	"github.com/gin-gonic/gin"
 	"github.com/redis/go-redis/v9"
@@ -27,6 +28,7 @@ type WorkerInfo struct {
 	IsStale     bool   `json:"is_stale"`              // True if last_beat > 30s ago
 	InstanceID  string `json:"instance_id,omitempty"` // autoscaler correlation id (if autoscaler-managed)
 	Protected   bool   `json:"protected"`             // worker self-declared protection from autoscaling
+	control.WorkerFields
 }
 
 // WorkersResponse is the API response for listing workers
@@ -90,11 +92,12 @@ func ListWorkers(c *gin.Context) {
 		workerID := strings.TrimPrefix(workerKey, "asynq:workers:")
 
 		worker := WorkerInfo{
-			WorkerID:   workerID,
-			Status:     data["status"],
-			Queues:     data["queues"],
-			InstanceID: data["instance_id"],
-			Protected:  strings.EqualFold(data["protected"], "true"),
+			WorkerID:     workerID,
+			Status:       data["status"],
+			Queues:       data["queues"],
+			InstanceID:   data["instance_id"],
+			Protected:    strings.EqualFold(data["protected"], "true"),
+			WorkerFields: control.ParseWorkerFields(data),
 		}
 
 		if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil {
@@ -157,11 +160,12 @@ func GetWorker(c *gin.Context) {
 
 	now := time.Now().Unix()
 	worker := WorkerInfo{
-		WorkerID:   workerID,
-		Status:     data["status"],
-		Queues:     data["queues"],
-		InstanceID: data["instance_id"],
-		Protected:  strings.EqualFold(data["protected"], "true"),
+		WorkerID:     workerID,
+		Status:       data["status"],
+		Queues:       data["queues"],
+		InstanceID:   data["instance_id"],
+		Protected:    strings.EqualFold(data["protected"], "true"),
+		WorkerFields: control.ParseWorkerFields(data),
 	}
 
 	if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil {

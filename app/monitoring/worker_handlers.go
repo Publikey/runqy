@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Publikey/runqy/control"
 	"github.com/gorilla/mux"
 	"github.com/redis/go-redis/v9"
 )
@@ -47,6 +48,8 @@ type workerData struct {
 	Status      string         `json:"status"`
 	IsStale     bool           `json:"is_stale"` // True if no heartbeat for 30+ seconds
 	Metrics     *systemMetrics `json:"metrics,omitempty"`
+	InstanceID  string         `json:"instance_id,omitempty"`
+	control.WorkerFields
 }
 
 type listWorkersResponse struct {
@@ -94,9 +97,11 @@ func newListWorkersHandlerFunc(rc redis.UniversalClient) http.HandlerFunc {
 			workerID := strings.TrimPrefix(workerKey, "asynq:workers:")
 
 			worker := &workerData{
-				WorkerID: workerID,
-				Status:   data["status"],
-				Queues:   data["queues"],
+				WorkerID:     workerID,
+				Status:       data["status"],
+				Queues:       data["queues"],
+				InstanceID:   data["instance_id"],
+				WorkerFields: control.ParseWorkerFields(data),
 			}
 
 			if startedAt, err := strconv.ParseInt(data["started_at"], 10, 64); err == nil {

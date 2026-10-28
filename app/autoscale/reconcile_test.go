@@ -89,6 +89,7 @@ func newTestAutoscaler(t *testing.T) *Autoscaler {
 		envWarned:  make(map[string]string),
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
+		drainSent:  make(map[string]string),
 	}
 }
 

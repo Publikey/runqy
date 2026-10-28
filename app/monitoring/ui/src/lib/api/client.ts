@@ -22,7 +22,9 @@ import type {
 	AutoscaleStatus,
 	AutoscaleProvider,
 	AlertsOverview,
-	AlertSettings
+	AlertSettings,
+	ControlRequest,
+	ControlResult
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -494,4 +496,10 @@ export async function sendTestAlert(settings?: AlertSettings): Promise<{ message
 		method: 'POST',
 		body: settings ? JSON.stringify(settings) : undefined
 	});
+}
+
+// Worker control channel: fire-and-forget command; the outcome shows in the worker's
+// last_command once its next heartbeat lands.
+export async function sendControl(req: ControlRequest): Promise<ControlResult> {
+	return fetchJson(`${BASE_URL}/control`, { method: 'POST', body: JSON.stringify(req) });
 }

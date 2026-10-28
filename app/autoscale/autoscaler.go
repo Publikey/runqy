@@ -11,6 +11,7 @@ import (
 
 	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/control"
 	"github.com/Publikey/runqy/health"
 	"github.com/Publikey/runqy/leader"
 	queueworker "github.com/Publikey/runqy/queues"
@@ -49,6 +50,12 @@ const maxBootBackoff = time.Hour
 // until its supervised process signals ready (see runqy-worker heartbeat).
 const workerStatusBootstrapping = "bootstrapping"
 
+// Statuses of a worker drained through the control channel.
+const (
+	workerStatusDraining = "draining" // not taking tasks, some still in flight
+	workerStatusDrained  = "drained"  // not taking tasks, nothing in flight
+)
+
 // Autoscaler is the background control loop that scales GPU workers per queue.
 type Autoscaler struct {
 	instances *Store
@@ -68,8 +75,10 @@ type Autoscaler struct {
 	envWarned  map[string]string            // parent queue -> last missing-prerequisite error logged
 	bootFails  map[string]*provisionBackoff // parent queue -> instances that never became ready
 	hostFails  map[string]*provisionBackoff // parent queue -> instances whose host could not start the container
+	backoffs   backoffStore                 // persists the three backoff maps (nil: memory only)
 	staleSince map[string]time.Time         // instance id -> first evaluation its worker looked dead (reset when alive)
 	bootSince  map[string]bootObservation   // instance id -> since when its current worker has been bootstrapping
+	drainSent  map[string]string            // instance id -> worker id asked to drain before a scale-down
 	wasLeader  bool
 
 	events EventSink // optional: failures reported to alerting
@@ -137,8 +146,10 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		envWarned:  make(map[string]string),
 		bootFails:  make(map[string]*provisionBackoff),
 		hostFails:  make(map[string]*provisionBackoff),
+		backoffs:   redisBackoffStore{rdb: rdb},
 		staleSince: make(map[string]time.Time),
 		bootSince:  make(map[string]bootObservation),
+		drainSent:  make(map[string]string),
 		stopCh:     make(chan struct{}),
 		doneCh:     make(chan struct{}),
 	}
@@ -243,6 +254,8 @@ func (a *Autoscaler) holdLeadership() bool {
 	if isLeader && !a.wasLeader {
 		a.staleSince = make(map[string]time.Time)
 		a.bootSince = make(map[string]bootObservation)
+		a.drainSent = make(map[string]string)
+		a.loadBackoffs(ctx, time.Now())
 	}
 	a.wasLeader = isLeader
 	return isLeader
@@ -317,10 +330,62 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		a.provisionN(ctx, parent, asc, prov, rec.Name, plan.provision, window, now, scaleLog)
 		return
 	}
-	for _, inst := range plan.destroy {
-		log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s", parent, inst.InstanceID)
-		a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+	a.scaleDown(ctx, prov, parent, live, plan.destroy, byInstance)
+}
+
+// scaleDown destroys the instances the plan removes. A worker that listens on the
+// control channel is drained first (it stops taking tasks) and destroyed once its
+// heartbeat says "drained", so no task is picked up just before the machine goes away.
+// Older workers are destroyed right away, as before. Instances the plan no longer
+// removes (load came back) are resumed.
+func (a *Autoscaler) scaleDown(ctx context.Context, prov provider.Provider, parent string, live, destroy []*Instance, byInstance map[string]*workerHeartbeat) {
+	removing := make(map[string]bool, len(destroy))
+	for _, inst := range destroy {
+		removing[inst.InstanceID] = true
+		hb := byInstance[inst.InstanceID]
+		if hb == nil || !hb.control.Supports(control.ActionDrain) || hb.status == workerStatusDrained {
+			delete(a.drainSent, inst.InstanceID)
+			log.Printf("[AUTOSCALE] queue %q: scale-down destroying %s", parent, inst.InstanceID)
+			a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+			continue
+		}
+		if hb.status == workerStatusDraining && a.drainSent[inst.InstanceID] == hb.workerID {
+			continue // waiting for in-flight tasks
+		}
+		if err := a.sendControl(ctx, hb.workerID, control.ActionDrain); err != nil {
+			log.Printf("[AUTOSCALE] queue %q: cannot drain %s, destroying it: %v", parent, inst.InstanceID, err)
+			a.teardown(ctx, prov, inst, StatusTerminated, "scale-down")
+			continue
+		}
+		if a.drainSent[inst.InstanceID] != hb.workerID {
+			log.Printf("[AUTOSCALE] queue %q: scale-down draining %s (worker %s) before teardown", parent, inst.InstanceID, hb.workerID)
+		}
+		a.drainSent[inst.InstanceID] = hb.workerID
 	}
+
+	// Load came back: resume the instances still draining that the plan now keeps.
+	for _, inst := range live {
+		workerID, sent := a.drainSent[inst.InstanceID]
+		if !sent || removing[inst.InstanceID] {
+			continue
+		}
+		delete(a.drainSent, inst.InstanceID)
+		if err := a.sendControl(ctx, workerID, control.ActionResume); err != nil {
+			log.Printf("[AUTOSCALE] queue %q: cannot resume %s: %v", parent, inst.InstanceID, err)
+			continue
+		}
+		log.Printf("[AUTOSCALE] queue %q: scale-down of %s cancelled, worker resumed", parent, inst.InstanceID)
+	}
+}
+
+// sendControl publishes a command on a worker's control channel (no-op without Redis,
+// as in unit tests).
+func (a *Autoscaler) sendControl(ctx context.Context, workerID, action string) error {
+	if a.rdb == nil {
+		return nil
+	}
+	_, err := control.Publish(ctx, a.rdb, control.WorkerChannel(workerID), control.Message{Action: action})
+	return err
 }
 
 // viewInstance builds the decision view of a live instance from its row and its worker's
@@ -388,7 +453,7 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 					if st.HostFault {
 						// The machine failed, not the image: the provider avoids that host,
 						// retry soon on another one.
-						reason += a.recordFailure(a.hostFails, parent, hostFaultRetryBase, maxProvisionBackoff, now, "host fault")
+						reason += a.recordFailure(backoffHost, parent, hostFaultRetryBase, maxProvisionBackoff, now, "host fault")
 					} else {
 						reason += a.recordBootFailure(parent, bootTimeout, now)
 					}
@@ -422,8 +487,8 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 		}
 		if !stillBooting && fresh {
 			// A worker is ready on this machine: image, code and host work, stop slowing down.
-			delete(a.bootFails, parent)
-			delete(a.hostFails, parent)
+			a.clearBackoff(backoffBoot, parent)
+			a.clearBackoff(backoffHost, parent)
 		}
 		if stillBooting && now.Sub(bootRef) > bootTimeout {
 			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
@@ -459,7 +524,8 @@ const hostFaultRetryBase = 30 * time.Second
 // recordFailure counts a failure in the given backoff map (provider errors, or hosts
 // that could not start the container) and pauses provisioning for base × 2^(failures-1),
 // capped at max. It returns a suffix for logs, events and teardown reasons.
-func (a *Autoscaler) recordFailure(m map[string]*provisionBackoff, parent string, base, max time.Duration, now time.Time, cause string) string {
+func (a *Autoscaler) recordFailure(kind, parent string, base, max time.Duration, now time.Time, cause string) string {
+	m := a.backoffMap(kind)
 	b := m[parent]
 	if b == nil {
 		b = &provisionBackoff{}
@@ -472,6 +538,7 @@ func (a *Autoscaler) recordFailure(m map[string]*provisionBackoff, parent string
 	}
 	b.until = now.Add(delay)
 	b.announced = false
+	a.persistBackoff(kind, parent)
 	log.Printf("[AUTOSCALE] queue %q: provision failed (%d in a row), next attempt in %s: %s", parent, b.failures, delay, cause)
 	return fmt.Sprintf(" (%d in a row, next attempt in %s): %s", b.failures, delay, cause)
 }
@@ -493,6 +560,7 @@ func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration,
 	}
 	b.until = now.Add(delay)
 	b.announced = false
+	a.persistBackoff(backoffBoot, parent)
 	log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning paused for %s", parent, b.failures, delay)
 	return fmt.Sprintf("; %d in a row, next instance in %s", b.failures, delay)
 }
@@ -538,11 +606,11 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 	}
 	for i := 0; i < n; i++ {
 		if err := a.provision(ctx, parent, asc, prov, providerName); err != nil {
-			suffix := a.recordFailure(a.backoff, parent, pollInterval, maxProvisionBackoff, now, err.Error())
+			suffix := a.recordFailure(backoffProvision, parent, pollInterval, maxProvisionBackoff, now, err.Error())
 			a.reportFailure(parent, "provisioning failed"+suffix)
 			return
 		}
-		delete(a.backoff, parent)
+		a.clearBackoff(backoffProvision, parent)
 	}
 }
 
@@ -733,6 +801,7 @@ type workerHeartbeat struct {
 	lastBeat   int64
 	active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
 	lastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
+	control    control.WorkerFields
 }
 
 // listWorkers reads all worker heartbeats from Redis.
@@ -752,6 +821,7 @@ func (a *Autoscaler) listWorkers(ctx context.Context) ([]workerHeartbeat, error)
 			lastBeat:   w.LastBeat,
 			active:     w.Active,
 			lastTaskAt: w.LastTaskAt,
+			control:    w.Control,
 		}
 	}
 	return out, nil
@@ -782,6 +852,13 @@ func (a *Autoscaler) getProvider(rec *provider.Record) (provider.Provider, error
 	p, err := provider.Build(rec.ProviderType, rec.Config)
 	if err != nil {
 		return nil, err
+	}
+	// Restore the provider's runtime state (e.g. Vast.ai hosts to avoid): it must
+	// outlive a restart, a new leader and this rebuild after a config update.
+	if sp, ok := p.(provider.Stateful); ok && a.rdb != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		sp.SetStateStore(ctx, newProviderState(a.rdb, rec.Name))
+		cancel()
 	}
 	a.provCache[rec.Name] = cachedProvider{prov: p, updatedAt: rec.UpdatedAt}
 	return p, nil

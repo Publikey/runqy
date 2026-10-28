@@ -32,6 +32,7 @@
 	function getWorkerStatus(worker: typeof $workersStore.workers[0]): string {
 		if (worker.is_stale) return 'stale';
 		if (worker.status === 'bootstrapping') return 'bootstrapping';
+		if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
 		if (worker.status === 'stopped') return 'stopped';
 		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
 		if (worker.status === 'running') return 'idle';
@@ -247,6 +248,10 @@
 										<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
 									{:else if getWorkerStatus(worker) === 'stale'}
 										<span class="badge preset-filled-warning-500 text-xs">Stale</span>
+									{:else if getWorkerStatus(worker) === 'draining'}
+										<span class="badge preset-filled-warning-500 text-xs">Draining</span>
+									{:else if getWorkerStatus(worker) === 'drained'}
+										<span class="badge preset-filled-surface-500 text-xs">Drained</span>
 									{:else}
 										<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
 									{/if}

@@ -11,6 +11,7 @@ import (
 	"github.com/Publikey/runqy/autoscale"
 	asprovider "github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/config"
+	"github.com/Publikey/runqy/control"
 	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/vaults"
@@ -85,6 +86,11 @@ type Options struct {
 	//
 	// This field is optional. If nil, alert endpoints are not registered.
 	AlertsAPI *alerts.API
+
+	// ControlAPI sends control commands to workers.
+	//
+	// This field is optional. If nil, the control endpoint is not registered.
+	ControlAPI *control.API
 
 	// Config is the centralized server configuration.
 	//
@@ -301,6 +307,11 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/alerts/settings", opts.AlertsAPI.GetSettings).Methods("GET")
 		api.HandleFunc("/alerts/settings", opts.AlertsAPI.PutSettings).Methods("PUT")
 		api.HandleFunc("/alerts/test", opts.AlertsAPI.Test).Methods("POST")
+	}
+
+	// Worker control channel (drain, resume, code/worker update, config reload).
+	if opts.ControlAPI != nil {
+		api.HandleFunc("/control", opts.ControlAPI.Send).Methods("POST")
 	}
 
 	// Autoscale endpoints (instance status/protection + provider config CRUD).

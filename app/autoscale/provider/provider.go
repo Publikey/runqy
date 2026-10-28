@@ -41,6 +41,21 @@ type InstanceStatus struct {
 	HostFault bool `json:"host_fault,omitempty"`
 }
 
+// StateStore persists a provider's small runtime state (e.g. hosts to avoid) so it
+// survives a server restart, a change of autoscaler leader and a provider config update.
+type StateStore interface {
+	// Load decodes the saved state into v; ok is false when nothing was saved.
+	Load(ctx context.Context, v any) (ok bool, err error)
+	// Save replaces the saved state with v.
+	Save(ctx context.Context, v any) error
+}
+
+// Stateful is implemented by providers whose runtime state is worth persisting. The
+// autoscaler calls SetStateStore once, right after building the provider.
+type Stateful interface {
+	SetStateStore(ctx context.Context, s StateStore)
+}
+
 // Provider is a pluggable cloud GPU backend. Implementations must be safe for concurrent
 // use by the autoscaler goroutine.
 type Provider interface {

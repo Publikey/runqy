@@ -15,6 +15,7 @@ import (
 	"github.com/Publikey/runqy/auth"
 	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/autoscale/provider"
+	"github.com/Publikey/runqy/control"
 	_ "github.com/Publikey/runqy/docs"
 	"github.com/Publikey/runqy/health"
 	"github.com/Publikey/runqy/models"
@@ -308,6 +309,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	alertsAPI := &alerts.API{Store: alertSettingsStore, Redis: redisAddr.RDB, Vault: vaultStore, PublicURL: publicURL}
 	alertEngine := alerts.NewEngine(health.NewCollector(qwStore, inspector, redisAddr.RDB), alertSettingsStore, redisAddr.RDB, vaultStore, publicURL)
 	alertEngine.Start()
+	controlAPI := &control.API{Redis: redisAddr.RDB, Queues: qwStore}
 	if debugMode {
 		log.Println("[AUTOSCALE] Autoscaler started")
 	}
@@ -332,6 +334,7 @@ func runServe(cmd *cobra.Command, args []string) {
 			AutoscaleStore:         autoscaleInstanceStore,
 			AutoscaleProviderStore: autoscaleProviderStore,
 			AlertsAPI:              alertsAPI,
+			ControlAPI:             controlAPI,
 			PrometheusAddress:      cfg.PrometheusAddress,
 			Config:                 cfg,
 		})
@@ -448,6 +451,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
 	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, cfg.APIKey)
 	api.SetupAlertsAPI(router, alertsAPI, cfg.APIKey)
+	api.SetupControlAPI(router, controlAPI, cfg.APIKey)
 
 	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	router.StaticFile("/swagger.yaml", "./docs/swagger.yaml")

@@ -329,3 +329,56 @@ func TestVastAIMinCUDAFilter(t *testing.T) {
 		t.Error("cuda filter sent with min_cuda_version=none")
 	}
 }
+
+// memState is an in-memory StateStore.
+type memState struct{ data []byte }
+
+func (m *memState) Load(_ context.Context, v any) (bool, error) {
+	if m.data == nil {
+		return false, nil
+	}
+	return true, json.Unmarshal(m.data, v)
+}
+
+func (m *memState) Save(_ context.Context, v any) error {
+	var err error
+	m.data, err = json.Marshal(v)
+	return err
+}
+
+func TestVastAIStateSurvivesRestart(t *testing.T) {
+	f, p := newFakeVast(t)
+	ctx := context.Background()
+	state := &memState{}
+	p.(Stateful).SetStateStore(ctx, state)
+	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
+
+	// Rented before the restart; the container never starts.
+	id, err := p.Provision(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After a restart, a fresh provider (same config, same saved state) still knows the
+	// instance was placed on machine 54116 and never started: it is a host fault...
+	cfg, _ := json.Marshal(p.(*vastAIProvider).cfg)
+	p2, err := Build("vastai", cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2.(Stateful).SetStateStore(ctx, state)
+	f.status[id] = "exited"
+	if st, _ := p2.Status(ctx, id); !st.HostFault {
+		t.Fatalf("status = %+v, want a host fault", st)
+	}
+
+	// ...and a third provider (another restart) avoids that machine.
+	p3, _ := Build("vastai", cfg)
+	p3.(Stateful).SetStateStore(ctx, state)
+	if _, err := p3.Provision(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(f.search["machine_id"]) != fmt.Sprint(map[string]interface{}{"notin": []interface{}{"54116"}}) {
+		t.Fatalf("machine_id filter = %v, want notin [54116]", f.search["machine_id"])
+	}
+}
