@@ -20,6 +20,18 @@ import (
 // or pending longer than this window — in which case GET /queue/{id} returns 404).
 const ReverseLookupTTL = 30 * 24 * time.Hour
 
+// LimitFields stamps the resolved lifecycle values onto the task hash (seconds) so the worker
+// enforces them per task. They are written by the enqueue script itself: a worker blocked on
+// BRPOP can never pick the task up before they are there.
+func LimitFields(limits queueworker.ResolvedLimits, activeTimeout time.Duration) asynq.Option {
+	return asynq.TaskFields(map[string]string{
+		"ttl_completed":   strconv.FormatInt(int64(limits.TTLCompleted.Seconds()), 10),
+		"ttl_archived":    strconv.FormatInt(int64(limits.TTLArchived.Seconds()), 10),
+		"pending_timeout": strconv.FormatInt(int64(limits.PendingTimeout.Seconds()), 10),
+		"active_timeout":  strconv.FormatInt(int64(activeTimeout.Seconds()), 10),
+	})
+}
+
 // EnqueueGenericTask enqueues a task with a raw JSON payload to the specified queue
 // EnqueueGenericTask enqueues a task. Payload may be json.RawMessage or any typed object
 // which will be marshaled to JSON here.
@@ -54,15 +66,7 @@ func EnqueueGenericTask(client *asynq.Client, rdb *redis.Client, queue string, t
 		asynq.Queue(queue),
 		asynq.MaxRetry(limits.MaxRetry),
 		asynq.Retention(limits.TTLCompleted), // inspector consistency; worker TTL is authoritative
-		// Stamp the resolved lifecycle values onto the task hash (seconds) so the worker enforces
-		// them per task. Written by the enqueue script itself: a worker blocked on BRPOP can
-		// never pick the task up before they are there.
-		asynq.TaskFields(map[string]string{
-			"ttl_completed":   strconv.FormatInt(int64(limits.TTLCompleted.Seconds()), 10),
-			"ttl_archived":    strconv.FormatInt(int64(limits.TTLArchived.Seconds()), 10),
-			"pending_timeout": strconv.FormatInt(int64(limits.PendingTimeout.Seconds()), 10),
-			"active_timeout":  strconv.FormatInt(int64(activeTimeout.Seconds()), 10),
-		}),
+		LimitFields(limits, activeTimeout),
 	}
 	if activeTimeout > 0 {
 		opts = append(opts, asynq.Timeout(activeTimeout))
