@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -135,18 +136,40 @@ func runTaskEnqueue(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Local mode: direct Redis access
+	// Local mode: direct Redis + database access
 	redisAddr, err := models.BuildRedisConns(GetConfig())
 	if err != nil {
 		return fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
+	pgDB, err := models.BuildPostgresDB(GetConfig())
+	if err != nil {
+		return fmt.Errorf("failed to connect to the database: %w", err)
+	}
+	defer pgDB.Close()
+
+	// Same checks as the API: refuse an unknown/disabled queue (nothing would consume the
+	// task) and apply the queue's own limits, not only the server defaults.
+	store := queueworker.NewStore(pgDB, redisAddr.RDB)
+	ctx := context.Background()
+	queue := queueworker.NormalizeQueueName(taskQueue)
+	exists, err := store.Exists(ctx, queue)
+	if err != nil {
+		return fmt.Errorf("failed to check queue: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("queue not found: %s", queue)
+	}
+	parent, _, _ := queueworker.ParseQueueName(queue)
+	pq, err := store.GetQueue(ctx, parent)
+	if err != nil {
+		return fmt.Errorf("failed to load queue %s: %w", parent, err)
+	}
+
 	asynqClient := asynq.NewClient(redisAddr.AsynqOpt)
 	defer asynqClient.Close()
 
-	// Local CLI enqueue uses server-default limits (env-driven); the server API path resolves
-	// per-queue overrides from the queue config.
-	taskInfo, err := client.EnqueueGenericTask(asynqClient, redisAddr.RDB, taskQueue, taskTimeout, payload, queueworker.DefaultLimits())
+	taskInfo, err := client.EnqueueGenericTask(asynqClient, redisAddr.RDB, queue, taskTimeout, payload, queueworker.ResolveQueueLimits(pq))
 	if err != nil {
 		return fmt.Errorf("failed to enqueue task: %w", err)
 	}
