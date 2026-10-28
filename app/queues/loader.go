@@ -1,7 +1,10 @@
 package queueworker
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -107,9 +110,18 @@ func LoadFile(path string) (*QueueWorkersYAML, error) {
 		return nil, nil
 	}
 
+	// Unknown keys are errors: a misplaced block (e.g. a typo) must not be silently ignored.
 	var cfg QueueWorkersYAML
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, nil // only comments / whitespace
+		}
 		return nil, fmt.Errorf("yaml parse error: %w", err)
+	}
+	if err := cfg.foldQueueLimits(); err != nil {
+		return nil, err
 	}
 
 	// Skip files that don't have the expected structure (a file may hold only the
@@ -124,6 +136,25 @@ func LoadFile(path string) (*QueueWorkersYAML, error) {
 	}
 
 	return &cfg, nil
+}
+
+// foldQueueLimits accepts `limits` at the queue level as an alias of `deployment.limits`.
+func (c *QueueWorkersYAML) foldQueueLimits() error {
+	for name, q := range c.Queues {
+		if q.Limits == nil {
+			continue
+		}
+		if q.Deployment == nil {
+			return fmt.Errorf("queue '%s': deployment is required", name)
+		}
+		if q.Deployment.Limits != nil {
+			return fmt.Errorf("queue '%s': limits is set both at the queue level and under deployment", name)
+		}
+		q.Deployment.Limits = q.Limits
+		q.Limits = nil
+		c.Queues[name] = q
+	}
+	return nil
 }
 
 // Validate checks the configuration is valid
@@ -170,6 +201,9 @@ func (c *QueueWorkersYAML) Validate() error {
 		// Workers refuse a deployment without a branch; fail here rather than at worker boot.
 		if q.Deployment.Branch == "" {
 			return fmt.Errorf("queue '%s': deployment.branch is required", queueName)
+		}
+		if len(q.Deployment.EnvVars) > 0 {
+			return fmt.Errorf("queue '%s': deployment.env_vars is not supported, use vaults to inject environment variables", queueName)
 		}
 		// Reject malformed task lifecycle limits rather than silently ignoring them.
 		if err := q.Deployment.Limits.Validate(); err != nil {

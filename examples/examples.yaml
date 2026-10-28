@@ -15,8 +15,6 @@ queues:
       code_path: "examples/gpu-inference"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars:
-        CUDA_VISIBLE_DEVICES: "0"
       startup_timeout_secs: 120  # Model loading takes time
       redis_storage: true
     input:
@@ -48,7 +46,6 @@ queues:
       code_path: "examples/webhook-processor"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -74,7 +71,6 @@ queues:
       code_path: "examples/data-pipeline"
       startup_cmd: "python main.py"
       mode: "one_shot"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -100,7 +96,6 @@ queues:
       code_path: "examples/scheduled-tasks"
       startup_cmd: "python main.py"
       mode: "one_shot"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -126,7 +121,6 @@ queues:
       code_path: "examples/multi-queue"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -150,7 +144,6 @@ queues:
       code_path: "examples/multi-queue"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -174,7 +167,6 @@ queues:
       code_path: "examples/multi-queue"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:

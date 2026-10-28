@@ -8,7 +8,6 @@ queues:
       code_path: "examples/quickstart-oneshot"
       startup_cmd: "python main.py"
       mode: "one_shot"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:
@@ -36,7 +35,6 @@ queues:
       code_path: "examples/quickstart-longrunning"
       startup_cmd: "python main.py"
       mode: "long_running"
-      env_vars: {}
       startup_timeout_secs: 30
       redis_storage: true
     input:

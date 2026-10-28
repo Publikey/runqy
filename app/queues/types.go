@@ -81,6 +81,9 @@ type QueueYAML struct {
 	// is weighted: a sub-queue comes first with a probability proportional to its priority.
 	StrictPriority bool `yaml:"strict_priority,omitempty"`
 
+	// Limits is an alias of deployment.limits (folded into it on load; setting both is an error).
+	Limits *LimitsConfig `yaml:"limits,omitempty"`
+
 	// Input and Output describe the schema of the task payload for this queue
 	Input  []FieldSchema `yaml:"input,omitempty"`
 	Output []FieldSchema `yaml:"output,omitempty"`
@@ -135,6 +138,10 @@ type DeploymentYAML struct {
 	Vaults             []string      `yaml:"vaults,omitempty"`    // List of vault names to inject as env vars
 	GitToken           string        `yaml:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
 	Limits             *LimitsConfig `yaml:"limits,omitempty"`    // Per-queue task lifecycle overrides
+
+	// EnvVars was never implemented; it is still accepted empty (older examples had
+	// `env_vars: {}`) and rejected otherwise. Use vaults to inject environment variables.
+	EnvVars map[string]string `yaml:"env_vars,omitempty"`
 }
 
 // Queue represents a parent queue with deployment configuration (stored in 'queues' table)

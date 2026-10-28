@@ -693,10 +693,9 @@ func LoadQueueWorkersAtStartup(store *queueworker.Store, configDir string, debug
 	ctx := context.Background()
 	reloaded, errors := reloadFromYAML(ctx, store, configDir)
 
-	if len(errors) > 0 && debug {
-		for _, e := range errors {
-			log.Printf("[QUEUEWORKER] Warning: %s", e)
-		}
+	// Always reported: a rejected file means its queues keep their previous configuration.
+	for _, e := range errors {
+		log.Printf("[QUEUEWORKER] Error: %s", e)
 	}
 
 	if len(reloaded) > 0 {
