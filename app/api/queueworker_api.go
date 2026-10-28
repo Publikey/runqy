@@ -37,8 +37,9 @@ type WorkerRedisConfig struct {
 
 // WorkerQueueConfig contains queue info for the worker
 type WorkerQueueConfig struct {
-	Name     string `json:"name"`
-	Priority int    `json:"priority"`
+	Name           string `json:"name"`
+	Priority       int    `json:"priority"`
+	StrictPriority bool   `json:"strict_priority,omitempty"` // poll sub-queues in strict priority order (default: weighted)
 }
 
 // SubQueueConfig contains sub-queue info for the worker
@@ -296,8 +297,9 @@ func WorkerHandshake(store *queueworker.Store, cfg *config.Config) gin.HandlerFu
 				TLS:      cfg.RedisTLS,
 			},
 			Queue: WorkerQueueConfig{
-				Name:     queueName,
-				Priority: queueCfg.Priority,
+				Name:           queueName,
+				Priority:       queueCfg.Priority,
+				StrictPriority: queueCfg.Deployment != nil && queueCfg.Deployment.StrictPriority,
 			},
 			SubQueues:  subQueues,
 			Deployment: deployment,
@@ -691,10 +693,9 @@ func LoadQueueWorkersAtStartup(store *queueworker.Store, configDir string, debug
 	ctx := context.Background()
 	reloaded, errors := reloadFromYAML(ctx, store, configDir)
 
-	if len(errors) > 0 && debug {
-		for _, e := range errors {
-			log.Printf("[QUEUEWORKER] Warning: %s", e)
-		}
+	// Always reported: a rejected file means its queues keep their previous configuration.
+	for _, e := range errors {
+		log.Printf("[QUEUEWORKER] Error: %s", e)
 	}
 
 	if len(reloaded) > 0 {

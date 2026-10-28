@@ -76,6 +76,14 @@ type QueueYAML struct {
 	Alerts     *QueueAlertsConfig `yaml:"alerts,omitempty"`     // Alert overrides for this queue (sibling of deployment)
 	SubQueues  []SubQueueYAML     `yaml:"sub_queues,omitempty"` // Optional list of sub-queues
 
+	// StrictPriority makes workers poll the sub-queues in strict descending priority (a
+	// lower sub-queue is only served when the higher ones are empty). By default the order
+	// is weighted: a sub-queue comes first with a probability proportional to its priority.
+	StrictPriority bool `yaml:"strict_priority,omitempty"`
+
+	// Limits is an alias of deployment.limits (folded into it on load; setting both is an error).
+	Limits *LimitsConfig `yaml:"limits,omitempty"`
+
 	// Input and Output describe the schema of the task payload for this queue
 	Input  []FieldSchema `yaml:"input,omitempty"`
 	Output []FieldSchema `yaml:"output,omitempty"`
@@ -130,6 +138,10 @@ type DeploymentYAML struct {
 	Vaults             []string      `yaml:"vaults,omitempty"`    // List of vault names to inject as env vars
 	GitToken           string        `yaml:"git_token,omitempty"` // Vault reference for git auth: "vault://vault-name/key"
 	Limits             *LimitsConfig `yaml:"limits,omitempty"`    // Per-queue task lifecycle overrides
+
+	// EnvVars was never implemented; it is still accepted empty (older examples had
+	// `env_vars: {}`) and rejected otherwise. Use vaults to inject environment variables.
+	EnvVars map[string]string `yaml:"env_vars,omitempty"`
 }
 
 // Queue represents a parent queue with deployment configuration (stored in 'queues' table)
@@ -193,6 +205,10 @@ type DeploymentConfig struct {
 	// Alerts is the per-queue alert override, stored like Autoscale (authored in YAML as a
 	// sibling of `deployment`, QueueYAML.Alerts).
 	Alerts *QueueAlertsConfig `json:"alerts,omitempty"`
+
+	// StrictPriority is the sub-queue polling order sent to workers, stored like Autoscale
+	// (authored in YAML at the queue level, QueueYAML.StrictPriority).
+	StrictPriority bool `json:"strict_priority,omitempty"`
 }
 
 // ValidateOverrides checks the optional per-queue blocks (limits, autoscale, alerts) so

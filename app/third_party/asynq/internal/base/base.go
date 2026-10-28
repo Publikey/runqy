@@ -10,6 +10,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -722,4 +723,32 @@ type Broker interface {
 	PublishCancelation(id string) error
 
 	WriteResult(qname, id string, data []byte) (n int, err error)
+}
+
+// taskFieldsKey carries extra task hash fields (asynq.TaskFields, a runqy addition) from the
+// client to the broker's enqueue script.
+type taskFieldsKey struct{}
+
+// WithTaskFields returns a context carrying extra fields to write on the task hash at enqueue.
+func WithTaskFields(ctx context.Context, fields map[string]string) context.Context {
+	return context.WithValue(ctx, taskFieldsKey{}, fields)
+}
+
+// TaskFieldsArgs returns the extra task hash fields carried by ctx as a flat, key-sorted
+// field/value list (nil when there are none).
+func TaskFieldsArgs(ctx context.Context) []interface{} {
+	fields, _ := ctx.Value(taskFieldsKey{}).(map[string]string)
+	if len(fields) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	args := make([]interface{}, 0, 2*len(keys))
+	for _, k := range keys {
+		args = append(args, k, fields[k])
+	}
+	return args
 }

@@ -64,6 +64,21 @@ func newPlaygroundEnqueueHandlerFunc(asynqClient *asynq.Client, rdb *redis.Clien
 			return
 		}
 
+		// Refuse unknown or disabled queues like the public /add endpoint: nothing would ever
+		// consume the task.
+		if queueStore != nil {
+			queue := queueworker.NormalizeQueueName(req.Queue)
+			exists, err := queueStore.Exists(r.Context(), queue)
+			if err != nil {
+				writeJSONError(w, "failed to check queue: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if !exists {
+				writeJSONError(w, "queue not found: "+queue, http.StatusNotFound)
+				return
+			}
+		}
+
 		// Resolve task lifecycle limits from the parent queue config
 		// (server defaults ⊕ override), same as the public /add endpoint.
 		limits := queueworker.DefaultLimits()

@@ -139,6 +139,7 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 				asynq.Queue(queue),
 				asynq.MaxRetry(limits.MaxRetry),
 				asynq.Retention(limits.TTLCompleted), // inspector consistency; worker TTL is authoritative
+				client.LimitFields(limits, activeTimeout),
 			}
 			if activeTimeout > 0 {
 				opts = append(opts, asynq.Timeout(activeTimeout))
@@ -151,14 +152,7 @@ func AddTaskBatch(qwConfigDir string, qwStore *queueworker.Store) gin.HandlerFun
 				continue
 			}
 
-			// Stamp resolved lifecycle values + reverse-lookup in the pipeline (non-blocking).
-			taskKey := "asynq:{" + queue + "}:t:" + taskInfo.ID
-			pipe.HSet(ctx, taskKey,
-				"ttl_completed", int64(limits.TTLCompleted.Seconds()),
-				"ttl_archived", int64(limits.TTLArchived.Seconds()),
-				"pending_timeout", int64(limits.PendingTimeout.Seconds()),
-				"active_timeout", int64(activeTimeout.Seconds()),
-			)
+			// Reverse-lookup in the pipeline (non-blocking); the limits rode the enqueue script.
 			reverseKey := "asynq:t:" + taskInfo.ID
 			pipe.HSet(ctx, reverseKey, "queue", queue)
 			pipe.Expire(ctx, reverseKey, client.ReverseLookupTTL)
