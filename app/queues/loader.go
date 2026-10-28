@@ -209,6 +209,7 @@ func (q *QueueYAML) ToQueueAndSubQueues(baseName string) (*Queue, []SubQueue) {
 			Limits:             q.Deployment.Limits,
 			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
 			Alerts:             q.Alerts,    // same for the alerts override
+			StrictPriority:     q.StrictPriority,
 		}
 	}
 
@@ -266,6 +267,7 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 			Limits:             q.Deployment.Limits,
 			Autoscale:          q.Autoscale, // fold the sibling autoscale block into the deployment JSON
 			Alerts:             q.Alerts,    // same for the alerts override
+			StrictPriority:     q.StrictPriority,
 		}
 	}
 
