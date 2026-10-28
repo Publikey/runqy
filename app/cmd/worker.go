@@ -92,7 +92,7 @@ func runWorkerList(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
+	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tVERSION\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
 
 	now := time.Now().Unix()
 
@@ -128,9 +128,10 @@ func runWorkerList(cmd *cobra.Command, args []string) error {
 			lastBeatAgo = formatDuration(ago)
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			workerID,
 			status,
+			workerVersion(data["version"]),
 			truncate(queueworker.FormatWorkerQueues(queues), 30),
 			concurrency,
 			lastBeatAgo,
@@ -156,7 +157,7 @@ func runWorkerListRemote() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
+	fmt.Fprintln(w, "WORKER_ID\tSTATUS\tVERSION\tQUEUES\tCONCURRENCY\tLAST_BEAT\tSTALE")
 
 	now := time.Now().Unix()
 
@@ -176,9 +177,10 @@ func runWorkerListRemote() error {
 			lastBeatAgo = formatDuration(ago)
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\n",
 			worker.WorkerID,
 			worker.Status,
+			workerVersion(worker.Version),
 			truncate(queueworker.FormatWorkerQueues(worker.Queues), 30),
 			worker.Concurrency,
 			lastBeatAgo,
@@ -286,6 +288,14 @@ func runWorkerInfoRemote(workerID string) error {
 	printWorkerControl(worker.WorkerFields)
 
 	return nil
+}
+
+// workerVersion is the version column: workers before v0.4.0 do not report one.
+func workerVersion(v string) string {
+	if v == "" {
+		return "<0.4.0"
+	}
+	return v
 }
 
 // printWorkerControl prints the version and control channel state of a worker.

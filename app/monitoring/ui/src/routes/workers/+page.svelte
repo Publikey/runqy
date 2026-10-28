@@ -254,7 +254,7 @@
 					<tbody>
 						{#each [1, 2, 3] as i (i)}
 							<tr>
-								<td colspan="9">
+								<td colspan="10">
 									<div class="animate-pulse h-4 bg-surface-300 dark:bg-surface-600 rounded"></div>
 								</td>
 							</tr>
@@ -291,6 +291,7 @@
 					<tr>
 						<th>Worker ID</th>
 						<th>Status</th>
+						<th>Version</th>
 						<th>Concurrency</th>
 						<th>CPU</th>
 						<th>RAM</th>
@@ -323,6 +324,7 @@
 									<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
 								{/if}
 							</td>
+							<td class="font-mono text-sm">{worker.version || '<0.4.0'}</td>
 							<td class="font-mono">{worker.concurrency}</td>
 							<td>
 								{#if wm}
