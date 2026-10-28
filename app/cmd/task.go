@@ -102,7 +102,7 @@ func init() {
 	// Enqueue flags
 	taskEnqueueCmd.Flags().StringVarP(&taskQueue, "queue", "q", "", "Queue name (required)")
 	taskEnqueueCmd.Flags().StringVarP(&taskPayload, "payload", "p", "{}", "JSON payload")
-	taskEnqueueCmd.Flags().Int64VarP(&taskTimeout, "timeout", "t", 600, "Task timeout in seconds")
+	taskEnqueueCmd.Flags().Int64VarP(&taskTimeout, "timeout", "t", 0, "Max execution time per attempt in seconds (0 = the queue's active_timeout)")
 	taskEnqueueCmd.MarkFlagRequired("queue")
 
 	// List flags
@@ -111,8 +111,8 @@ func init() {
 }
 
 func runTaskEnqueue(cmd *cobra.Command, args []string) error {
-	if taskTimeout <= 0 {
-		return fmt.Errorf("--timeout must be positive, got %d", taskTimeout)
+	if taskTimeout < 0 {
+		return fmt.Errorf("--timeout must be >= 0, got %d", taskTimeout)
 	}
 
 	// Validate JSON payload
