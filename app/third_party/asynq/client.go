@@ -60,6 +60,7 @@ const (
 	TaskIDOpt
 	RetentionOpt
 	GroupOpt
+	TaskFieldsOpt
 )
 
 // Option specifies the task processing behavior.
@@ -217,6 +218,20 @@ func (name groupOption) String() string     { return fmt.Sprintf("Group(%q)", st
 func (name groupOption) Type() OptionType   { return GroupOpt }
 func (name groupOption) Value() interface{} { return string(name) }
 
+// taskFieldsOption is a runqy addition (not in upstream asynq).
+type taskFieldsOption map[string]string
+
+// TaskFields returns an option to write extra fields on the task hash in the same atomic
+// script as the enqueue, so a worker can never dequeue the task without them.
+// Only supported for immediate, non-unique, non-grouped enqueues.
+func TaskFields(fields map[string]string) Option {
+	return taskFieldsOption(fields)
+}
+
+func (f taskFieldsOption) String() string     { return fmt.Sprintf("TaskFields(%v)", map[string]string(f)) }
+func (f taskFieldsOption) Type() OptionType   { return TaskFieldsOpt }
+func (f taskFieldsOption) Value() interface{} { return map[string]string(f) }
+
 // ErrDuplicateTask indicates that the given task could not be enqueued since it's a duplicate of another task.
 //
 // ErrDuplicateTask error only applies to tasks enqueued with a Unique option.
@@ -237,6 +252,7 @@ type option struct {
 	processAt time.Time
 	retention time.Duration
 	group     string
+	fields    map[string]string
 }
 
 // composeOptions merges user provided options into the default options
@@ -290,6 +306,8 @@ func composeOptions(opts ...Option) (option, error) {
 				return option{}, errors.New("group key cannot be empty")
 			}
 			res.group = key
+		case taskFieldsOption:
+			res.fields = map[string]string(opt)
 		default:
 			// ignore unexpected option
 		}
@@ -394,6 +412,12 @@ func (c *Client) EnqueueContext(ctx context.Context, task *Task, opts ...Option)
 		Retention: int64(opt.retention.Seconds()),
 	}
 	now := time.Now()
+	if len(opt.fields) > 0 {
+		if opt.processAt.After(now) || opt.group != "" || opt.uniqueTTL > 0 {
+			return nil, fmt.Errorf("TaskFields is only supported for immediate, non-unique, non-grouped tasks")
+		}
+		ctx = base.WithTaskFields(ctx, opt.fields)
+	}
 	var state base.TaskState
 	if opt.processAt.After(now) {
 		err = c.schedule(ctx, msg, opt.processAt, opt.uniqueTTL)

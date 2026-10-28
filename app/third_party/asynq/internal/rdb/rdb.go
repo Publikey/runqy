@@ -91,6 +91,7 @@ func (r *RDB) runScriptWithErrorCode(ctx context.Context, op errors.Op, script *
 // ARGV[1] -> task message data
 // ARGV[2] -> task ID
 // ARGV[3] -> current unix time in nsec
+// ARGV[4..] -> optional extra field/value pairs for the task hash (runqy: base.TaskFieldsArgs)
 //
 // Output:
 // Returns 1 if successfully enqueued
@@ -103,6 +104,9 @@ redis.call("HSET", KEYS[1],
            "msg", ARGV[1],
            "state", "pending",
            "pending_since", ARGV[3])
+for i = 4, #ARGV, 2 do
+	redis.call("HSET", KEYS[1], ARGV[i], ARGV[i+1])
+end
 redis.call("LPUSH", KEYS[2], ARGV[2])
 return 1
 `)
@@ -129,6 +133,7 @@ func (r *RDB) Enqueue(ctx context.Context, msg *base.TaskMessage) error {
 		msg.ID,
 		r.clock.Now().UnixNano(),
 	}
+	argv = append(argv, base.TaskFieldsArgs(ctx)...)
 	n, err := r.runScriptWithErrorCode(ctx, op, enqueueCmd, keys, argv...)
 	if err != nil {
 		return err

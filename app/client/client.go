@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"time"
 
 	queueworker "github.com/Publikey/runqy/queues"
@@ -53,6 +54,15 @@ func EnqueueGenericTask(client *asynq.Client, rdb *redis.Client, queue string, t
 		asynq.Queue(queue),
 		asynq.MaxRetry(limits.MaxRetry),
 		asynq.Retention(limits.TTLCompleted), // inspector consistency; worker TTL is authoritative
+		// Stamp the resolved lifecycle values onto the task hash (seconds) so the worker enforces
+		// them per task. Written by the enqueue script itself: a worker blocked on BRPOP can
+		// never pick the task up before they are there.
+		asynq.TaskFields(map[string]string{
+			"ttl_completed":   strconv.FormatInt(int64(limits.TTLCompleted.Seconds()), 10),
+			"ttl_archived":    strconv.FormatInt(int64(limits.TTLArchived.Seconds()), 10),
+			"pending_timeout": strconv.FormatInt(int64(limits.PendingTimeout.Seconds()), 10),
+			"active_timeout":  strconv.FormatInt(int64(activeTimeout.Seconds()), 10),
+		}),
 	}
 	if activeTimeout > 0 {
 		opts = append(opts, asynq.Timeout(activeTimeout))
@@ -64,16 +74,6 @@ func EnqueueGenericTask(client *asynq.Client, rdb *redis.Client, queue string, t
 	}
 
 	ctx := context.Background()
-
-	// Stamp the resolved lifecycle values onto the task hash (seconds) so the worker enforces
-	// them per task: TTLs, pending timeout, and active timeout. These are read at dequeue.
-	taskKey := "asynq:{" + queue + "}:t:" + taskInfo.ID
-	rdb.HSet(ctx, taskKey,
-		"ttl_completed", int64(limits.TTLCompleted.Seconds()),
-		"ttl_archived", int64(limits.TTLArchived.Seconds()),
-		"pending_timeout", int64(limits.PendingTimeout.Seconds()),
-		"active_timeout", int64(activeTimeout.Seconds()),
-	)
 
 	// Store queue name in task hash for reverse lookup (GET /queue/{task_id}).
 	// Set a TTL so the reverse-lookup key cannot leak forever; the worker realigns
