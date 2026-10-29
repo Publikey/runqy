@@ -86,5 +86,5 @@ func PrintStartupBanner(cfg StartupConfig) {
 	}
 
 	// Documentation link
-	fmt.Printf("\n  Docs: https://docs.runqy.com\n\n")
+	fmt.Printf("\n  Docs: https://runqy.com/docs/\n\n")
 }
