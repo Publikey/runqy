@@ -82,6 +82,8 @@
 	let instanceImage = $state('');
 	let instanceDiskGb = $state<number | undefined>(undefined);
 	let instanceMaxPrice = $state<number | undefined>(undefined);
+	let instanceMinRamGb = $state<number | undefined>(undefined);
+	let instanceMinVcpu = $state<number | undefined>(undefined);
 	let availableProviders = $state<AutoscaleProvider[]>([]);
 
 	// Alert overrides for this queue
@@ -94,6 +96,19 @@
 
 	const scaleUpTypes: ScaleTriggerType[] = ['no_workers', 'queue_depth', 'latency', 'schedule'];
 	const scaleDownTypes: ScaleTriggerType[] = ['idle', 'schedule'];
+
+	// Triggers that can watch only some sub-queues (empty list = every sub-queue).
+	const watchesSubQueues = (t: ScaleTriggerType) => t === 'no_workers' || t === 'queue_depth' || t === 'latency';
+
+	// "premium, vip" -> ["premium", "vip"]; tolerates full names ("inference.premium").
+	function parseSubQueueList(v: string): string[] {
+		const names = v
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.map((s) => s.substring(s.lastIndexOf('.') + 1));
+		return [...new Set(names)];
+	}
 
 	async function loadProviders() {
 		loadingProviders = true;
@@ -328,6 +343,7 @@
 					if (t.duration?.trim()) out.duration = t.duration.trim();
 				}
 				if (t.trigger === 'idle') out.timeout = t.timeout?.trim();
+				if (watchesSubQueues(t.trigger) && t.sub_queues?.length) out.sub_queues = t.sub_queues;
 				return out;
 			};
 
@@ -344,7 +360,9 @@
 					gpu: instanceGpu.trim() || undefined,
 					image: instanceImage.trim() || undefined,
 					disk_gb: instanceDiskGb,
-					max_price_per_hour: instanceMaxPrice
+					max_price_per_hour: instanceMaxPrice,
+					min_ram_gb: instanceMinRamGb || undefined,
+					min_vcpu: instanceMinVcpu || undefined
 				}
 			};
 			deployment.autoscale = autoscale;
@@ -446,6 +464,8 @@
 		instanceImage = '';
 		instanceDiskGb = undefined;
 		instanceMaxPrice = undefined;
+		instanceMinRamGb = undefined;
+		instanceMinVcpu = undefined;
 		alertsMuted = false;
 		alertRules = [];
 		preservedLimits = undefined;
@@ -499,6 +519,8 @@
 						instanceImage = as.instance?.image || '';
 						instanceDiskGb = as.instance?.disk_gb;
 						instanceMaxPrice = as.instance?.max_price_per_hour;
+						instanceMinRamGb = as.instance?.min_ram_gb;
+						instanceMinVcpu = as.instance?.min_vcpu;
 					}
 					alertsMuted = config.deployment.alerts?.disabled ?? false;
 					alertRules = (config.deployment.alerts?.rules || []).map((r) => ({ ...r }));
@@ -798,6 +820,21 @@
 																<input type="text" bind:value={trigger.duration} placeholder="8h" class="input" disabled={loading} />
 															</label>
 														{/if}
+														{#if watchesSubQueues(trigger.trigger)}
+															<label class="label flex-1 min-w-[140px]">
+																<span class="label-text text-xs">Sub-queues <span class="text-surface-500">(optional)</span></span>
+																<input
+																	type="text"
+																	bind:value={
+																		() => (trigger.sub_queues ?? []).join(', '),
+																		(v) => (trigger.sub_queues = parseSubQueueList(v))
+																	}
+																	placeholder="all"
+																	class="input"
+																	disabled={loading}
+																/>
+															</label>
+														{/if}
 														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleUp(index)} disabled={loading}>
 															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
 																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -872,6 +909,14 @@
 											<label class="label">
 												<span class="label-text text-xs">Max Price/hr <span class="text-surface-500">(optional)</span></span>
 												<input type="number" step="0.01" bind:value={instanceMaxPrice} min="0" class="input" disabled={loading} />
+											</label>
+											<label class="label">
+												<span class="label-text text-xs">Min RAM (GB) <span class="text-surface-500">(optional)</span></span>
+												<input type="number" bind:value={instanceMinRamGb} min="0" class="input" disabled={loading} />
+											</label>
+											<label class="label">
+												<span class="label-text text-xs">Min vCPUs <span class="text-surface-500">(optional)</span></span>
+												<input type="number" bind:value={instanceMinVcpu} min="0" class="input" disabled={loading} />
 											</label>
 										</div>
 									</div>

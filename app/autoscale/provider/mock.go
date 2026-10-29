@@ -33,8 +33,8 @@ func (m *mockProvider) Provision(_ context.Context, spec InstanceSpec) (string, 
 	id := fmt.Sprintf("mock-%d", m.counter)
 	m.instances[id] = StatusRunning
 	m.mu.Unlock()
-	log.Printf("[AUTOSCALE][mock] PROVISION queue=%q gpu=%q image=%q disk=%dGB maxPrice=%.2f env=%d -> %s",
-		spec.Queue, spec.GPU, spec.Image, spec.DiskGB, spec.MaxPricePerHour, len(spec.Env), id)
+	log.Printf("[AUTOSCALE][mock] PROVISION queue=%q gpu=%q image=%q disk=%dGB maxPrice=%.2f minRAM=%dGB minVCPU=%d env=%d -> %s",
+		spec.Queue, spec.GPU, spec.Image, spec.DiskGB, spec.MaxPricePerHour, spec.MinRAMGB, spec.MinVCPU, len(spec.Env), id)
 	return id, nil
 }
 

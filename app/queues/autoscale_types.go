@@ -2,6 +2,7 @@ package queueworker
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -49,6 +50,9 @@ type ScaleTrigger struct {
 	Duration   string `yaml:"duration,omitempty" json:"duration,omitempty"`       // schedule scale_up: hold the target this long (Go duration)
 	Timeout    string `yaml:"timeout,omitempty" json:"timeout,omitempty"`         // idle (Go duration)
 	MaxLatency string `yaml:"max_latency,omitempty" json:"max_latency,omitempty"` // latency (Go duration)
+	// SubQueues limits no_workers, queue_depth and latency to these sub-queues (short
+	// names, e.g. ["premium"]). Empty means every sub-queue of the parent.
+	SubQueues []string `yaml:"sub_queues,omitempty" json:"sub_queues,omitempty"`
 }
 
 // InstanceSpec describes the GPU instance the provider should provision for this queue.
@@ -57,6 +61,8 @@ type InstanceSpec struct {
 	Image           string  `yaml:"image,omitempty" json:"image,omitempty"`
 	DiskGB          int     `yaml:"disk_gb,omitempty" json:"disk_gb,omitempty"`
 	MaxPricePerHour float64 `yaml:"max_price_per_hour,omitempty" json:"max_price_per_hour,omitempty"`
+	MinRAMGB        int     `yaml:"min_ram_gb,omitempty" json:"min_ram_gb,omitempty"` // system RAM, not GPU memory
+	MinVCPU         int     `yaml:"min_vcpu,omitempty" json:"min_vcpu,omitempty"`
 }
 
 // cronParser matches robfig/cron's standard 5-field parser (minute hour dom month dow).
@@ -129,12 +135,61 @@ func (a *AutoscaleConfig) Validate() error {
 			return fmt.Errorf("autoscale.scale_down[%d]: %w", i, err)
 		}
 	}
+	if in := a.Instance; in != nil {
+		if in.MinRAMGB < 0 {
+			return fmt.Errorf("autoscale.instance.min_ram_gb cannot be negative")
+		}
+		if in.MinVCPU < 0 {
+			return fmt.Errorf("autoscale.instance.min_vcpu cannot be negative")
+		}
+	}
+	return nil
+}
+
+// ValidateSubQueues checks that every trigger's sub_queues names one of the queue's
+// sub-queues (short names). Only the YAML loader knows all of them at once; a queue
+// without explicit sub-queues has the single sub-queue "default".
+func (a *AutoscaleConfig) ValidateSubQueues(known []string) error {
+	if a == nil || !a.Enabled {
+		return nil
+	}
+	ok := make(map[string]bool, len(known))
+	for _, k := range known {
+		ok[k] = true
+	}
+	for i := range a.ScaleUp {
+		for _, sq := range a.ScaleUp[i].SubQueues {
+			if !ok[sq] {
+				return fmt.Errorf("autoscale.scale_up[%d]: sub_queues: %q is not a sub-queue of this queue (have %v)", i, sq, known)
+			}
+		}
+	}
 	return nil
 }
 
 // validate checks a single trigger. scaleUp distinguishes which trigger types are allowed
 // on the up vs down side.
 func (t *ScaleTrigger) validate(scaleUp bool) error {
+	if len(t.SubQueues) > 0 {
+		switch t.Trigger {
+		case TriggerNoWorkers, TriggerQueueDepth, TriggerLatency:
+		default:
+			return fmt.Errorf("sub_queues is only valid on no_workers, queue_depth and latency triggers")
+		}
+		seen := make(map[string]bool, len(t.SubQueues))
+		for _, sq := range t.SubQueues {
+			if sq == "" {
+				return fmt.Errorf("sub_queues cannot contain an empty name")
+			}
+			if strings.Contains(sq, SubQueueSeparator) {
+				return fmt.Errorf("sub_queues takes short names (%q, not %q)", sq[strings.LastIndex(sq, SubQueueSeparator)+1:], sq)
+			}
+			if seen[sq] {
+				return fmt.Errorf("sub_queues lists %q twice", sq)
+			}
+			seen[sq] = true
+		}
+	}
 	switch t.Trigger {
 	case TriggerNoWorkers:
 		if !scaleUp {

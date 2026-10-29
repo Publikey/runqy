@@ -26,6 +26,8 @@ type InstanceSpec struct {
 	Image           string            // container image to boot
 	DiskGB          int               // disk size
 	MaxPricePerHour float64           // bid ceiling
+	MinRAMGB        int               // minimum system RAM (0 = provider default)
+	MinVCPU         int               // minimum vCPUs (0 = provider default)
 	Env             map[string]string // env injected into the booting worker (RUNQY_*)
 }
 

@@ -116,6 +116,14 @@ func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 	// RunPod creates (and bills) a 20 GB persistent volume when volumeInGb is omitted:
 	// workers do not need one unless configured.
 	body["volumeInGb"] = p.cfg.VolumeGB
+	// One GPU per pod, so the per-GPU minimums are the pod's totals. Unset keeps
+	// RunPod's defaults (8 GB, 2 vCPUs).
+	if spec.MinRAMGB > 0 {
+		body["minRAMPerGPU"] = spec.MinRAMGB
+	}
+	if spec.MinVCPU > 0 {
+		body["minVCPUPerGPU"] = spec.MinVCPU
+	}
 	if cuda := allowedCUDAVersions(p.cfg.MinCUDAVersion); len(cuda) > 0 {
 		body["allowedCudaVersions"] = cuda
 	}

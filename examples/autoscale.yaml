@@ -14,7 +14,11 @@
 
 queues:
   asdemo:
-    priority: 10
+    sub_queues:
+      - name: premium
+        priority: 10
+      - name: standard
+        priority: 3
     deployment:
       git_url: "https://github.com/Publikey/test-dummy-task.git"
       branch: "master"
@@ -31,8 +35,9 @@ queues:
         - trigger: no_workers    # jobs pending and nobody listening -> 1 worker
         - trigger: queue_depth   # more than 3 pending -> one more worker (never stacks while one boots)
           threshold: 3
-        - trigger: latency       # oldest pending job older than 2m -> one more worker
+        - trigger: latency       # oldest premium job older than 2m -> one more worker
           max_latency: "2m"
+          sub_queues: [premium]  # standard jobs may wait; omit to watch every sub-queue
         - trigger: schedule      # pre-warm 2 workers on weekdays at 08:00, held for 10h
           cron: "0 8 * * 1-5"
           workers: 2
@@ -47,3 +52,5 @@ queues:
         image: "ghcr.io/publikey/runqy-worker:inference"
         disk_gb: 50
         max_price_per_hour: 0.60
+        min_ram_gb: 32           # system RAM, e.g. to load a model before moving it to the GPU
+        min_vcpu: 8

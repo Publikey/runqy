@@ -189,7 +189,7 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 		return "", err
 	}
 
-	offerID, machineID, err := p.cheapestOffer(ctx, gpuName, maxPrice, disk)
+	offerID, machineID, err := p.cheapestOffer(ctx, gpuName, maxPrice, disk, spec.MinRAMGB, spec.MinVCPU)
 	if err != nil {
 		return "", err
 	}
@@ -247,7 +247,7 @@ func vastEnv(env map[string]string) (string, error) {
 }
 
 // cheapestOffer searches on-demand offers and returns the lowest-price rentable one.
-func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxPrice float64, disk int) (offerID, machineID string, err error) {
+func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxPrice float64, disk, minRAMGB, minVCPU int) (offerID, machineID string, err error) {
 	q := map[string]interface{}{
 		"rentable": map[string]interface{}{"eq": true},
 		"rented":   map[string]interface{}{"eq": false},
@@ -264,6 +264,14 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 	}
 	if disk > 0 {
 		q["disk_space"] = map[string]interface{}{"gte": disk}
+	}
+	// The API takes cpu_ram in MB (Vast's CLI multiplies GB by 1000) and counts the
+	// vCPUs the rental gets as cpu_cores_effective.
+	if minRAMGB > 0 {
+		q["cpu_ram"] = map[string]interface{}{"gte": minRAMGB * 1000}
+	}
+	if minVCPU > 0 {
+		q["cpu_cores_effective"] = map[string]interface{}{"gte": minVCPU}
 	}
 	if len(p.cfg.Countries) > 0 {
 		q["geolocation"] = map[string]interface{}{"in": p.cfg.Countries}
@@ -301,7 +309,7 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 		return "", "", err
 	}
 	if len(resp.Offers) == 0 {
-		return "", "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d)", gpuName, maxPrice, disk)
+		return "", "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d)", gpuName, maxPrice, disk, minRAMGB, minVCPU)
 	}
 	return resp.Offers[0].ID.String(), resp.Offers[0].MachineID.String(), nil
 }

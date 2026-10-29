@@ -213,6 +213,16 @@ func (c *QueueWorkersYAML) Validate() error {
 		if err := q.Autoscale.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}
+		subNames := []string{DefaultSubQueueName}
+		if len(q.SubQueues) > 0 {
+			subNames = subNames[:0]
+			for _, sq := range q.SubQueues {
+				subNames = append(subNames, sq.Name)
+			}
+		}
+		if err := q.Autoscale.ValidateSubQueues(subNames); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
 		if err := q.Alerts.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}

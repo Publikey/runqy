@@ -347,6 +347,7 @@ export interface ScaleTrigger {
 	duration?: string; // schedule scale_up: how long to hold the target
 	timeout?: string;
 	max_latency?: string; // latency: oldest pending job age that triggers a scale-up
+	sub_queues?: string[]; // no_workers / queue_depth / latency: only watch these sub-queues (short names)
 }
 
 export interface AutoscaleInstanceSpec {
@@ -354,6 +355,8 @@ export interface AutoscaleInstanceSpec {
 	image?: string;
 	disk_gb?: number;
 	max_price_per_hour?: number;
+	min_ram_gb?: number; // system RAM
+	min_vcpu?: number;
 }
 
 export interface AutoscaleConfig {
