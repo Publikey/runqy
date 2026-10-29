@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -73,6 +74,7 @@ type Autoscaler struct {
 	lastEval   map[string]time.Time         // parent queue -> last evaluation time
 	backoff    map[string]*provisionBackoff // parent queue -> provisioning failure backoff
 	envWarned  map[string]string            // parent queue -> last missing-prerequisite error logged
+	subWarned  map[string]string            // parent queue -> last unknown trigger sub-queues logged
 	bootFails  map[string]*provisionBackoff // parent queue -> instances that never became ready
 	hostFails  map[string]*provisionBackoff // parent queue -> instances whose host could not start the container
 	backoffs   backoffStore                 // persists the three backoff maps (nil: memory only)
@@ -144,6 +146,7 @@ func New(instances *Store, providers *provider.Store, queues *queueworker.Store,
 		lastEval:   make(map[string]time.Time),
 		backoff:    make(map[string]*provisionBackoff),
 		envWarned:  make(map[string]string),
+		subWarned:  make(map[string]string),
 		bootFails:  make(map[string]*provisionBackoff),
 		hostFails:  make(map[string]*provisionBackoff),
 		backoffs:   redisBackoffStore{rdb: rdb},
@@ -309,6 +312,7 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 
 	stats := a.queueStats(ctx, parent)
 	a.accrueCost(ctx, live, elapsed)
+	a.warnUnknownSubQueues(parent, asc, stats.bySub)
 
 	snap := queueSnapshot{
 		now:          now,
@@ -316,6 +320,7 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		pending:      stats.pending,
 		active:       stats.active,
 		latency:      stats.latency,
+		subQueues:    stats.bySub,
 		totalWorkers: countLiveWorkers(workers, parent),
 	}
 	for _, inst := range live {
@@ -625,6 +630,8 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 		spec.Image = asc.Instance.Image
 		spec.DiskGB = asc.Instance.DiskGB
 		spec.MaxPricePerHour = asc.Instance.MaxPricePerHour
+		spec.MinRAMGB = asc.Instance.MinRAMGB
+		spec.MinVCPU = asc.Instance.MinVCPU
 	}
 
 	providerID, err := prov.Provision(ctx, spec)
@@ -744,10 +751,54 @@ func (a *Autoscaler) accrueCost(ctx context.Context, live []*Instance, elapsed t
 	}
 }
 
+// warnUnknownSubQueues logs, once per change, triggers that watch a sub-queue the queue
+// does not have: such a trigger never fires. The YAML loader rejects them, but configs
+// sent through the API or the dashboard are saved one sub-queue at a time.
+func (a *Autoscaler) warnUnknownSubQueues(parent string, asc *queueworker.AutoscaleConfig, bySub map[string]subQueueLoad) {
+	msg := ""
+	if missing := unknownSubQueues(asc, bySub); len(missing) > 0 {
+		msg = fmt.Sprintf("scale_up triggers watch sub-queues that do not exist: %s (those triggers never fire)", strings.Join(missing, ", "))
+	}
+	if a.subWarned == nil {
+		a.subWarned = make(map[string]string)
+	}
+	if msg != "" && a.subWarned[parent] != msg {
+		log.Printf("[AUTOSCALE] queue %q: %s", parent, msg)
+	}
+	a.subWarned[parent] = msg
+}
+
+// unknownSubQueues lists the trigger sub-queues absent from the queue's statistics.
+func unknownSubQueues(asc *queueworker.AutoscaleConfig, bySub map[string]subQueueLoad) []string {
+	if len(bySub) == 0 {
+		return nil // no statistics (queue unreadable): nothing to compare with
+	}
+	var missing []string
+	seen := map[string]bool{}
+	for _, t := range asc.ScaleUp {
+		for _, name := range t.SubQueues {
+			if _, ok := bySub[name]; !ok && !seen[name] {
+				seen[name] = true
+				missing = append(missing, name)
+			}
+		}
+	}
+	return missing
+}
+
 // queueStatsResult aggregates a parent queue's sub-queues.
 type queueStatsResult struct {
 	pending, active int
 	latency         time.Duration // oldest pending job across sub-queues
+	// bySub is each sub-queue's own load, keyed by short name ("premium"), for triggers
+	// limited to some sub-queues.
+	bySub map[string]subQueueLoad
+}
+
+// subQueueLoad is one sub-queue's pending work (zero while the sub-queue is paused).
+type subQueueLoad struct {
+	pending int
+	latency time.Duration
 }
 
 // queueStats sums pending/active and takes the max latency across all sub-queues of a
@@ -777,12 +828,15 @@ func (a *Autoscaler) queueStats(ctx context.Context, parent string) queueStatsRe
 
 // aggregateQueueStats combines sub-queue statistics (see queueStats).
 func aggregateQueueStats(infos []*asynq.QueueInfo) queueStatsResult {
-	var out queueStatsResult
+	out := queueStatsResult{bySub: make(map[string]subQueueLoad, len(infos))}
 	for _, info := range infos {
 		out.active += info.Active
+		sub := info.Queue[strings.LastIndex(info.Queue, queueworker.SubQueueSeparator)+1:]
 		if info.Paused {
+			out.bySub[sub] = subQueueLoad{}
 			continue
 		}
+		out.bySub[sub] = subQueueLoad{pending: info.Pending, latency: info.Latency}
 		out.pending += info.Pending
 		if info.Latency > out.latency {
 			out.latency = info.Latency

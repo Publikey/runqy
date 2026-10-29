@@ -149,3 +149,34 @@ func TestDecideNoScaleDownWithoutTrigger(t *testing.T) {
 		t.Errorf("destroy = %v, want none (no scale_down trigger)", ids(plan.destroy))
 	}
 }
+
+func TestDecideTriggersLimitedToSubQueues(t *testing.T) {
+	// 40 standard jobs and 2 premium jobs waiting; the triggers only watch premium.
+	snap := snapshot(42, 1, ready("a", 0))
+	snap.latency = time.Hour
+	snap.subQueues = map[string]subQueueLoad{
+		"premium":  {pending: 2, latency: 30 * time.Second},
+		"standard": {pending: 40, latency: time.Hour},
+	}
+	premiumDepth := queueworker.ScaleTrigger{Trigger: queueworker.TriggerQueueDepth, Threshold: 10, SubQueues: []string{"premium"}}
+	premiumLatency := queueworker.ScaleTrigger{Trigger: queueworker.TriggerLatency, MaxLatency: "1m", SubQueues: []string{"premium"}}
+	if got := decide(cfg(0, 3, []queueworker.ScaleTrigger{premiumDepth, premiumLatency}, nil), snap).provision; got != 0 {
+		t.Errorf("standard backlog scaled up a premium-only trigger: provision = %d", got)
+	}
+	// Without sub_queues the same triggers see the whole queue.
+	if got := decide(cfg(0, 3, []queueworker.ScaleTrigger{depth10}, nil), snap).provision; got != 1 {
+		t.Errorf("whole-queue depth: provision = %d, want 1", got)
+	}
+	// Premium falls behind: its own latency fires.
+	snap.subQueues["premium"] = subQueueLoad{pending: 2, latency: 2 * time.Minute}
+	if got := decide(cfg(0, 3, []queueworker.ScaleTrigger{premiumLatency}, nil), snap).provision; got != 1 {
+		t.Errorf("premium latency: provision = %d, want 1", got)
+	}
+	// no_workers on premium only ignores a standard-only backlog.
+	empty := snapshot(40, 0)
+	empty.subQueues = map[string]subQueueLoad{"standard": {pending: 40}}
+	premiumNoWorkers := queueworker.ScaleTrigger{Trigger: queueworker.TriggerNoWorkers, SubQueues: []string{"premium"}}
+	if got := decide(cfg(0, 3, []queueworker.ScaleTrigger{premiumNoWorkers}, nil), empty).provision; got != 0 {
+		t.Errorf("no_workers fired for an unwatched sub-queue: provision = %d", got)
+	}
+}

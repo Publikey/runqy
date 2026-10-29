@@ -382,3 +382,26 @@ func TestVastAIStateSurvivesRestart(t *testing.T) {
 		t.Fatalf("machine_id filter = %v, want notin [54116]", f.search["machine_id"])
 	}
 }
+
+func TestVastAIMinRAMAndVCPUFilters(t *testing.T) {
+	f, p := newFakeVast(t)
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img", MinRAMGB: 32, MinVCPU: 8}); err != nil {
+		t.Fatal(err)
+	}
+	if ram, _ := f.search["cpu_ram"].(map[string]interface{}); ram == nil || ram["gte"] != float64(32000) {
+		t.Errorf("cpu_ram = %v, want gte 32000 (MB)", f.search["cpu_ram"])
+	}
+	if cpu, _ := f.search["cpu_cores_effective"].(map[string]interface{}); cpu == nil || cpu["gte"] != float64(8) {
+		t.Errorf("cpu_cores_effective = %v, want gte 8", f.search["cpu_cores_effective"])
+	}
+	f2, p2 := newFakeVast(t)
+	if _, err := p2.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f2.search["cpu_ram"]; ok {
+		t.Error("cpu_ram filter sent when unset")
+	}
+	if _, ok := f2.search["cpu_cores_effective"]; ok {
+		t.Error("cpu_cores_effective filter sent when unset")
+	}
+}

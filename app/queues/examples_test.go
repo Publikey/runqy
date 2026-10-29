@@ -17,6 +17,12 @@ func TestAutoscaleExampleIsValid(t *testing.T) {
 	if asc == nil || !asc.Enabled || len(asc.ScaleUp) != 4 || asc.BootTimeout != "20m" {
 		t.Fatalf("autoscale block not loaded as expected: %+v", asc)
 	}
+	if got := asc.ScaleUp[2].SubQueues; len(got) != 1 || got[0] != "premium" {
+		t.Errorf("latency trigger sub_queues = %v, want [premium]", got)
+	}
+	if asc.Instance == nil || asc.Instance.MinRAMGB != 32 || asc.Instance.MinVCPU != 8 {
+		t.Errorf("instance min_ram_gb/min_vcpu not loaded: %+v", asc.Instance)
+	}
 }
 
 // The shipped alerts example must stay loadable and valid.

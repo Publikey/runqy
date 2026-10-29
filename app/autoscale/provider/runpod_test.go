@@ -161,3 +161,32 @@ func TestRunPodGPUTypePreferenceList(t *testing.T) {
 		t.Errorf("gpuTypeIds = %s, want the preference list in order", got)
 	}
 }
+
+func TestRunPodMinRAMAndVCPU(t *testing.T) {
+	var body map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = nil
+		_ = json.Unmarshal(b, &body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"pod-1"}`))
+	}))
+	defer srv.Close()
+	cfg, _ := json.Marshal(runpodConfig{APIKey: "k", BaseURL: srv.URL})
+	p, _ := Build("runpod", cfg)
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img", MinRAMGB: 32, MinVCPU: 8}); err != nil {
+		t.Fatal(err)
+	}
+	if body["minRAMPerGPU"] != float64(32) || body["minVCPUPerGPU"] != float64(8) {
+		t.Errorf("minRAMPerGPU/minVCPUPerGPU = %v/%v, want 32/8", body["minRAMPerGPU"], body["minVCPUPerGPU"])
+	}
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["minRAMPerGPU"]; ok {
+		t.Error("minRAMPerGPU sent when unset (RunPod's default must apply)")
+	}
+	if _, ok := body["minVCPUPerGPU"]; ok {
+		t.Error("minVCPUPerGPU sent when unset (RunPod's default must apply)")
+	}
+}

@@ -11,11 +11,12 @@ import (
 // once per evaluation. Keeping decide() free of I/O makes the policy unit-testable.
 type queueSnapshot struct {
 	now          time.Time
-	window       time.Duration // poll window: a cron that fired within it counts as "now"
-	pending      int           // pending jobs across sub-queues
-	active       int           // active jobs across sub-queues
-	latency      time.Duration // age of the oldest pending job across sub-queues
-	totalWorkers int           // live workers (managed or manual) serving the queue
+	window       time.Duration           // poll window: a cron that fired within it counts as "now"
+	pending      int                     // pending jobs across sub-queues
+	active       int                     // active jobs across sub-queues
+	latency      time.Duration           // age of the oldest pending job across sub-queues
+	subQueues    map[string]subQueueLoad // per sub-queue load, by short name
+	totalWorkers int                     // live workers (managed or manual) serving the queue
 	instances    []instanceView
 }
 
@@ -36,6 +37,22 @@ type scalePlan struct {
 	provision int         // instances to create
 	destroy   []*Instance // instances to scale down
 	desired   int         // target live count (for logging)
+}
+
+// load returns the pending count and oldest-pending age a trigger looks at: the whole
+// queue, or only the sub-queues the trigger lists. An unknown sub-queue counts as empty.
+func (s queueSnapshot) load(subQueues []string) (pending int, latency time.Duration) {
+	if len(subQueues) == 0 {
+		return s.pending, s.latency
+	}
+	for _, name := range subQueues {
+		l := s.subQueues[name]
+		pending += l.pending
+		if l.latency > latency {
+			latency = l.latency
+		}
+	}
+	return pending, latency
 }
 
 // cronFiredWithin reports whether the cron expression fired within the trailing window.
@@ -76,15 +93,16 @@ func decide(asc *queueworker.AutoscaleConfig, snap queueSnapshot) scalePlan {
 		t := &asc.ScaleUp[i]
 		switch t.Trigger {
 		case queueworker.TriggerNoWorkers:
-			if snap.pending > 0 && snap.totalWorkers == 0 {
+			if pending, _ := snap.load(t.SubQueues); pending > 0 && snap.totalWorkers == 0 {
 				desired = maxInt(desired, 1)
 			}
 		case queueworker.TriggerQueueDepth:
-			if snap.pending > t.Threshold {
+			if pending, _ := snap.load(t.SubQueues); pending > t.Threshold {
 				desired = maxInt(desired, growth)
 			}
 		case queueworker.TriggerLatency:
-			if d, err := time.ParseDuration(t.MaxLatency); err == nil && snap.pending > 0 && snap.latency > d {
+			pending, latency := snap.load(t.SubQueues)
+			if d, err := time.ParseDuration(t.MaxLatency); err == nil && pending > 0 && latency > d {
 				desired = maxInt(desired, growth)
 			}
 		case queueworker.TriggerSchedule:

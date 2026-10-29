@@ -2,10 +2,12 @@ package autoscale
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/Publikey/runqy/autoscale/provider"
+	queueworker "github.com/Publikey/runqy/queues"
 	"github.com/Publikey/runqy/third_party/asynq"
 )
 
@@ -78,10 +80,27 @@ func TestAggregateQueueStatsIgnoresPausedPending(t *testing.T) {
 	if got.pending != 3 || got.latency != time.Minute {
 		t.Errorf("paused sub-queue counted as load: %+v", got)
 	}
+	if got.bySub["high"].pending != 3 || got.bySub["low"].pending != 0 {
+		t.Errorf("per sub-queue load = %+v, want high=3 and paused low=0", got.bySub)
+	}
 	if got.active != 3 {
 		t.Errorf("active = %d, want 3 (machines busy on a paused sub-queue still count)", got.active)
 	}
 	if all := aggregateQueueStats([]*asynq.QueueInfo{{Pending: 25, Paused: true}}); all.pending != 0 {
 		t.Errorf("fully paused queue: pending = %d, want 0 (no scale-up)", all.pending)
+	}
+}
+
+func TestUnknownSubQueues(t *testing.T) {
+	asc := &queueworker.AutoscaleConfig{ScaleUp: []queueworker.ScaleTrigger{
+		{Trigger: queueworker.TriggerQueueDepth, Threshold: 1, SubQueues: []string{"premium", "vip"}},
+		{Trigger: queueworker.TriggerLatency, MaxLatency: "1m", SubQueues: []string{"vip"}},
+	}}
+	bySub := map[string]subQueueLoad{"premium": {}, "standard": {}}
+	if got := unknownSubQueues(asc, bySub); fmt.Sprint(got) != "[vip]" {
+		t.Errorf("unknownSubQueues = %v, want [vip]", got)
+	}
+	if got := unknownSubQueues(asc, nil); got != nil {
+		t.Errorf("no statistics must not report anything, got %v", got)
 	}
 }
