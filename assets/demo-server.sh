@@ -20,5 +20,5 @@ cat << 'EOF'
   Metrics      /metrics
   Swagger      /swagger
 
-  Docs: https://docs.runqy.com
+  Docs: https://runqy.com/docs/
 EOF

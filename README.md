@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.runqy.com"><strong>Documentation</strong></a> · 
+  <a href="https://runqy.com/docs/"><strong>Documentation</strong></a> · 
   <a href="https://runqy.com"><strong>Website</strong></a> · 
   <a href="#examples">Examples</a> · 
   <a href="CONTRIBUTING.md">Contributing</a>
@@ -33,12 +33,12 @@
 
 ## Why Runqy?
 
-🌍 **Workers run anywhere** — Your laptop, on-prem servers, AWS, Azure, Runpod, any machine with an internet connection. [Learn more →](https://docs.runqy.com/worker/)  
-🚀 **Zero-touch deployment** — Workers pull code from Git, install dependencies, and start processing automatically. No manual setup. [Learn more →](https://docs.runqy.com/worker/deployment/)  
-📄 **Simple YAML config** — Define a queue in a few lines. One YAML file, one queue. [Learn more →](https://docs.runqy.com/server/configuration/#queue-worker-definitions-yaml)  
-🔐 **Built-in secrets** — Pass secrets to workers via encrypted env vars. [Learn more →](https://docs.runqy.com/server/configuration/#configuration-methods)  
-🐍 **Go server + Python SDK** — Robust Go server, familiar Python developer experience. [Learn more →](https://docs.runqy.com/python-sdk/)  
-📊 **Web monitoring UI** — Real-time dashboard with Prometheus metrics. [Learn more →](https://docs.runqy.com/guides/monitoring/)  
+🌍 **Workers run anywhere** — Your laptop, on-prem servers, AWS, Azure, Runpod, any machine with an internet connection. [Learn more →](https://runqy.com/docs/worker/)  
+🚀 **Zero-touch deployment** — Workers pull code from Git, install dependencies, and start processing automatically. No manual setup. [Learn more →](https://runqy.com/docs/worker/deployment/)  
+📄 **Simple YAML config** — Define a queue in a few lines. One YAML file, one queue. [Learn more →](https://runqy.com/docs/server/configuration/#queue-worker-definitions-yaml)  
+🔐 **Built-in secrets** — Pass secrets to workers via encrypted env vars. [Learn more →](https://runqy.com/docs/server/configuration/#configuration-methods)  
+🐍 **Go server + Python SDK** — Robust Go server, familiar Python developer experience. [Learn more →](https://runqy.com/docs/python-sdk/)  
+📊 **Web monitoring UI** — Real-time dashboard with Prometheus metrics. [Learn more →](https://runqy.com/docs/guides/monitoring/)  
 
 ### Feature Comparison
 
@@ -75,7 +75,7 @@ print(f'Task ID: {task.task_id}')
 open http://localhost:3000/monitoring/
 ```
 
-See the [Quickstart Guide](https://docs.runqy.com/getting-started/quickstart/) for the full walkthrough.
+See the [Quickstart Guide](https://runqy.com/docs/getting-started/quickstart/) for the full walkthrough.
 
 ## Define a Queue
 
@@ -99,7 +99,7 @@ Deploy it:
 runqy config create -f queue.yaml
 ```
 
-See the [Queue Configuration Reference](https://docs.runqy.com/server/configuration/#queue-worker-definitions-yaml) for all options.
+See the [Queue Configuration Reference](https://runqy.com/docs/server/configuration/#queue-worker-definitions-yaml) for all options.
 
 ## Write a Task
 
@@ -119,7 +119,7 @@ def process_image(image_url: str, model) -> dict:
     return {"prediction": result, "confidence": 0.95}
 ```
 
-See the [Python SDK Reference](https://docs.runqy.com/python-sdk/) for the full API.
+See the [Python SDK Reference](https://runqy.com/docs/python-sdk/) for the full API.
 
 ## Enqueue Tasks
 
@@ -140,7 +140,7 @@ client = RunqyClient('http://localhost:3000', api_key='dev-api-key')
 task = client.enqueue('image-resize', {'image': 'img003.jpg'})
 ```
 
-See the [API Reference](https://docs.runqy.com/server/api/) for all endpoints.
+See the [API Reference](https://runqy.com/docs/server/api/) for all endpoints.
 
 ---
 
@@ -187,7 +187,7 @@ cd runqy
 go build -o runqy ./app
 ```
 
-See the [Installation Guide](https://docs.runqy.com/getting-started/quickstart/) for detailed instructions.
+See the [Installation Guide](https://runqy.com/docs/getting-started/quickstart/) for detailed instructions.
 
 ## Requirements
 
@@ -202,7 +202,7 @@ export REDIS_HOST=localhost:6379
 export RUNQY_API_KEY=your-secret-key
 ```
 
-See the [Configuration Reference](https://docs.runqy.com/server/configuration/?h=redis_host#1-environment-variables-envsecret-file) for all options.
+See the [Configuration Reference](https://runqy.com/docs/server/configuration/?h=redis_host#1-environment-variables-envsecret-file) for all options.
 
 ## CLI Reference
 
@@ -219,7 +219,7 @@ runqy task get myqueue <task_id>                     # Get task result
 runqy worker list                   # List active workers
 ```
 
-See the [CLI Reference](https://docs.runqy.com/server/cli/) for all commands.
+See the [CLI Reference](https://runqy.com/docs/server/cli/) for all commands.
 
 ## Monitoring
 
@@ -246,7 +246,7 @@ Access the built-in web dashboard at `/monitoring`:
 
 </details>
 
-Runqy also exposes Prometheus metrics at `/metrics`. See the [Monitoring Guide](https://docs.runqy.com/guides/monitoring/) for Grafana dashboards and alerting.
+Runqy also exposes Prometheus metrics at `/metrics`. See the [Monitoring Guide](https://runqy.com/docs/guides/monitoring/) for Grafana dashboards and alerting.
 
 ## Architecture
 
@@ -264,7 +264,7 @@ Tasks flow from clients → runqy server → queues → workers running anywhere
 
 ## Links
 
-- 📖 **[Documentation](https://docs.runqy.com)** — Complete guides and API reference
+- 📖 **[Documentation](https://runqy.com/docs/)** — Complete guides and API reference
 - 🌐 **[Website](https://runqy.com)** — Project homepage  
 - 🐍 **[Python SDK](https://github.com/Publikey/runqy-python)** — Client library
 - 🔧 **[Worker Runtime](https://github.com/Publikey/runqy-worker)** — Task processor
