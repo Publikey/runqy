@@ -32,6 +32,8 @@ func TestVastAIFactoryValidation(t *testing.T) {
 type fakeVast struct {
 	mu        sync.Mutex
 	search    map[string]interface{}
+	searches  []map[string]interface{} // every search, in order
+	offers    map[string]string        // gpu_name eq value -> offers JSON (default: two 4090 offers)
 	create    map[string]interface{}
 	createURL string
 	deleted   []string
@@ -52,6 +54,13 @@ func (f *fakeVast) handler(t *testing.T) http.HandlerFunc {
 			b, _ := io.ReadAll(r.Body)
 			f.search = nil // keep only this request's filters
 			_ = json.Unmarshal(b, &f.search)
+			f.searches = append(f.searches, f.search)
+			if eq, _ := f.search["gpu_name"].(map[string]interface{}); eq != nil && f.offers != nil {
+				if offers, ok := f.offers[fmt.Sprint(eq["eq"])]; ok {
+					w.Write([]byte(offers))
+					return
+				}
+			}
 			w.Write([]byte(`{"offers":[{"id":98765,"machine_id":54116,"dph_total":0.31,"gpu_name":"RTX 4090"},{"id":11111,"machine_id":777,"dph_total":0.45,"gpu_name":"RTX 4090"}]}`))
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/asks/"):
 			f.createURL = r.URL.Path
@@ -101,10 +110,11 @@ func TestVastAILifecycle(t *testing.T) {
 	f, p := newFakeVast(t)
 	ctx := context.Background()
 
-	id, err := p.Provision(ctx, InstanceSpec{
+	rented, err := p.Provision(ctx, InstanceSpec{
 		Queue: "inference", Image: "ghcr.io/publikey/runqy-worker:inference", DiskGB: 50, GPU: "RTX 4090", MaxPricePerHour: 0.5,
 		Env: map[string]string{"RUNQY_SERVER_URL": "https://x.example.com", "RUNQY_INSTANCE_ID": "as-0123456789abcdef"},
 	})
+	id := rented.ID
 	if err != nil || id != "55555" {
 		t.Fatalf("provision id=%q err=%v", id, err)
 	}
@@ -262,7 +272,8 @@ func TestVastAIAvoidsMachinesThatNeverStarted(t *testing.T) {
 
 	// 1st rental lands on machine 54116, whose Docker daemon fails: the container never
 	// starts and Vast reports the instance exited (seen on staging: containerd write error).
-	id, err := p.Provision(ctx, spec)
+	rented, err := p.Provision(ctx, spec)
+	id := rented.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +302,8 @@ func TestVastAIDoesNotBlameHostWhenContainerStarted(t *testing.T) {
 	ctx := context.Background()
 	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
 
-	id, _ := p.Provision(ctx, spec)
+	rented, _ := p.Provision(ctx, spec)
+	id := rented.ID
 	f.status[id] = "running" // container up; the worker never became ready (image/code issue)
 	p.Status(ctx, id)
 	if err := p.Destroy(ctx, id); err != nil { // boot_timeout teardown
@@ -354,7 +366,8 @@ func TestVastAIStateSurvivesRestart(t *testing.T) {
 	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
 
 	// Rented before the restart; the container never starts.
-	id, err := p.Provision(ctx, spec)
+	rented, err := p.Provision(ctx, spec)
+	id := rented.ID
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,5 +416,92 @@ func TestVastAIMinRAMAndVCPUFilters(t *testing.T) {
 	}
 	if _, ok := f2.search["cpu_cores_effective"]; ok {
 		t.Error("cpu_cores_effective filter sent when unset")
+	}
+}
+
+func newFakeVastWith(t *testing.T, mutate func(c *vastConfig)) (*fakeVast, Provider) {
+	t.Helper()
+	f, p := newFakeVast(t)
+	mutate(&p.(*vastAIProvider).cfg)
+	return f, p
+}
+
+func gpuFilters(f *fakeVast) []string {
+	var out []string
+	for _, s := range f.searches {
+		out = append(out, fmt.Sprint(s["gpu_name"]))
+	}
+	return out
+}
+
+// gpu_names: one search per model (a single "in" search misses the cheapest offers on the
+// real API), and the cheapest offer across them is rented, whatever the list order.
+func TestVastAIGPUNamesRentsCheapestAcrossModels(t *testing.T) {
+	f, p := newFakeVastWith(t, func(c *vastConfig) {
+		c.GPUNames = []string{"RTX_4090", "RTX 3090", " ", "RTX 3090"}
+		c.GPUName = "ignored"
+	})
+	f.offers = map[string]string{
+		"RTX 4090": `{"offers":[{"id":1,"machine_id":10,"dph_total":0.35,"gpu_name":"RTX 4090"}]}`,
+		"RTX 3090": `{"offers":[{"id":2,"machine_id":20,"dph_total":0.21,"gpu_name":"RTX 3090"}]}`,
+	}
+	rented, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img", GPU: "also ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"map[eq:RTX 4090]", "map[eq:RTX 3090]"} // normalised, blanks and duplicates dropped
+	if got := gpuFilters(f); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("searches gpu_name = %v, want %v", got, want)
+	}
+	if f.createURL != "/asks/2/" {
+		t.Errorf("rented offer %s, want the cheapest (/asks/2/)", f.createURL)
+	}
+	if rented.GPU != "RTX 3090" || rented.PricePerHour != 0.21 {
+		t.Errorf("reported rental = %+v, want RTX 3090 at 0.21", rented)
+	}
+}
+
+// A model without offers does not prevent renting another one.
+func TestVastAIGPUNamesSkipsModelsWithoutOffers(t *testing.T) {
+	f, p := newFakeVastWith(t, func(c *vastConfig) { c.GPUNames = []string{"RTX 3090", "RTX 4090"} })
+	f.offers = map[string]string{"RTX 3090": `{"offers":[]}`}
+	rented, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if err != nil || rented.GPU != "RTX 4090" {
+		t.Fatalf("rented %+v err=%v, want the 4090 offer", rented, err)
+	}
+}
+
+// Without gpu_names the search is the same single request as before.
+func TestVastAIGPUSelectionPrecedence(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     func(c *vastConfig)
+		specGPU string
+		want    []string
+	}{
+		{"one gpu_names entry", func(c *vastConfig) { c.GPUNames = []string{"RTX_3090"} }, "", []string{"map[eq:RTX 3090]"}},
+		{"gpu_name", func(c *vastConfig) { c.GPUName = "RTX A5000" }, "RTX 4090", []string{"map[eq:RTX A5000]"}},
+		{"queue instance.gpu", func(c *vastConfig) {}, "RTX 4090", []string{"map[eq:RTX 4090]"}},
+		{"nothing: any model", func(c *vastConfig) {}, "", []string{"<nil>"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, p := newFakeVastWith(t, tc.cfg)
+			if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img", GPU: tc.specGPU}); err != nil {
+				t.Fatal(err)
+			}
+			if got := gpuFilters(f); fmt.Sprint(got) != fmt.Sprint(tc.want) {
+				t.Errorf("searches gpu_name = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestVastAINoOffersErrorListsModels(t *testing.T) {
+	f, p := newFakeVastWith(t, func(c *vastConfig) { c.GPUNames = []string{"RTX 3090", "RTX 4090"} })
+	f.offers = map[string]string{"RTX 3090": `{"offers":[]}`, "RTX 4090": `{"offers":[]}`}
+	_, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if err == nil || !strings.Contains(err.Error(), "RTX 3090, RTX 4090") {
+		t.Fatalf("error = %v, want it to list the searched models", err)
 	}
 }

@@ -40,7 +40,8 @@ func TestMockProviderLifecycle(t *testing.T) {
 		t.Fatalf("build mock: %v", err)
 	}
 	ctx := context.Background()
-	id, err := p.Provision(ctx, provider.InstanceSpec{Queue: "inference"})
+	rented, err := p.Provision(ctx, provider.InstanceSpec{Queue: "inference"})
+	id := rented.ID
 	if err != nil || id == "" {
 		t.Fatalf("provision: id=%q err=%v", id, err)
 	}

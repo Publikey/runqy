@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -162,9 +163,20 @@ const providersDisabledHint = "autoscale providers require encryption. Set RUNQY
 
 // --- status ---
 
+// printInstanceRow writes one `autoscale status` row: the GPU and hourly price are what
+// the provider actually rented.
+func printInstanceRow(w io.Writer, i *autoscale.Instance) {
+	gpu := i.GPU
+	if gpu == "" {
+		gpu = "-"
+	}
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%v\t$%.3f\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, gpu,
+		autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.PricePerHour, i.CostAccumulated)
+}
+
 func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "INSTANCE ID\tQUEUE\tPROVIDER\tSTATUS\tWORKER\tPROTECTED\tCOST")
+	fmt.Fprintln(w, "INSTANCE ID\tQUEUE\tPROVIDER\tGPU\tSTATUS\tWORKER\tPROTECTED\tPRICE/HR\tCOST")
 
 	if IsRemoteMode() {
 		resp, err := NewAPIClient().AutoscaleStatusAPI()
@@ -176,7 +188,8 @@ func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		for _, i := range resp.Instances {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.CostAccumulated)
+			printInstanceRow(w, &autoscale.Instance{InstanceID: i.InstanceID, Queue: i.Queue, Provider: i.Provider, GPU: i.GPU,
+				Status: i.Status, WorkerID: i.WorkerID, Protected: i.Protected, PricePerHour: i.PricePerHour, CostAccumulated: i.CostAccumulated})
 		}
 		w.Flush()
 		fmt.Printf("\nTotal accumulated cost: $%.4f\n", resp.TotalCost)
@@ -197,7 +210,7 @@ func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 	}
 	var total float64
 	for _, i := range instances {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%v\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.CostAccumulated)
+		printInstanceRow(w, i)
 		total += i.CostAccumulated
 	}
 	w.Flush()
@@ -276,9 +289,9 @@ func runAutoscaleProvidersList(cmd *cobra.Command, args []string) error {
 func runAutoscaleProvidersShow(cmd *cobra.Command, args []string) error {
 	name := args[0]
 	var (
-		ptype    string
-		enabled  bool
-		cfgJSON  json.RawMessage
+		ptype   string
+		enabled bool
+		cfgJSON json.RawMessage
 	)
 	if IsRemoteMode() {
 		p, err := NewAPIClient().GetAutoscaleProviderAPI(name)

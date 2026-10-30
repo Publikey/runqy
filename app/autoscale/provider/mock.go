@@ -27,7 +27,7 @@ func newMockProvider(_ json.RawMessage) (Provider, error) {
 
 func (m *mockProvider) Name() string { return "mock" }
 
-func (m *mockProvider) Provision(_ context.Context, spec InstanceSpec) (string, error) {
+func (m *mockProvider) Provision(_ context.Context, spec InstanceSpec) (Provisioned, error) {
 	m.mu.Lock()
 	m.counter++
 	id := fmt.Sprintf("mock-%d", m.counter)
@@ -35,7 +35,7 @@ func (m *mockProvider) Provision(_ context.Context, spec InstanceSpec) (string, 
 	m.mu.Unlock()
 	log.Printf("[AUTOSCALE][mock] PROVISION queue=%q gpu=%q image=%q disk=%dGB maxPrice=%.2f minRAM=%dGB minVCPU=%d env=%d -> %s",
 		spec.Queue, spec.GPU, spec.Image, spec.DiskGB, spec.MaxPricePerHour, spec.MinRAMGB, spec.MinVCPU, len(spec.Env), id)
-	return id, nil
+	return Provisioned{ID: id, GPU: spec.GPU, PricePerHour: spec.MaxPricePerHour}, nil
 }
 
 func (m *mockProvider) Destroy(_ context.Context, instanceID string) error {
