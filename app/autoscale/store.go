@@ -43,6 +43,14 @@ type Instance struct {
 	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
 	LastJobAt       *time.Time `json:"last_job_at,omitempty" db:"last_job_at"`
 	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
+
+	// GPU is the model actually rented, read from the metadata (empty when unknown).
+	GPU string `json:"gpu,omitempty" db:"-"`
+}
+
+// fillDerived sets the fields read from the metadata.
+func (i *Instance) fillDerived() {
+	i.GPU, _ = i.MetadataMap()["gpu"].(string)
 }
 
 // IsLive reports whether the instance is providing (or about to provide) capacity, i.e.
@@ -112,6 +120,7 @@ func (s *Store) GetByInstanceID(ctx context.Context, instanceID string) (*Instan
 	if err != nil {
 		return nil, fmt.Errorf("failed to get instance: %w", err)
 	}
+	inst.fillDerived()
 	return &inst, nil
 }
 
@@ -141,6 +150,7 @@ func (s *Store) selectInstances(ctx context.Context, query string, args ...inter
 	out := make([]*Instance, len(rows))
 	for i := range rows {
 		inst := rows[i]
+		inst.fillDerived()
 		out[i] = &inst
 	}
 	return out, nil

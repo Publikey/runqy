@@ -31,6 +31,8 @@ type fakeProvider struct {
 	destroyErr   error
 	provisions   int
 	destroyed    []string
+	rentedGPU    string  // reported by Provision
+	rentedPrice  float64 // reported by Provision
 }
 
 func (f *fakeProvider) Name() string {
@@ -40,14 +42,14 @@ func (f *fakeProvider) Name() string {
 	return f.name
 }
 
-func (f *fakeProvider) Provision(_ context.Context, _ provider.InstanceSpec) (string, error) {
+func (f *fakeProvider) Provision(_ context.Context, _ provider.InstanceSpec) (provider.Provisioned, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.provisions++
 	if f.provisionErr != nil {
-		return "", f.provisionErr
+		return provider.Provisioned{}, f.provisionErr
 	}
-	return fmt.Sprintf("p-%d", f.provisions), nil
+	return provider.Provisioned{ID: fmt.Sprintf("p-%d", f.provisions), GPU: f.rentedGPU, PricePerHour: f.rentedPrice}, nil
 }
 
 func (f *fakeProvider) Destroy(_ context.Context, id string) error {
@@ -454,5 +456,31 @@ func TestHostFaultsRetrySoonOnAnotherHost(t *testing.T) {
 	reconcile(t, a, &fakeProvider{}, map[string]*workerHeartbeat{"good": {workerID: "w", status: "running", lastBeat: later.Unix()}}, later)
 	if a.hostFails["inference"] != nil {
 		t.Errorf("host-fault pause not reset by a ready worker")
+	}
+}
+
+// The instance records the GPU and price the provider actually rented; the queue's price
+// cap is only a fallback (it is unset when the cap lives in the provider config).
+func TestProvisionRecordsRentedGPUAndPrice(t *testing.T) {
+	a := newTestAutoscaler(t)
+	ctx := context.Background()
+	prov := &fakeProvider{name: "mock", rentedGPU: "RTX 4090", rentedPrice: 0.312}
+	asc := &queueworker.AutoscaleConfig{Enabled: true, Provider: "p", MaxWorkers: 2,
+		Instance: &queueworker.InstanceSpec{MaxPricePerHour: 0.5}}
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, time.Now(), "")
+	insts, err := a.instances.ListByQueue(ctx, "inference")
+	if err != nil || len(insts) != 1 {
+		t.Fatalf("instances = %v err=%v", insts, err)
+	}
+	if insts[0].GPU != "RTX 4090" || insts[0].PricePerHour != 0.312 {
+		t.Errorf("recorded gpu=%q price=%v, want RTX 4090 at 0.312", insts[0].GPU, insts[0].PricePerHour)
+	}
+
+	// A provider that reports no price falls back to the queue's cap.
+	prov.rentedGPU, prov.rentedPrice = "", 0
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, time.Now().Add(time.Hour), "")
+	insts, _ = a.instances.ListByQueue(ctx, "inference")
+	if len(insts) != 2 || insts[1].PricePerHour != 0.5 || insts[1].GPU != "" {
+		t.Errorf("fallback: %+v", insts)
 	}
 }

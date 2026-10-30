@@ -82,11 +82,17 @@ func (p *runPodProvider) Name() string { return "runpod" }
 
 // createPodResponse is the subset of the POST /pods response we use.
 type createPodResponse struct {
-	ID            string `json:"id"`
-	DesiredStatus string `json:"desiredStatus"`
+	ID                string  `json:"id"`
+	DesiredStatus     string  `json:"desiredStatus"`
+	CostPerHr         float64 `json:"costPerHr"`
+	AdjustedCostPerHr float64 `json:"adjustedCostPerHr"` // after Savings Plans
+	GPU               struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
+	} `json:"gpu"`
 }
 
-func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (string, error) {
+func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (Provisioned, error) {
 	gpuTypes := p.cfg.GPUTypeIDs
 	if len(gpuTypes) == 0 {
 		gpuType := p.cfg.GPUTypeID
@@ -133,12 +139,21 @@ func (p *runPodProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 
 	var resp createPodResponse
 	if err := p.do(ctx, http.MethodPost, "/pods", body, &resp); err != nil {
-		return "", err
+		return Provisioned{}, err
 	}
 	if resp.ID == "" {
-		return "", fmt.Errorf("runpod: create pod returned no id")
+		return Provisioned{}, fmt.Errorf("runpod: create pod returned no id")
 	}
-	return resp.ID, nil
+	// RunPod picks the first available type of the list: report the one it rented.
+	gpu := resp.GPU.DisplayName
+	if gpu == "" {
+		gpu = resp.GPU.ID
+	}
+	price := resp.AdjustedCostPerHr
+	if price <= 0 {
+		price = resp.CostPerHr
+	}
+	return Provisioned{ID: resp.ID, GPU: gpu, PricePerHour: price}, nil
 }
 
 // Destroy terminates a pod. It is idempotent (gone is success) and refuses any pod whose

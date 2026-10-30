@@ -248,7 +248,12 @@
 							<tr>
 								<td class="font-mono text-sm">{instance.instance_id}</td>
 								<td>{instance.queue}</td>
-								<td>{instance.provider}</td>
+								<td>
+									{instance.provider}
+									{#if instance.gpu}
+										<div class="text-xs text-surface-400">{instance.gpu}</div>
+									{/if}
+								</td>
 								<td>
 									<span class={statusBadgeClass(displayStatus(instance))}>{displayStatus(instance)}</span>
 								</td>

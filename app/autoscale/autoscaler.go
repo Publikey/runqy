@@ -634,7 +634,7 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 		spec.MinVCPU = asc.Instance.MinVCPU
 	}
 
-	providerID, err := prov.Provision(ctx, spec)
+	rented, err := prov.Provision(ctx, spec)
 	if err != nil {
 		// Record the failure so it is visible in status.
 		_ = a.instances.Create(ctx, &Instance{
@@ -644,11 +644,18 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 		return err
 	}
 
-	var price float64
-	if asc.Instance != nil {
+	providerID := rented.ID
+	// Bill at the price actually rented; the queue's price cap is only a fallback for
+	// providers that do not report it (it is often unset when the cap lives in the provider).
+	price := rented.PricePerHour
+	if price <= 0 && asc.Instance != nil {
 		price = asc.Instance.MaxPricePerHour
 	}
-	meta := mustJSON(map[string]string{"provider_instance_id": providerID})
+	md := map[string]string{"provider_instance_id": providerID}
+	if rented.GPU != "" {
+		md["gpu"] = rented.GPU
+	}
+	meta := mustJSON(md)
 	inst := &Instance{
 		InstanceID:   correlationID,
 		Provider:     providerName,

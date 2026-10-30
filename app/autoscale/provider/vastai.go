@@ -23,12 +23,15 @@ const vastDefaultBaseURL = "https://console.vast.ai/api/v0"
 
 // vastConfig is the decrypted provider config (stored in autoscale_providers.config).
 type vastConfig struct {
-	APIKey   string  `json:"api_key"`
-	GPUName  string  `json:"gpu_name"`           // e.g. "RTX 4090" (or "RTX_4090"); overrides spec.GPU
-	MaxPrice float64 `json:"max_price_per_hour"` // overrides spec.MaxPricePerHour when > 0
-	DiskGB   int     `json:"disk_gb"`            // fallback when spec.DiskGB is 0
-	OnStart  string  `json:"onstart"`            // optional onstart script contents
-	BaseURL  string  `json:"base_url"`           // optional override (tests)
+	APIKey  string `json:"api_key"`
+	GPUName string `json:"gpu_name"` // e.g. "RTX 4090" (or "RTX_4090"); overrides spec.GPU
+	// GPUNames lists acceptable GPU models; the cheapest matching offer among them is
+	// rented (no preference order). Takes precedence over gpu_name.
+	GPUNames []string `json:"gpu_names,omitempty"`
+	MaxPrice float64  `json:"max_price_per_hour"` // overrides spec.MaxPricePerHour when > 0
+	DiskGB   int      `json:"disk_gb"`            // fallback when spec.DiskGB is 0
+	OnStart  string   `json:"onstart"`            // optional onstart script contents
+	BaseURL  string   `json:"base_url"`           // optional override (tests)
 
 	// Offer filters. Machines must download the worker image (several GB) from ghcr.io
 	// and clone the task code from GitHub: both are slow or blocked from some regions.
@@ -166,15 +169,33 @@ func newVastAIProvider(raw json.RawMessage) (Provider, error) {
 
 func (p *vastAIProvider) Name() string { return "vastai" }
 
-// Provision searches the marketplace for the cheapest matching offer and rents it.
-func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (string, error) {
-	gpuName := p.cfg.GPUName
-	if gpuName == "" {
-		gpuName = spec.GPU
+// gpuNames returns the GPU models to search, normalised: gpu_names, else gpu_name, else
+// the queue's instance.gpu; empty means any model. The API matches Vast's real names, with
+// spaces ("RTX 3060"); Vast's CLI and docs write underscores ("RTX_3060"), accept both.
+func (p *vastAIProvider) gpuNames(specGPU string) []string {
+	names := p.cfg.GPUNames
+	if len(names) == 0 {
+		name := p.cfg.GPUName
+		if name == "" {
+			name = specGPU
+		}
+		names = []string{name}
 	}
-	// The API matches Vast's real GPU names, with spaces ("RTX 3060"). Vast's CLI and
-	// docs write underscores ("RTX_3060") and convert them client-side; accept both.
-	gpuName = strings.TrimSpace(strings.ReplaceAll(gpuName, "_", " "))
+	out := make([]string, 0, len(names))
+	seen := map[string]bool{}
+	for _, n := range names {
+		n = strings.TrimSpace(strings.ReplaceAll(n, "_", " "))
+		if n != "" && !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// Provision searches the marketplace for the cheapest matching offer and rents it.
+func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (Provisioned, error) {
+	gpuNames := p.gpuNames(spec.GPU)
 	maxPrice := spec.MaxPricePerHour
 	if p.cfg.MaxPrice > 0 {
 		maxPrice = p.cfg.MaxPrice
@@ -186,12 +207,12 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 
 	env, err := vastEnv(spec.Env)
 	if err != nil {
-		return "", err
+		return Provisioned{}, err
 	}
 
-	offerID, machineID, err := p.cheapestOffer(ctx, gpuName, maxPrice, disk, spec.MinRAMGB, spec.MinVCPU)
+	offer, err := p.cheapestOffer(ctx, gpuNames, maxPrice, disk, spec.MinRAMGB, spec.MinVCPU)
 	if err != nil {
-		return "", err
+		return Provisioned{}, err
 	}
 
 	body := map[string]interface{}{
@@ -210,20 +231,20 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (stri
 		Error       string      `json:"error"`
 		Msg         string      `json:"msg"`
 	}
-	if err := p.do(ctx, http.MethodPut, "/asks/"+offerID+"/", body, &resp); err != nil {
-		return "", err
+	if err := p.do(ctx, http.MethodPut, "/asks/"+offer.ID.String()+"/", body, &resp); err != nil {
+		return Provisioned{}, err
 	}
 	if resp.NewContract.String() == "" || resp.NewContract.String() == "0" {
 		if resp.Error != "" || resp.Msg != "" {
-			return "", fmt.Errorf("vastai create failed: %s %s", resp.Error, resp.Msg)
+			return Provisioned{}, fmt.Errorf("vastai create failed: %s %s", resp.Error, resp.Msg)
 		}
-		return "", fmt.Errorf("vastai create returned no contract id")
+		return Provisioned{}, fmt.Errorf("vastai create returned no contract id")
 	}
 	p.mu.Lock()
-	p.placed[resp.NewContract.String()] = machineID
+	p.placed[resp.NewContract.String()] = offer.MachineID.String()
 	p.mu.Unlock()
 	p.saveState(ctx)
-	return resp.NewContract.String(), nil
+	return Provisioned{ID: resp.NewContract.String(), GPU: offer.GPUName, PricePerHour: offer.DPHTotal}, nil
 }
 
 // vastEnv renders env vars in Vast's docker-flag string form: "-e K=V -e K2=V2".
@@ -246,8 +267,56 @@ func vastEnv(env map[string]string) (string, error) {
 	return strings.Join(parts, " "), nil
 }
 
-// cheapestOffer searches on-demand offers and returns the lowest-price rentable one.
-func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxPrice float64, disk, minRAMGB, minVCPU int) (offerID, machineID string, err error) {
+// vastOffer is the subset of a search result the provider uses.
+type vastOffer struct {
+	ID        json.Number `json:"id"`
+	MachineID json.Number `json:"machine_id"`
+	DPHTotal  float64     `json:"dph_total"`
+	GPUName   string      `json:"gpu_name"`
+}
+
+// cheapestOffer searches on-demand offers and returns the lowest-price rentable one among
+// the given GPU models (any model when empty). Each model is searched on its own: a single
+// search with gpu_name {"in": [...]} returns a partial set (at most 64 offers, missing the
+// cheapest ones, checked against the live API), so it cannot find the cheapest offer.
+func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, maxPrice float64, disk, minRAMGB, minVCPU int) (vastOffer, error) {
+	searches := gpuNames
+	if len(searches) == 0 {
+		searches = []string{""} // no GPU filter
+	}
+	var best *vastOffer
+	var lastErr error
+	for _, name := range searches {
+		offers, err := p.searchOffers(ctx, name, maxPrice, disk, minRAMGB, minVCPU)
+		if err != nil {
+			lastErr = err // another model may still have offers
+			continue
+		}
+		if len(offers) > 0 && (best == nil || offers[0].DPHTotal < best.DPHTotal) {
+			o := offers[0]
+			best = &o
+		}
+	}
+	if best != nil {
+		return *best, nil
+	}
+	if lastErr != nil {
+		return vastOffer{}, lastErr
+	}
+	return vastOffer{}, fmt.Errorf("vastai: no offers match (gpu=%s max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d)",
+		describeGPUs(gpuNames), maxPrice, disk, minRAMGB, minVCPU)
+}
+
+// describeGPUs renders the searched GPU models for error messages.
+func describeGPUs(names []string) string {
+	if len(names) == 0 {
+		return "any"
+	}
+	return strconv.Quote(strings.Join(names, ", "))
+}
+
+// searchOffers runs one marketplace search, cheapest first; gpuName "" means any model.
+func (p *vastAIProvider) searchOffers(ctx context.Context, gpuName string, maxPrice float64, disk, minRAMGB, minVCPU int) ([]vastOffer, error) {
 	q := map[string]interface{}{
 		"rentable": map[string]interface{}{"eq": true},
 		"rented":   map[string]interface{}{"eq": false},
@@ -299,19 +368,12 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuName string, maxP
 	}
 
 	var resp struct {
-		Offers []struct {
-			ID        json.Number `json:"id"`
-			MachineID json.Number `json:"machine_id"`
-			DPHTotal  float64     `json:"dph_total"`
-		} `json:"offers"`
+		Offers []vastOffer `json:"offers"`
 	}
 	if err := p.do(ctx, http.MethodPost, "/bundles/", q, &resp); err != nil {
-		return "", "", err
+		return nil, err
 	}
-	if len(resp.Offers) == 0 {
-		return "", "", fmt.Errorf("vastai: no offers match (gpu=%q max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d)", gpuName, maxPrice, disk, minRAMGB, minVCPU)
-	}
-	return resp.Offers[0].ID.String(), resp.Offers[0].MachineID.String(), nil
+	return resp.Offers, nil
 }
 
 // excludedMachines lists machines still within their exclusion window (and forgets

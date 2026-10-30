@@ -31,6 +31,14 @@ type InstanceSpec struct {
 	Env             map[string]string // env injected into the booting worker (RUNQY_*)
 }
 
+// Provisioned describes the instance a provider created: what was actually rented, which
+// can differ from the request when the provider picks among several GPU models.
+type Provisioned struct {
+	ID           string  // provider-assigned instance id
+	GPU          string  // GPU model rented ("" when the provider does not say)
+	PricePerHour float64 // hourly price of the rental (0 when the provider does not say)
+}
+
 // InstanceStatus is a provider's view of a single instance.
 type InstanceStatus struct {
 	InstanceID string `json:"instance_id"`
@@ -63,8 +71,8 @@ type Stateful interface {
 type Provider interface {
 	// Name returns the provider type identifier (e.g. "mock", "vastai").
 	Name() string
-	// Provision creates one instance and returns its provider-assigned id.
-	Provision(ctx context.Context, spec InstanceSpec) (instanceID string, err error)
+	// Provision creates one instance and describes it (id, GPU and price rented).
+	Provision(ctx context.Context, spec InstanceSpec) (Provisioned, error)
 	// Destroy tears an instance down. It must be idempotent (no error if already gone).
 	Destroy(ctx context.Context, instanceID string) error
 	// Status reports the current state of an instance.

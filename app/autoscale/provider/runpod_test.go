@@ -62,10 +62,11 @@ func TestRunPodLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	// Provision
-	id, err := p.Provision(ctx, InstanceSpec{
+	rented, err := p.Provision(ctx, InstanceSpec{
 		Queue: "inference", Image: "ghcr.io/publikey/runqy-worker:inference", DiskGB: 50,
 		Env: map[string]string{"RUNQY_SERVER_URL": "http://x", "RUNQY_INSTANCE_ID": "as-abcdef123456"},
 	})
+	id := rented.ID
 	if err != nil || id != "pod-123" {
 		t.Fatalf("provision id=%q err=%v", id, err)
 	}
@@ -188,5 +189,24 @@ func TestRunPodMinRAMAndVCPU(t *testing.T) {
 	}
 	if _, ok := body["minVCPUPerGPU"]; ok {
 		t.Error("minVCPUPerGPU sent when unset (RunPod's default must apply)")
+	}
+}
+
+// RunPod rents the first available type of the list: the reply says which one and at
+// what price (Savings Plans price when lower).
+func TestRunPodReportsRentedGPUAndPrice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"id":"pod-1","costPerHr":0.44,"adjustedCostPerHr":0.39,"gpu":{"id":"NVIDIA RTX A5000","displayName":"RTX A5000","count":1}}`))
+	}))
+	defer srv.Close()
+	cfg, _ := json.Marshal(runpodConfig{APIKey: "k", BaseURL: srv.URL, GPUTypeIDs: []string{"NVIDIA GeForce RTX 3090", "NVIDIA RTX A5000"}})
+	p, _ := Build("runpod", cfg)
+	rented, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rented.ID != "pod-1" || rented.GPU != "RTX A5000" || rented.PricePerHour != 0.39 {
+		t.Errorf("rented = %+v, want pod-1 / RTX A5000 / 0.39", rented)
 	}
 }

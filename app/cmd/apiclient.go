@@ -546,6 +546,7 @@ type AutoscaleInstanceAPI struct {
 	Protected       bool    `json:"protected"`
 	PricePerHour    float64 `json:"price_per_hour"`
 	CostAccumulated float64 `json:"cost_accumulated"`
+	GPU             string  `json:"gpu,omitempty"`
 }
 
 // AutoscaleStatusResponseAPI is the response for GET /api/autoscale/status.

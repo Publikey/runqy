@@ -315,8 +315,9 @@ export interface AutoscaleInstance {
 	status: AutoscaleInstanceStatus | string;
 	worker_id: string;
 	protected: boolean;
-	price_per_hour: number;
+	price_per_hour: number; // price actually rented when the provider reports it
 	cost_accumulated: number;
+	gpu?: string; // GPU model actually rented
 	created_at: string;
 	last_job_at?: string;
 	updated_at: string;
