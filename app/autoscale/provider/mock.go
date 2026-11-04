@@ -47,6 +47,13 @@ func (m *mockProvider) Destroy(_ context.Context, instanceID string) error {
 	return nil
 }
 
+// Logs says what the mock is: it starts no machine, so no worker can ever register. A
+// queue left on a mock provider by mistake then shows the cause in its failed instances.
+func (m *mockProvider) Logs(_ context.Context, instanceID string, _ int) (string, error) {
+	return fmt.Sprintf("[mock provider] %s is simulated: no machine was started, so no worker will ever register.\n"+
+		"Use a real provider type (vastai, runpod) for this queue to get GPU workers.\n", instanceID), nil
+}
+
 func (m *mockProvider) Status(_ context.Context, instanceID string) (InstanceStatus, error) {
 	m.mu.Lock()
 	st, ok := m.instances[instanceID]

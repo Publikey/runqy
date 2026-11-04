@@ -316,7 +316,8 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 
 	// Autoscale endpoints (instance status/protection + provider config CRUD).
 	if opts.AutoscaleStore != nil && opts.AutoscaleProviderStore != nil {
-		api.HandleFunc("/autoscale/status", newAutoscaleStatusHandlerFunc(opts.AutoscaleStore)).Methods("GET")
+		api.HandleFunc("/autoscale/status", newAutoscaleStatusHandlerFunc(opts.AutoscaleStore, rc)).Methods("GET")
+		api.HandleFunc("/autoscale/instances/{id}/logs", newAutoscaleInstanceLogsHandlerFunc(opts.AutoscaleStore, opts.AutoscaleProviderStore)).Methods("GET")
 		api.HandleFunc("/autoscale/instances/{id}/protect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, true)).Methods("POST")
 		api.HandleFunc("/autoscale/instances/{id}/unprotect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, false)).Methods("POST")
 		api.HandleFunc("/autoscale/provider-types", newAutoscaleProviderTypesHandlerFunc()).Methods("GET")

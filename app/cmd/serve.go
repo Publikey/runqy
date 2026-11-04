@@ -449,7 +449,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	api.SetupAPI(router, qwStore, cfg.QueueWorkersDir, cfg, redisAddr.AsynqOpt)
 	api.SetupVaultsAPI(router, vaultStore, cfg.APIKey)
-	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, cfg.APIKey)
+	api.SetupAutoscaleAPI(router, autoscaleInstanceStore, autoscaleProviderStore, redisAddr.RDB, cfg.APIKey)
 	api.SetupAlertsAPI(router, alertsAPI, cfg.APIKey)
 	api.SetupControlAPI(router, controlAPI, cfg.APIKey)
 

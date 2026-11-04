@@ -10,6 +10,7 @@ import (
 	"github.com/Publikey/runqy/autoscale"
 	asprovider "github.com/Publikey/runqy/autoscale/provider"
 	"github.com/gorilla/mux"
+	"github.com/redis/go-redis/v9"
 )
 
 // AutoscaleStatusResponse mirrors the main API's GET /api/autoscale/status payload.
@@ -17,6 +18,8 @@ type AutoscaleStatusResponse struct {
 	Instances []*autoscale.Instance `json:"instances"`
 	Count     int                   `json:"count"`
 	TotalCost float64               `json:"total_cost"`
+	// Pauses lists queues whose provisioning is on hold after repeated failures.
+	Pauses []autoscale.Pause `json:"pauses"`
 }
 
 // autoscaleProviderView is a provider config with secrets masked, mirroring the main API.
@@ -61,7 +64,7 @@ func checkAutoscaleProvidersEnabled(w http.ResponseWriter, store *asprovider.Sto
 	return false
 }
 
-func newAutoscaleStatusHandlerFunc(store *autoscale.Store) http.HandlerFunc {
+func newAutoscaleStatusHandlerFunc(store *autoscale.Store, rc redis.UniversalClient) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		instances, err := store.ListAll(r.Context())
 		if err != nil {
@@ -72,12 +75,44 @@ func newAutoscaleStatusHandlerFunc(store *autoscale.Store) http.HandlerFunc {
 		for _, inst := range instances {
 			total += inst.CostAccumulated
 		}
+		pauses, err := autoscale.ListPauses(r.Context(), rc, time.Now())
+		if err != nil {
+			log.Printf("[AUTOSCALE] cannot read provisioning pauses: %v", err)
+		}
+		if pauses == nil {
+			pauses = []autoscale.Pause{}
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(AutoscaleStatusResponse{
 			Instances: instances,
 			Count:     len(instances),
 			TotalCost: total,
+			Pauses:    pauses,
 		})
+	}
+}
+
+// newAutoscaleInstanceLogsHandlerFunc returns an instance's logs: live from the provider
+// while the machine exists, otherwise those saved when it was destroyed.
+func newAutoscaleInstanceLogsHandlerFunc(store *autoscale.Store, providers *asprovider.Store) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !checkAutoscaleProvidersEnabled(w, providers) {
+			return
+		}
+		logs, err := autoscale.FetchInstanceLogs(r.Context(), store, providers, mux.Vars(r)["id"])
+		switch {
+		case errors.Is(err, autoscale.ErrInstanceNotFound):
+			writeJSONError(w, "instance not found", http.StatusNotFound)
+			return
+		case errors.Is(err, autoscale.ErrLogsUnsupported):
+			writeJSONError(w, err.Error(), http.StatusNotImplemented)
+			return
+		case err != nil:
+			writeJSONError(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(logs)
 	}
 }
 

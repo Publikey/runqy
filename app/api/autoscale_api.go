@@ -2,11 +2,15 @@ package api
 
 import (
 	"errors"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/Publikey/runqy/autoscale"
+	"github.com/Publikey/runqy/autoscale/provider"
 	"github.com/Publikey/runqy/models"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 // AutoscaleStatusResponse is the payload for GET /api/autoscale/status.
@@ -14,6 +18,8 @@ type AutoscaleStatusResponse struct {
 	Instances []*autoscale.Instance `json:"instances"`
 	Count     int                   `json:"count"`
 	TotalCost float64               `json:"total_cost"`
+	// Pauses lists queues whose provisioning is on hold after repeated failures.
+	Pauses []autoscale.Pause `json:"pauses"`
 }
 
 // AutoscaleStatus returns the current state of all tracked autoscaler instances.
@@ -23,7 +29,7 @@ type AutoscaleStatusResponse struct {
 // @Produce json
 // @Success 200 {object} AutoscaleStatusResponse
 // @Router /api/autoscale/status [get]
-func AutoscaleStatus(store *autoscale.Store) gin.HandlerFunc {
+func AutoscaleStatus(store *autoscale.Store, rdb redis.Cmdable) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		instances, err := store.ListAll(c.Request.Context())
 		if err != nil {
@@ -34,11 +40,46 @@ func AutoscaleStatus(store *autoscale.Store) gin.HandlerFunc {
 		for _, inst := range instances {
 			total += inst.CostAccumulated
 		}
+		pauses, err := autoscale.ListPauses(c.Request.Context(), rdb, time.Now())
+		if err != nil {
+			log.Printf("[AUTOSCALE] cannot read provisioning pauses: %v", err)
+		}
+		if pauses == nil {
+			pauses = []autoscale.Pause{}
+		}
 		c.JSON(http.StatusOK, AutoscaleStatusResponse{
 			Instances: instances,
 			Count:     len(instances),
 			TotalCost: total,
+			Pauses:    pauses,
 		})
+	}
+}
+
+// InstanceLogs returns an autoscaler instance's logs: fetched live from its provider
+// while the machine exists, otherwise those saved when it was destroyed.
+// @Summary Autoscaler instance logs
+// @Tags autoscale
+// @Produce json
+// @Param id path string true "Instance ID"
+// @Success 200 {object} autoscale.InstanceLogs
+// @Router /api/autoscale/instances/{id}/logs [get]
+func InstanceLogs(store *autoscale.Store, providers *provider.Store) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !providersEnabled(c, providers) {
+			return
+		}
+		logs, err := autoscale.FetchInstanceLogs(c.Request.Context(), store, providers, c.Param("id"))
+		switch {
+		case errors.Is(err, autoscale.ErrInstanceNotFound):
+			c.JSON(http.StatusNotFound, models.APIErrorResponse{Errors: []string{"instance not found"}})
+		case errors.Is(err, autoscale.ErrLogsUnsupported):
+			c.JSON(http.StatusNotImplemented, models.APIErrorResponse{Errors: []string{err.Error()}})
+		case err != nil:
+			c.JSON(http.StatusBadGateway, models.APIErrorResponse{Errors: []string{err.Error()}})
+		default:
+			c.JSON(http.StatusOK, logs)
+		}
 	}
 }
 

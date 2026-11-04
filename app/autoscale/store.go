@@ -46,11 +46,23 @@ type Instance struct {
 
 	// GPU is the model actually rented, read from the metadata (empty when unknown).
 	GPU string `json:"gpu,omitempty" db:"-"`
+	// ProviderInstanceID is the provider's own id for the machine (Vast.ai contract,
+	// RunPod pod), empty when provisioning failed before a machine was rented.
+	ProviderInstanceID string `json:"provider_instance_id,omitempty" db:"-"`
+	// Reason explains why the instance was torn down (boot timeout, provider failure,
+	// lost heartbeat, scale-down...).
+	Reason string `json:"reason,omitempty" db:"-"`
+	// Error is the provider error when the machine could not be rented at all.
+	Error string `json:"error,omitempty" db:"-"`
 }
 
 // fillDerived sets the fields read from the metadata.
 func (i *Instance) fillDerived() {
-	i.GPU, _ = i.MetadataMap()["gpu"].(string)
+	m := i.MetadataMap()
+	i.GPU, _ = m["gpu"].(string)
+	i.ProviderInstanceID, _ = m["provider_instance_id"].(string)
+	i.Reason, _ = m["reason"].(string)
+	i.Error, _ = m["error"].(string)
 }
 
 // IsLive reports whether the instance is providing (or about to provide) capacity, i.e.

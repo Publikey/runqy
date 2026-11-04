@@ -318,15 +318,35 @@ export interface AutoscaleInstance {
 	price_per_hour: number; // price actually rented when the provider reports it
 	cost_accumulated: number;
 	gpu?: string; // GPU model actually rented
+	provider_instance_id?: string; // provider's own id (empty when renting failed)
+	reason?: string; // why the instance was torn down
+	error?: string; // provider error when the machine could not be rented
 	created_at: string;
 	last_job_at?: string;
 	updated_at: string;
+}
+
+export interface AutoscalePause {
+	queue: string; // parent queue
+	kind: 'provision' | 'boot' | 'host' | string;
+	failures: number;
+	until: string;
+	cause: string;
 }
 
 export interface AutoscaleStatus {
 	instances: AutoscaleInstance[];
 	count: number;
 	total_cost: number;
+	pauses?: AutoscalePause[]; // provisioning on hold after repeated failures
+}
+
+export interface AutoscaleInstanceLogs {
+	instance_id: string;
+	logs: string;
+	source: 'live' | 'saved';
+	fetched_at?: string;
+	error?: string; // why the capture failed (saved logs)
 }
 
 export interface AutoscaleProvider {

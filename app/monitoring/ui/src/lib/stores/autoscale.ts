@@ -1,9 +1,10 @@
 import { writable, derived } from 'svelte/store';
-import type { AutoscaleInstance, AutoscaleProvider } from '$lib/api/types';
+import type { AutoscaleInstance, AutoscalePause, AutoscaleProvider } from '$lib/api/types';
 import { getAutoscaleStatus, getAutoscaleProviders } from '$lib/api/client';
 
 interface AutoscaleState {
 	instances: AutoscaleInstance[];
+	pauses: AutoscalePause[];
 	providers: AutoscaleProvider[];
 	totalCost: number;
 	loading: boolean;
@@ -15,6 +16,7 @@ interface AutoscaleState {
 function createAutoscaleStore() {
 	const { subscribe, set, update } = writable<AutoscaleState>({
 		instances: [],
+		pauses: [],
 		providers: [],
 		totalCost: 0,
 		loading: false,
@@ -31,11 +33,13 @@ function createAutoscaleStore() {
 			// Live status (instances + total cost). This does not depend on the
 			// encryption master key, so it should generally succeed.
 			let instances: AutoscaleInstance[] = [];
+			let pauses: AutoscalePause[] = [];
 			let totalCost = 0;
 			let statusError: string | null = null;
 			try {
 				const status = await getAutoscaleStatus();
 				instances = status.instances || [];
+				pauses = status.pauses || [];
 				totalCost = status.total_cost || 0;
 			} catch (e) {
 				statusError = e instanceof Error ? e.message : 'Failed to fetch autoscale status';
@@ -61,6 +65,7 @@ function createAutoscaleStore() {
 			update((s) => ({
 				...s,
 				instances,
+				pauses,
 				providers,
 				totalCost,
 				featureDisabled,
@@ -72,6 +77,7 @@ function createAutoscaleStore() {
 		clear: () => {
 			set({
 				instances: [],
+				pauses: [],
 				providers: [],
 				totalCost: 0,
 				loading: false,

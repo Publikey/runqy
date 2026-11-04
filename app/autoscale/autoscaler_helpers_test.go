@@ -23,6 +23,23 @@ func TestCountLiveWorkers(t *testing.T) {
 	}
 }
 
+func TestFillDerivedExposesTeardownReason(t *testing.T) {
+	torn := &Instance{Metadata: mustJSON(map[string]string{
+		"provider_instance_id": "123456", "gpu": "RTX 4090",
+		"reason": "no ready worker within boot_timeout (30m0s)", "final_status": "failed",
+	})}
+	torn.fillDerived()
+	if torn.ProviderInstanceID != "123456" || torn.GPU != "RTX 4090" || torn.Reason != "no ready worker within boot_timeout (30m0s)" || torn.Error != "" {
+		t.Errorf("fillDerived = %+v", torn)
+	}
+
+	notRented := &Instance{Metadata: mustJSON(map[string]string{"error": "no offer matches"})}
+	notRented.fillDerived()
+	if notRented.Error != "no offer matches" || notRented.ProviderInstanceID != "" {
+		t.Errorf("fillDerived (provision error) = %+v", notRented)
+	}
+}
+
 func TestProviderInstanceID(t *testing.T) {
 	inst := &Instance{InstanceID: "as-123", Metadata: mustJSON(map[string]string{"provider_instance_id": "mock-7"})}
 	if got := providerInstanceID(inst); got != "mock-7" {

@@ -12,6 +12,7 @@ import (
 	"github.com/Publikey/runqy/third_party/asynq"
 	"github.com/Publikey/runqy/vaults"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 // Global vault store for use by worker handshake (protected by mutex)
@@ -103,12 +104,13 @@ func SetupControlAPI(r *gin.Engine, a *control.API, apiKey string) {
 	r.POST("/api/control", Authorize(apiKey), gin.WrapF(a.Send))
 }
 
-func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerStore *provider.Store, apiKey string) {
+func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerStore *provider.Store, rdb redis.Cmdable, apiKey string) {
 	grp := r.Group("/api/autoscale")
 	grp.Use(Authorize(apiKey))
 
 	// Status + instance protection
-	grp.GET("/status", AutoscaleStatus(instanceStore))
+	grp.GET("/status", AutoscaleStatus(instanceStore, rdb))
+	grp.GET("/instances/:id/logs", InstanceLogs(instanceStore, providerStore))
 	grp.POST("/instances/:id/protect", ProtectInstance(instanceStore))
 	grp.POST("/instances/:id/unprotect", UnprotectInstance(instanceStore))
 

@@ -21,6 +21,7 @@ import type {
 	PlaygroundEnqueueResponse,
 	AutoscaleStatus,
 	AutoscaleProvider,
+	AutoscaleInstanceLogs,
 	AlertsOverview,
 	AlertSettings,
 	ControlRequest,
@@ -418,6 +419,10 @@ export async function unprotectInstance(id: string): Promise<void> {
 	await fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/unprotect`, {
 		method: 'POST'
 	});
+}
+
+export async function getAutoscaleInstanceLogs(id: string): Promise<AutoscaleInstanceLogs> {
+	return fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/logs`);
 }
 
 export async function getAutoscaleProviderTypes(): Promise<{ types: string[] }> {
