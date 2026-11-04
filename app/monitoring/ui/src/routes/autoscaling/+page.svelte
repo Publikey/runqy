@@ -38,8 +38,7 @@
 		AutoscalePause,
 		AutoscaleProvider,
 		DeploymentConfig,
-		QueueConfigDetail,
-		ScaleTrigger
+		QueueConfigDetail
 	} from '$lib/api/types';
 	import { formatRelativeTime, formatDateTime } from '$lib/utils/format';
 	import { parseQueueName } from '$lib/utils/queueGrouping';
@@ -57,6 +56,7 @@
 		Segmented
 	} from '$lib/components/ui';
 	import { instanceStatus } from '$lib/utils/status';
+	import { ACTIVE_INSTANCE_STATUSES, describeInstance, describeTrigger, formatUntil } from '$lib/utils/autoscale';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -64,7 +64,6 @@
 
 	type InstanceFilter = 'active' | 'failed' | 'terminated' | 'all';
 	const FILTER_KEY = 'runqy.autoscaling.instanceFilter';
-	const ACTIVE_STATUSES = ['provisioning', 'running', 'draining', 'destroying'];
 
 	function loadFilter(): InstanceFilter {
 		try {
@@ -91,7 +90,7 @@
 	function matchesFilter(i: AutoscaleInstance, f: InstanceFilter): boolean {
 		switch (f) {
 			case 'active':
-				return ACTIVE_STATUSES.includes(i.status);
+				return ACTIVE_INSTANCE_STATUSES.includes(i.status);
 			case 'failed':
 				return i.status === 'failed';
 			case 'terminated':
@@ -154,12 +153,6 @@
 		return $autoscaleStore.pauses.filter((p) => p.queue === parent);
 	}
 
-	function formatUntil(until: string): string {
-		const d = new Date(until);
-		const mins = Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
-		const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-		return mins >= 1 ? `${time} (in ${mins} min)` : `${time} (< 1 min)`;
-	}
 
 	// ---- Queue autoscale configs ----
 
@@ -198,45 +191,12 @@
 
 	function liveCount(parent: string): number {
 		return $autoscaleStore.instances.filter(
-			(i) => i.queue === parent && ACTIVE_STATUSES.includes(i.status)
+			(i) => i.queue === parent && ACTIVE_INSTANCE_STATUSES.includes(i.status)
 		).length;
 	}
 
-	function subQueuesSuffix(t: ScaleTrigger): string {
-		return t.sub_queues?.length ? ` [${t.sub_queues.join(', ')}]` : '';
-	}
 
-	function describeTrigger(t: ScaleTrigger, direction: 'up' | 'down'): string {
-		switch (t.trigger) {
-			case 'no_workers':
-				return 'no workers' + subQueuesSuffix(t);
-			case 'queue_depth':
-				return `pending ≥ ${t.threshold ?? '?'}` + subQueuesSuffix(t);
-			case 'latency':
-				return `latency > ${t.max_latency ?? '?'}` + subQueuesSuffix(t);
-			case 'idle':
-				return `idle ${t.timeout ?? '?'}`;
-			case 'schedule':
-				if (direction === 'up') {
-					return `cron "${t.cron}" → ${t.workers ?? '?'}${t.duration ? ` for ${t.duration}` : ''}`;
-				}
-				return `cron "${t.cron}" → min`;
-			default:
-				return t.trigger;
-		}
-	}
 
-	function describeInstance(asc: AutoscaleConfig): string[] {
-		const out: string[] = [];
-		const spec = asc.instance || {};
-		if (spec.gpu) out.push(spec.gpu);
-		if (spec.disk_gb) out.push(`${spec.disk_gb} GB disk`);
-		if (spec.min_ram_gb) out.push(`≥ ${spec.min_ram_gb} GB RAM`);
-		if (spec.min_vcpu) out.push(`≥ ${spec.min_vcpu} vCPU`);
-		if (spec.max_price_per_hour) out.push(`≤ $${spec.max_price_per_hour}/hr`);
-		if (spec.image) out.push(spec.image);
-		return out;
-	}
 
 	async function openEditQueueConfig(name: string) {
 		try {

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
-	import type { Task, TaskState, QueueConfigDetail } from '$lib/api/types';
+	import type { Snippet } from 'svelte';
+	import type { Task, TaskState, QueueConfigDetail, AutoscaleConfig } from '$lib/api/types';
 	import {
 		getQueueInfo,
 		getQueueConfig,
@@ -29,8 +30,10 @@
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { Callout, PageHeader, Panel, Button, Badge, KeyValue, Tabs } from '$lib/components/ui';
-	import { queueStatus, workerState, workerStatus } from '$lib/utils/status';
-	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert } from '@lucide/svelte';
+	import { queueStatus, workerState, workerStatus, instanceStatus } from '$lib/utils/status';
+	import { autoscaleStore } from '$lib/stores/autoscale';
+	import { describeInstance, describeTrigger, formatUntil, isActiveInstance } from '$lib/utils/autoscale';
+	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert, ArrowRight } from '@lucide/svelte';
 
 	let qname = $derived(decodeURIComponent($page.params.qname ?? ''));
 
@@ -129,9 +132,20 @@
 	}
 
 	async function loadData() {
-		await Promise.all([loadQueueInfo(), workersStore.fetch()]);
+		await Promise.all([loadQueueInfo(), workersStore.fetch(), queueAutoscale ? autoscaleStore.fetch() : null]);
 		updateCountsFromQueueInfo();
 	}
+
+	// Autoscaling of the parent queue (config lives in the shared deployment).
+	let queueAutoscale = $derived(queueConfig?.deployment?.autoscale ?? null);
+	let parentQueue = $derived(parseQueueName(qname).parent);
+	let autoscaleProvider = $derived(
+		queueAutoscale ? $autoscaleStore.providers.find((p) => p.name === queueAutoscale.provider) : undefined
+	);
+	let autoscalePauses = $derived($autoscaleStore.pauses.filter((p) => p.queue === parentQueue));
+	let autoscaleInstances = $derived(
+		$autoscaleStore.instances.filter((i) => i.queue === parentQueue && isActiveInstance(i))
+	);
 
 	// Workers listening on this sub-queue, with what they are doing on it.
 	let queueWorkers = $derived.by(() => {
@@ -168,6 +182,7 @@
 	async function loadQueueConfig() {
 		try {
 			queueConfig = await getQueueConfig(qname);
+			if (queueConfig?.deployment?.autoscale) autoscaleStore.fetch();
 		} catch {
 			// No config for this queue (e.g. created directly in Redis) — hide the panel.
 			queueConfig = null;
@@ -410,6 +425,40 @@
 		{/if}
 	</Panel>
 
+	<!-- Autoscaling of the parent queue -->
+	{#if queueAutoscale}
+		{@const asc = queueAutoscale}
+		<Panel title="Autoscaling" flush>
+			{#snippet titleExtra()}
+				{#if asc.enabled}
+					<Badge tone="success" dot>Enabled</Badge>
+				{:else}
+					<Badge tone="outline">Disabled</Badge>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				<Button variant="ghost" size="sm" icon={ArrowRight} href="{base}/autoscaling">Autoscaling</Button>
+			{/snippet}
+			<ul class="divide-y divide-line-subtle">
+				{#each autoscalePauses as p (p.kind)}
+					<li class="flex items-start gap-2.5 px-4 md:px-5 py-2.5 text-ui text-warning-200">
+						<TriangleAlert size={16} strokeWidth={1.75} class="mt-0.5 shrink-0 text-warning-300" />
+						<span>Provisioning paused until {formatUntil(p.until)}: {p.failures}× {p.cause}.</span>
+					</li>
+				{/each}
+				{@render ascRow('Provider', provider, asc)}
+				{@render ascRow('Workers', workersRange, asc)}
+				{@render ascRow('Scale up', scaleUp, asc)}
+				{@render ascRow('Scale down', scaleDown, asc)}
+				{@render ascRow('Instance', instanceSpec, asc)}
+				{#if autoscaleInstances.length > 0}
+					{@render ascRow('Instances', liveInstances, asc)}
+				{/if}
+			</ul>
+
+		</Panel>
+	{/if}
+
 	<!-- Queue Configuration (read-only, collapsible) -->
 	{#if queueConfig}
 		{@const cfg = queueConfig}
@@ -605,3 +654,47 @@
 	confirmText="Delete"
 	onconfirm={confirmDialog.action}
 />
+
+{#snippet ascRow(label: string, value: Snippet<[AutoscaleConfig]>, asc: AutoscaleConfig)}
+	<li class="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 md:px-5 py-2.5 text-ui">
+		<span class="w-24 shrink-0 text-fg-subtle">{label}</span>
+		<span class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-fg-muted">{@render value(asc)}</span>
+	</li>
+{/snippet}
+
+	{#snippet provider(asc: AutoscaleConfig)}
+		<span class="font-mono text-fg">{asc.provider || '—'}</span>
+		{#if !$autoscaleStore.featureDisabled}
+			{#if !autoscaleProvider}
+				<Badge tone="danger" title="No provider with this name is registered">unknown provider</Badge>
+			{:else}
+				<span class="text-fg-subtle">{autoscaleProvider.provider_type}</span>
+				{#if autoscaleProvider.provider_type === 'mock'}
+					<Badge tone="warning" title="The mock provider rents no machine: no worker will ever boot">mock: boots nothing</Badge>
+				{/if}
+				{#if !autoscaleProvider.enabled}<Badge tone="warning">provider disabled</Badge>{/if}
+			{/if}
+		{/if}
+	{/snippet}
+	{#snippet workersRange(asc: AutoscaleConfig)}
+		<span><span class="text-fg">{autoscaleInstances.length}</span> live · {asc.min_workers}–{asc.max_workers}</span>
+		{#if asc.boot_timeout}<span class="text-fg-subtle">boot timeout {asc.boot_timeout}</span>{/if}
+	{/snippet}
+	{#snippet scaleUp(asc: AutoscaleConfig)}
+		{#each asc.scale_up ?? [] as t, i (i)}<span>{describeTrigger(t, 'up')}</span>{:else}<span class="text-fg-faint">—</span>{/each}
+	{/snippet}
+	{#snippet scaleDown(asc: AutoscaleConfig)}
+		{#each asc.scale_down ?? [] as t, i (i)}<span>{describeTrigger(t, 'down')}</span>{:else}<span class="text-fg-faint">—</span>{/each}
+	{/snippet}
+	{#snippet instanceSpec(asc: AutoscaleConfig)}
+		{#each describeInstance(asc) as part, i (i)}<span class={i === 0 ? 'text-fg' : ''}>{part}</span>{:else}<span class="text-fg-subtle">provider defaults</span>{/each}
+	{/snippet}
+	{#snippet liveInstances(asc: AutoscaleConfig)}
+		{#each autoscaleInstances as inst (inst.instance_id)}
+			<span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+				<span class="font-mono text-fg whitespace-nowrap" title={inst.instance_id}>{inst.instance_id.slice(0, 11)}…</span>
+				<Badge status={instanceStatus(inst.status, inst.worker_id)} />
+				{#if inst.gpu}<span class="text-fg-subtle whitespace-nowrap">{inst.gpu}</span>{/if}
+			</span>
+		{/each}
+	{/snippet}
