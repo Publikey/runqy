@@ -21,12 +21,16 @@
 		batchRunTasks
 	} from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
-	import { formatNumber, formatBytes, formatDateTime } from '$lib/utils/format';
+	import { formatNumber, formatBytes, formatDateTime, formatRelativeTime } from '$lib/utils/format';
+	import { base } from '$app/paths';
+	import { workersStore } from '$lib/stores/workers';
+	import { parseWorkerQueues } from '$lib/utils/workerQueues';
+	import { parseQueueName } from '$lib/utils/queueGrouping';
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import { Callout, PageHeader, Panel, Button, Badge, KeyValue, Tabs } from '$lib/components/ui';
-	import { queueStatus } from '$lib/utils/status';
-	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight } from '@lucide/svelte';
+	import { queueStatus, workerState, workerStatus } from '$lib/utils/status';
+	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert } from '@lucide/svelte';
 
 	let qname = $derived(decodeURIComponent($page.params.qname ?? ''));
 
@@ -125,9 +129,30 @@
 	}
 
 	async function loadData() {
-		await loadQueueInfo();
+		await Promise.all([loadQueueInfo(), workersStore.fetch()]);
 		updateCountsFromQueueInfo();
 	}
+
+	// Workers listening on this sub-queue, with what they are doing on it.
+	let queueWorkers = $derived.by(() => {
+		const parent = parseQueueName(qname).parent;
+		return $workersStore.workers
+			.map((w) => {
+				const entry = parseWorkerQueues(w.queues).find((q) => q.name === qname);
+				if (!entry) return null;
+				const server = $workersStore.servers.find((s) => s.id === w.worker_id);
+				const running = (server?.active_workers ?? []).filter((a) => a.queue === qname).length;
+				return {
+					worker: w,
+					priority: entry.priority,
+					running,
+					held: (w.held ?? []).includes(parent),
+					status: workerStatus(workerState(w, $workersStore.servers))
+				};
+			})
+			.filter((x) => x !== null)
+			.sort((a, b) => a.worker.worker_id.localeCompare(b.worker.worker_id));
+	});
 
 	async function pollData() {
 		await loadData();
@@ -349,6 +374,41 @@
 			{/if}
 		{/snippet}
 	</PageHeader>
+
+	<!-- Workers serving this sub-queue -->
+	<Panel title="Workers" flush>
+		{#snippet titleExtra()}
+			<Badge tone="outline">{queueWorkers.length}</Badge>
+		{/snippet}
+		{#if queueWorkers.length === 0}
+			<div class="flex items-start gap-2.5 px-4 md:px-5 py-3 text-ui text-warning-200">
+				<TriangleAlert size={16} strokeWidth={1.75} class="mt-0.5 shrink-0 text-warning-300" />
+				<span>No worker listens on this queue: its tasks stay pending until one starts.</span>
+			</div>
+		{:else}
+			<ul class="divide-y divide-line-subtle">
+				{#each queueWorkers as qw (qw.worker.worker_id)}
+					<li>
+						<a
+							href="{base}/workers/{encodeURIComponent(qw.worker.worker_id)}"
+							class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 md:px-5 py-2.5 hover:bg-hover transition-colors"
+						>
+							<span class="font-mono text-ui text-fg truncate min-w-0 flex-1 basis-40">{qw.worker.worker_id}</span>
+							<span class="flex flex-wrap items-center gap-2">
+								<Badge status={qw.status} />
+								{#if qw.held}<Badge tone="warning" title="Not taking new tasks from this queue (drain or code update)">Held</Badge>{/if}
+							</span>
+							<span class="text-xs text-fg-subtle tabular-nums" title="Tasks of this queue running on the worker / worker concurrency">
+								<span class={qw.running > 0 ? 'text-primary-300' : 'text-fg-muted'}>{qw.running}</span>/{qw.worker.concurrency} running
+							</span>
+							<span class="text-xs text-fg-subtle tabular-nums">p:{qw.priority}</span>
+							<span class="text-xs text-fg-subtle">Heartbeat {formatRelativeTime(new Date(qw.worker.last_beat * 1000))}</span>
+						</a>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</Panel>
 
 	<!-- Queue Configuration (read-only, collapsible) -->
 	{#if queueConfig}
