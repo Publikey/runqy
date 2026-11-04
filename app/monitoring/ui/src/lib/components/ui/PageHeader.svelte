@@ -1,9 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { base } from '$app/paths';
-	import { ChevronRight, RefreshCw } from '@lucide/svelte';
-	import { formatRelativeTime } from '$lib/utils/format';
-	import IconButton from './IconButton.svelte';
+	import { ChevronRight } from '@lucide/svelte';
+	import { refreshRequests } from '$lib/stores/live';
 
 	interface Crumb {
 		label: string;
@@ -19,37 +18,27 @@
 		titleExtra?: Snippet;
 		/** Primary actions, right-aligned. */
 		actions?: Snippet;
-		/** Shows "Updated …" and a refresh button when set. */
+		/** Deprecated: freshness is shown by the global Live indicator. Ignored. */
 		updatedAt?: Date | null;
+		/** Reloads the page data when the user clicks the Live indicator. */
 		onrefresh?: () => void | Promise<void>;
-		/** Monospace title (ids, queue names). */
+		/** Monospace title, for technical ids (task ids). */
 		mono?: boolean;
 	}
 
-	let { title, subtitle, breadcrumbs, titleExtra, actions, updatedAt, onrefresh, mono = false }: Props =
-		$props();
+	let { title, subtitle, breadcrumbs, titleExtra, actions, onrefresh, mono = false }: Props = $props();
 
-	let refreshing = $state(false);
-	// Re-render the relative time every 15 s so "Updated 1m ago" stays truthful.
-	let tick = $state(0);
+	// The Live indicator (sidebar / mobile bar) asks for a refresh; the page reloads its data.
 	$effect(() => {
-		const t = setInterval(() => (tick += 1), 15000);
-		return () => clearInterval(t);
+		let first = true;
+		return refreshRequests.subscribe(() => {
+			if (first) {
+				first = false;
+				return;
+			}
+			onrefresh?.();
+		});
 	});
-	let updatedLabel = $derived.by(() => {
-		void tick;
-		return updatedAt ? `Updated ${formatRelativeTime(updatedAt)}` : '';
-	});
-
-	async function refresh() {
-		if (!onrefresh || refreshing) return;
-		refreshing = true;
-		try {
-			await onrefresh();
-		} finally {
-			setTimeout(() => (refreshing = false), 300);
-		}
-	}
 </script>
 
 <header class="mb-4 md:mb-6">
@@ -71,20 +60,13 @@
 				<h1 class="rq-page-title truncate {mono ? 'font-mono' : ''}">{title}</h1>
 				{@render titleExtra?.()}
 			</div>
-			{#if subtitle || updatedLabel}
-				<p class="rq-page-subtitle">
-					{subtitle ?? ''}{#if subtitle && updatedLabel}<span class="text-fg-faint mx-1.5">·</span>{/if}{#if updatedLabel}<span
-							class="text-fg-subtle">{updatedLabel}</span
-						>{/if}
-				</p>
+			{#if subtitle}
+				<p class="rq-page-subtitle">{subtitle}</p>
 			{/if}
 		</div>
-		{#if actions || onrefresh}
+		{#if actions}
 			<div class="flex flex-wrap items-center gap-2 shrink-0">
-				{#if onrefresh}
-					<IconButton icon={RefreshCw} label="Refresh" variant="secondary" size="md" loading={refreshing} onclick={refresh} />
-				{/if}
-				{@render actions?.()}
+				{@render actions()}
 			</div>
 		{/if}
 	</div>

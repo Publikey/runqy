@@ -18,3 +18,6 @@ export { default as StatTile } from './StatTile.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as Toggle } from './Toggle.svelte';
 export { default as Callout } from './Callout.svelte';
+export { default as LiveIndicator } from './LiveIndicator.svelte';
+export { default as MoreLink } from './MoreLink.svelte';
+export { default as StatStrip } from './StatStrip.svelte';

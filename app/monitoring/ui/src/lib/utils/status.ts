@@ -104,6 +104,19 @@ export function alertStatus(status: string): StatusView {
 	return ALERT[status] ?? unknown(status);
 }
 
+// ---- Counts in tables and lists ----
+
+/**
+ * Text class for a count: zero is dimmed, an anomaly gets its colour, everything else is
+ * plain. Colour marks problems, not normal states (pending work is normal).
+ */
+export function countClass(value: number, anomaly?: 'warning' | 'danger'): string {
+	if (!value) return 'text-fg-faint';
+	if (anomaly === 'danger') return 'text-error-300';
+	if (anomaly === 'warning') return 'text-warning-300';
+	return 'text-fg';
+}
+
 // ---- Resource usage (progress bars) ----
 
 export function usageTone(percent: number): Tone {

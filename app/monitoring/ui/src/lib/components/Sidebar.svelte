@@ -15,11 +15,13 @@
 		Settings,
 		LogOut,
 		PanelLeftClose,
-		PanelLeftOpen
+		PanelLeftOpen,
+		ChevronsUpDown
 	} from '@lucide/svelte';
+	import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
 	import { settings } from '$lib/stores/settings';
 	import { authStore } from '$lib/stores/auth';
-	import { Logo } from '$lib/components/ui';
+	import { Logo, LiveIndicator } from '$lib/components/ui';
 
 	let { mobileOpen = false }: { mobileOpen?: boolean } = $props();
 
@@ -78,11 +80,26 @@
 	style="padding-top: env(safe-area-inset-top);"
 	aria-label="Main navigation"
 >
-	<!-- Brand -->
-	<div class="flex h-14 shrink-0 items-center {iconOnly ? 'justify-center px-2' : 'px-4'}">
-		<a href="{base}/" class="rounded-md" aria-label="runqy dashboard">
-			<Logo size={22} wordmark={!iconOnly} />
-		</a>
+	<!-- Brand + collapse -->
+	<div class="flex h-14 shrink-0 items-center gap-2 {iconOnly ? 'justify-center px-2' : 'justify-between pl-4 pr-2.5'}">
+		{#if !iconOnly}
+			<a href="{base}/" class="rounded-md" aria-label="runqy dashboard">
+				<Logo size={22} wordmark />
+			</a>
+		{/if}
+		<button
+			type="button"
+			class="rq-btn rq-btn-icon rq-btn-sm rq-btn-v-ghost hidden md:inline-flex"
+			onclick={() => settings.toggleSidebar()}
+			aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+			title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+		>
+			{#if collapsed}
+				<PanelLeftOpen size={16} strokeWidth={1.75} />
+			{:else}
+				<PanelLeftClose size={16} strokeWidth={1.75} />
+			{/if}
+		</button>
 	</div>
 
 	<!-- Navigation -->
@@ -114,42 +131,49 @@
 		{/each}
 	</nav>
 
-	<!-- Account + collapse -->
-	<div class="shrink-0 border-t border-line-subtle p-2.5 space-y-0.5">
-		{#if $authStore.email}
-			<div class="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 {iconOnly ? 'justify-center !px-0' : ''}" title={$authStore.email}>
-				<div class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-raised text-[0.6875rem] font-semibold text-fg">
-					{$authStore.email.charAt(0).toUpperCase()}
-				</div>
-				{#if !iconOnly}
-					<div class="min-w-0 flex-1">
-						<p class="truncate text-ui font-medium text-fg">{$authStore.email}</p>
-						<p class="text-2xs text-fg-subtle">Admin</p>
-					</div>
-				{/if}
-			</div>
-			<button
-				type="button"
-				class="rq-nav-item w-full {iconOnly ? 'justify-center !px-0' : ''}"
-				onclick={handleLogout}
-				title={iconOnly ? 'Sign out' : undefined}
-			>
-				<LogOut size={16} strokeWidth={1.75} class="shrink-0" />
-				{#if !iconOnly}<span>Sign out</span>{/if}
-			</button>
+	<!-- Freshness + account -->
+	<div class="shrink-0 border-t border-line-subtle p-2.5 space-y-2">
+		{#if !iconOnly}
+			<div class="px-1"><LiveIndicator /></div>
+		{:else}
+			<div class="flex justify-center"><LiveIndicator compact /></div>
 		{/if}
-		<button
-			type="button"
-			class="rq-nav-item w-full hidden md:flex {iconOnly ? 'justify-center !px-0' : ''}"
-			onclick={() => settings.toggleSidebar()}
-			title={iconOnly ? 'Expand sidebar' : undefined}
-		>
-			{#if collapsed}
-				<PanelLeftOpen size={16} strokeWidth={1.75} class="shrink-0" />
-			{:else}
-				<PanelLeftClose size={16} strokeWidth={1.75} class="shrink-0" />
-				<span>Collapse</span>
-			{/if}
-		</button>
+		{#if $authStore.email}
+			<Menu
+				positioning={{ placement: iconOnly ? 'right-end' : 'top-start', sameWidth: !iconOnly }}
+				onSelect={(e) => {
+					if (e.value === 'logout') handleLogout();
+				}}
+			>
+				<Menu.Trigger
+					class="rq-nav-item w-full {iconOnly ? 'justify-center !px-0' : ''}"
+					title={iconOnly ? $authStore.email : undefined}
+				>
+					<span
+						class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-raised text-2xs font-semibold text-fg"
+					>
+						{$authStore.email.charAt(0).toUpperCase()}
+					</span>
+					{#if !iconOnly}
+						<span class="min-w-0 flex-1 text-left">
+							<span class="block truncate text-ui font-medium text-fg">{$authStore.email}</span>
+							<span class="block text-2xs text-fg-subtle">Admin</span>
+						</span>
+						<ChevronsUpDown size={14} strokeWidth={1.75} class="shrink-0 text-fg-subtle" />
+					{/if}
+				</Menu.Trigger>
+				<Portal>
+					<Menu.Positioner>
+						<Menu.Content class="rq-menu">
+							<div class="px-2 py-1.5 text-xs text-fg-subtle truncate">{$authStore.email}</div>
+							<Menu.Separator class="rq-menu-separator" />
+							<Menu.Item value="logout" class="rq-menu-item">
+								<span class="flex items-center gap-2"><LogOut size={14} strokeWidth={1.75} />Sign out</span>
+							</Menu.Item>
+						</Menu.Content>
+					</Menu.Positioner>
+				</Portal>
+			</Menu>
+		{/if}
 	</div>
 </aside>

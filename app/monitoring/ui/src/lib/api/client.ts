@@ -1,5 +1,6 @@
 import { base } from '$app/paths';
 import { browser } from '$app/environment';
+import { markReachable, markUnreachable } from '$lib/stores/live';
 import type {
 	Queue,
 	QueueInfo,
@@ -39,14 +40,24 @@ export class AuthError extends Error {
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-	const response = await fetch(url, {
-		...options,
-		credentials: 'include',
-		headers: {
-			'Content-Type': 'application/json',
-			...options?.headers
-		}
-	});
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			...options,
+			credentials: 'include',
+			headers: {
+				'Content-Type': 'application/json',
+				...options?.headers
+			}
+		});
+	} catch (e) {
+		markUnreachable(); // network error: the server is down or unreachable
+		throw e;
+	}
+	// Any answer from runqy means it is reachable (a 503 "feature disabled" included);
+	// 502/504 come from a proxy in front of a server that is down.
+	if (response.status === 502 || response.status === 504) markUnreachable();
+	else markReachable();
 
 	// Handle 401 Unauthorized - redirect to login
 	if (response.status === 401) {

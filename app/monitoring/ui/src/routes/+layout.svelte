@@ -7,7 +7,7 @@
 	import '../app.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
-	import { Logo, Spinner } from '$lib/components/ui';
+	import { Logo, Spinner, LiveIndicator } from '$lib/components/ui';
 	import { Menu } from '@lucide/svelte';
 	import { authStore } from '$lib/stores/auth';
 
@@ -96,6 +96,7 @@
 				<Menu size={18} strokeWidth={1.75} />
 			</button>
 			<a href="{base}/" aria-label="runqy dashboard"><Logo size={20} wordmark /></a>
+			<div class="ml-auto pr-1"><LiveIndicator compact /></div>
 		</header>
 
 		<!-- Mobile drawer backdrop -->

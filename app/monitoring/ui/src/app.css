@@ -183,7 +183,7 @@
 
 .input,
 .select {
-	min-height: 2.25rem;
+	min-height: 2rem;
 }
 
 .input:hover,
@@ -236,7 +236,30 @@ select.select option {
 	color: var(--color-fg-muted);
 }
 
-/* iOS zooms into any focused field under 16px: keep fields at 16px on phones. */
+/* Phones: one 36px control height (touch), and fields at 16px so iOS does not zoom in. */
+@media (max-width: 767px) {
+	.input,
+	.select {
+		min-height: 2.25rem;
+	}
+
+	.rq-btn {
+		height: 2.25rem;
+	}
+
+	.rq-btn-icon {
+		width: 2.25rem;
+	}
+
+	.rq-btn-sm {
+		height: 2rem;
+	}
+
+	.rq-btn-icon.rq-btn-sm {
+		width: 2rem;
+	}
+}
+
 @media (max-width: 767px) {
 	input,
 	select,
@@ -431,7 +454,6 @@ select.select option {
 	max-width: 1280px;
 	margin: 0 auto;
 	padding: 1rem;
-	animation: var(--animate-fade-in);
 }
 
 @media (min-width: 768px) {
@@ -441,8 +463,8 @@ select.select option {
 }
 
 .rq-page-title {
-	font-size: 1.25rem;
-	line-height: 1.75rem;
+	font-size: 1.375rem;
+	line-height: 1.875rem;
 	font-weight: 600;
 	letter-spacing: -0.015em;
 	color: var(--color-fg);
@@ -511,10 +533,8 @@ select.select option {
 .rq-table thead th {
 	height: 2.25rem;
 	padding: 0 0.75rem;
-	font-size: 0.6875rem;
+	font-size: 0.75rem;
 	font-weight: 500;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
 	color: var(--color-fg-subtle);
 	border-bottom: 1px solid var(--color-line);
 	text-align: left;
@@ -531,7 +551,7 @@ select.select option {
 }
 
 .rq-table tbody td {
-	padding: 0.625rem 0.75rem;
+	padding: 0.5rem 0.75rem;
 	font-size: 0.8125rem;
 	border-bottom: 1px solid var(--color-line-subtle);
 }
@@ -637,6 +657,147 @@ select.select option {
 }
 
 /* =====================================================================================
+   Live indicator, stat strip, "more" links
+   ===================================================================================== */
+.rq-live {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	height: 1.75rem;
+	padding: 0 0.625rem;
+	border-radius: 9999px;
+	border: 1px solid var(--color-line);
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--color-fg-muted);
+	cursor: pointer;
+	transition:
+		background-color var(--dur-fast) ease,
+		border-color var(--dur-fast) ease;
+}
+
+.rq-live:hover {
+	background: var(--color-hover);
+	border-color: var(--color-line-strong);
+}
+
+.rq-live-dot {
+	position: relative;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-radius: 9999px;
+	background: var(--color-fg-faint);
+}
+
+.rq-live-live .rq-live-dot {
+	background: var(--color-success-500);
+}
+
+/* Soft pulse while live: a ring that fades out, not a blinking dot. */
+.rq-live-live .rq-live-dot::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: 9999px;
+	background: var(--color-success-500);
+	animation: rq-live-pulse 2.4s ease-out infinite;
+}
+
+.rq-live-failing {
+	color: var(--color-warning-300);
+	border-color: rgb(210 153 34 / 0.35);
+}
+
+.rq-live-failing .rq-live-dot,
+.rq-live-stale .rq-live-dot {
+	background: var(--color-warning-500);
+}
+
+@keyframes rq-live-pulse {
+	0% {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	70%,
+	100% {
+		transform: scale(2.6);
+		opacity: 0;
+	}
+}
+
+/* Figures separated by hairlines, without a box each. */
+.rq-stat {
+	min-width: 0;
+	padding: 0.5rem 0.75rem;
+	border-color: var(--color-line-subtle);
+	display: block;
+}
+
+.rq-stat-link {
+	border-radius: 0.375rem;
+	transition: background-color var(--dur-fast) ease;
+}
+
+.rq-stat-link:hover {
+	background: var(--color-hover);
+}
+
+@media (max-width: 767px) {
+	.rq-stat-strip {
+		row-gap: 0.25rem;
+	}
+}
+
+@media (min-width: 768px) {
+	.rq-stat-strip > .rq-stat {
+		flex: 1 1 0;
+		padding: 0.25rem 1.25rem;
+	}
+
+	.rq-stat-strip > .rq-stat + .rq-stat {
+		border-left-width: 1px;
+	}
+
+	.rq-stat-strip > .rq-stat:first-child {
+		padding-left: 0;
+	}
+
+	.rq-card.rq-stat-strip {
+		padding: 0.875rem 0.25rem;
+	}
+
+	.rq-card.rq-stat-strip > .rq-stat:first-child {
+		padding-left: 1.25rem;
+	}
+}
+
+.rq-card.rq-stat-strip {
+	padding: 0.5rem 0.25rem;
+}
+
+.rq-more-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--color-primary-400);
+	transition: color var(--dur-fast) ease;
+}
+
+.rq-more-link:hover {
+	color: var(--color-primary-300);
+}
+
+.rq-more-link svg {
+	transition: transform var(--dur-fast) ease;
+}
+
+.rq-more-link:hover svg {
+	transform: translateX(2px);
+}
+
+/* =====================================================================================
    ui/ component chrome. Skeleton styles its parts with [data-scope][data-part]
    selectors (specificity 0,2,0): ours pair a class with [data-part] and come later.
    ===================================================================================== */
@@ -653,6 +814,39 @@ select.select option {
 	font-weight: 500;
 	box-shadow: var(--shadow-overlay);
 	animation: rq-fade-in var(--dur-fast) var(--ease-out-soft);
+}
+
+/* Menu (account menu) */
+.rq-menu[data-part='content'] {
+	z-index: 60;
+	min-width: 12rem;
+	padding: 0.25rem;
+	gap: 0;
+	border-radius: 0.5rem;
+	border: 1px solid var(--color-line);
+	background: var(--color-overlay);
+	box-shadow: var(--shadow-overlay);
+	animation: rq-fade-in var(--dur-fast) var(--ease-out-soft);
+}
+
+.rq-menu[data-part='content']:focus-visible {
+	outline: none;
+}
+
+.rq-menu .rq-menu-item[data-part='item'] {
+	padding: 0.375rem 0.5rem;
+	border-radius: 0.375rem;
+	font-size: 0.8125rem;
+	color: var(--color-fg);
+}
+
+.rq-menu .rq-menu-item[data-part='item'][data-highlighted] {
+	background: var(--color-hover);
+}
+
+.rq-menu .rq-menu-separator[data-part='separator'] {
+	margin: 0.25rem 0;
+	border-color: var(--color-line-subtle);
 }
 
 /* Dialog */
@@ -724,6 +918,12 @@ select.select option {
 	transition:
 		background-color var(--dur-fast) ease,
 		color var(--dur-fast) ease;
+}
+
+@media (max-width: 767px) {
+	.rq-segmented .rq-segmented-item[data-part='item'] {
+		height: 1.875rem;
+	}
 }
 
 .rq-segmented .rq-segmented-item[data-part='item']:hover {
