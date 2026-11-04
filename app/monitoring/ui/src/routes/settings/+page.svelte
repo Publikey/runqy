@@ -20,7 +20,7 @@
 	<title>Settings - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6 max-w-2xl">
+<div class="rq-page space-y-4 md:space-y-6 max-w-2xl">
 	<PageHeader title="Settings" subtitle="Preferences for this browser" />
 
 	<Panel title="Data refresh">

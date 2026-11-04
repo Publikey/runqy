@@ -57,7 +57,7 @@
 	<title>Workers - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title="Workers"
 		subtitle="{filteredWorkers.length} worker{filteredWorkers.length !== 1 ? 's' : ''}"
@@ -65,7 +65,8 @@
 		onrefresh={loadData}
 	/>
 
-	<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+	<!-- Phones: the filter below already shows these counts. -->
+	<div class="hidden md:grid grid-cols-3 xl:grid-cols-6 gap-4">
 		<StatTile label="Total workers" value={$workerStats.total} />
 		<StatTile label="Processing" value={$workerStats.processing} tone={$workerStats.processing > 0 ? 'accent' : 'default'} />
 		<StatTile label="Idle" value={$workerStats.idle} />
@@ -74,7 +75,7 @@
 		<StatTile label="Stopped" value={$workerStats.stopped} tone="neutral" />
 	</div>
 
-	<div class="max-w-full overflow-x-auto">
+	<div class="max-w-full min-w-0">
 		<Segmented items={filterItems} bind:value={statusFilter} label="Filter by status" />
 	</div>
 

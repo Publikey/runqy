@@ -94,7 +94,7 @@
 	<title>Vaults - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title="Vaults"
 		subtitle="{filteredVaults.length} vault{filteredVaults.length !== 1 ? 's' : ''}"

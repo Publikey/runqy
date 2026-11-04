@@ -28,6 +28,7 @@
 		onchange?.(value);
 	}}
 	aria-label={label}
+	class="max-w-full min-w-0"
 >
 	<SegmentedControl.Control class="rq-segmented">
 		{#each items as item (item.value)}

@@ -34,7 +34,7 @@
 <section class="rq-card {klass}">
 	{#if hasHeader}
 		<header
-			class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 md:px-5 py-3 border-b border-line-subtle"
+			class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-3.5 md:px-5 py-2.5 md:py-3 border-b border-line-subtle"
 		>
 			<div class="min-w-0">
 				{#if title}
@@ -52,10 +52,10 @@
 			{/if}
 		</header>
 	{/if}
-	<div class="{flush ? '' : 'p-4 md:p-5'} {bodyClass}">
+	<div class="{flush ? '' : 'p-3.5 md:p-5'} {bodyClass}">
 		{@render children?.()}
 	</div>
 	{#if footer}
-		<footer class="px-4 md:px-5 py-3 border-t border-line-subtle">{@render footer()}</footer>
+		<footer class="px-3.5 md:px-5 py-2.5 md:py-3 border-t border-line-subtle">{@render footer()}</footer>
 	{/if}
 </section>

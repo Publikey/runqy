@@ -279,7 +279,7 @@
 	<title>Queues - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title="Queues"
 		subtitle="{queueGroups.length} queue{queueGroups.length !== 1 ? 's' : ''} · {subQueueCount} sub-queue{subQueueCount !== 1 ? 's' : ''}"

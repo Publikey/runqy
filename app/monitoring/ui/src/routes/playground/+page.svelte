@@ -246,7 +246,7 @@
 	<title>Playground - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title="Playground"
 		subtitle="Manually enqueue tasks for testing. Tasks land in pending, exactly like client-enqueued ones."

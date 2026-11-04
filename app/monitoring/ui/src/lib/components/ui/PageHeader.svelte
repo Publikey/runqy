@@ -52,7 +52,7 @@
 	}
 </script>
 
-<header class="mb-6">
+<header class="mb-4 md:mb-6">
 	{#if breadcrumbs?.length}
 		<nav aria-label="Breadcrumb" class="flex items-center gap-1 text-ui text-fg-subtle mb-2">
 			{#each breadcrumbs as crumb, i (i)}

@@ -13,7 +13,7 @@
 </script>
 
 <div
-	class="rq-card rq-card-interactive p-4 flex flex-col gap-3 cursor-pointer"
+	class="rq-card rq-card-interactive p-3.5 md:p-4 flex flex-col gap-2.5 md:gap-3 cursor-pointer"
 	onclick={onClick}
 	onkeydown={(e) => e.key === 'Enter' && onClick?.()}
 	role="button"

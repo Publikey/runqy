@@ -27,7 +27,7 @@
 	};
 
 	let display = $derived(typeof value === 'number' ? formatNumber(value) : value);
-	let chrome = $derived(inset ? 'rq-metric-box' : 'rq-card px-4 py-3.5');
+	let chrome = $derived(inset ? 'rq-metric-box' : 'rq-card px-3 py-2 md:px-4 md:py-3.5');
 </script>
 
 <svelte:element
@@ -35,7 +35,7 @@
 	href={href ? base + href : undefined}
 	class="{chrome} block min-w-0 {href ? 'rq-card-interactive' : ''}"
 >
-	<div class="text-ui text-fg-muted truncate">{label}</div>
-	<div class="mt-1 text-xl font-semibold tracking-tight tabular-nums {toneClass[tone]}">{display}</div>
-	{#if hint}<div class="mt-0.5 text-xs text-fg-subtle truncate">{hint}</div>{/if}
+	<div class="text-2xs md:text-ui text-fg-muted truncate">{label}</div>
+	<div class="mt-0.5 md:mt-1 text-base md:text-xl font-semibold tracking-tight tabular-nums {toneClass[tone]}">{display}</div>
+	{#if hint}<div class="mt-0.5 text-2xs md:text-xs text-fg-subtle truncate">{hint}</div>{/if}
 </svelte:element>

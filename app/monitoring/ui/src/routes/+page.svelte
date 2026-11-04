@@ -11,6 +11,16 @@
 	import { formatDuration, formatNumber } from '$lib/utils/format';
 	import { groupQueues, type QueueGroup } from '$lib/utils/queueGrouping';
 
+	// Shorter charts on phones: 280px of chart for a handful of points is a full screen.
+	let chartHeight = $state(280);
+	$effect(() => {
+		const mq = window.matchMedia('(max-width: 767px)');
+		const update = () => (chartHeight = mq.matches ? 180 : 280);
+		update();
+		mq.addEventListener('change', update);
+		return () => mq.removeEventListener('change', update);
+	});
+
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 	let queueGroups = $derived(groupQueues($queuesStore.queues));
@@ -79,7 +89,7 @@
 	<title>Dashboard - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title="Dashboard"
 		subtitle={$queuesStore.lastUpdated ? undefined : 'Loading…'}
@@ -87,7 +97,7 @@
 		onrefresh={loadData}
 	/>
 
-	<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+	<div class="grid grid-cols-3 xl:grid-cols-6 gap-2 md:gap-4">
 		<StatTile label="Queues" value={queueGroups.length} href="/queues" />
 		<StatTile label="Pending" value={$totalStats.totalPending} tone={$totalStats.totalPending > 0 ? 'warning' : 'default'} />
 		<StatTile label="Active" value={$totalStats.totalActive} tone={$totalStats.totalActive > 0 ? 'accent' : 'default'} />
@@ -97,8 +107,8 @@
 	</div>
 
 	<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-		<ThroughputChart height={280} />
-		<QueueSizesChart height={280} maxQueues={6} />
+		<ThroughputChart height={chartHeight} />
+		<QueueSizesChart height={chartHeight} maxQueues={6} />
 	</div>
 
 	{#if $queuesStore.error}
@@ -112,7 +122,7 @@
 			{/snippet}
 
 			<div class="space-y-6">
-				<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+				<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
 					<StatTile inset label="Queues" value={queueGroups.length} />
 					<StatTile inset label="Sub-queues" value={$queuesStore.queues.length} />
 					<StatTile inset label="Paused" value={pausedSubQueues} tone={pausedSubQueues > 0 ? 'warning' : 'default'} />
@@ -201,7 +211,7 @@
 					{$workersStore.loading ? 'Loading…' : 'No workers connected. They appear here when they register.'}
 				</p>
 			{:else}
-				<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+				<div class="grid grid-cols-3 gap-2 md:gap-3">
 					<StatTile inset label="Total" value={$workerStats.total} />
 					<StatTile
 						inset

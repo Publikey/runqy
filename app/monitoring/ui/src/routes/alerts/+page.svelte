@@ -156,7 +156,7 @@
 	<title>Alerts - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader title="Alerts" {subtitle} onrefresh={loadOverview} />
 
 	{#if loadError}

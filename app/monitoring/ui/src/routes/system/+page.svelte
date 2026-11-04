@@ -81,7 +81,7 @@
 	<title>System - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-6">
+<div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader title="System" subtitle="Infrastructure and connection status" onrefresh={loadData} />
 
 	{#if error}
@@ -142,7 +142,7 @@
 
 	{#if redisInfo}
 		<Panel title="Redis memory">
-			<div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
 				<StatTile inset label="Used memory" value={redisInfo.info.used_memory_human} />
 				<StatTile inset label="Peak memory" value={redisInfo.info.used_memory_peak_human} />
 				<StatTile inset label="Clients" value={redisInfo.info.connected_clients} />
@@ -152,7 +152,7 @@
 
 		{#if redisInfo.cluster}
 			<Panel title="Cluster">
-				<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
+				<div class="grid grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3">
 					<StatTile
 						inset
 						label="State"
