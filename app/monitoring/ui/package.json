@@ -25,9 +25,11 @@
     "vite": "^6.0.0"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@lucide/svelte": "^1.68.0",
     "@skeletonlabs/skeleton": "^4.11.0",
     "@skeletonlabs/skeleton-svelte": "^4.11.0",
-    "chart.js": "^4.4.0",
     "layerchart": "^1.0.13"
   },
   "type": "module",
