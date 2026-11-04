@@ -2,64 +2,45 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { Cpu } from '@lucide/svelte';
 	import { workersStore, workerStats } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
 	import WorkerCard from '$lib/components/WorkerCard.svelte';
-	import { formatRelativeTime } from '$lib/utils/format';
+	import { Callout, EmptyState, PageHeader, Segmented, Shimmer, StatTile } from '$lib/components/ui';
+	import { workerState, type WorkerState } from '$lib/utils/status';
+
+	type Filter = 'all' | 'processing' | 'idle' | 'bootstrapping' | 'stale' | 'stopped';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	let statusFilter = $state<string | null>(null);
-	let refreshing = $state(false);
-
-	// Create a set of server IDs that have active workers (processing tasks)
-	let processingServerIds = $derived(
-		new Set(
-			$workersStore.servers
-				.filter(s => s.active_workers && s.active_workers.length > 0)
-				.map(s => s.id)
-		)
-	);
-
-	// Check if a worker is processing
-	function isWorkerProcessing(workerId: string): boolean {
-		return processingServerIds.has(workerId);
-	}
-
-	// Get worker status: 'processing' | 'idle' | 'stale' | 'bootstrapping' | 'stopped'
-	function getWorkerStatus(worker: typeof $workersStore.workers[0]): string {
-		if (worker.is_stale) return 'stale';
-		if (worker.status === 'bootstrapping') return 'bootstrapping';
-		if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
-		if (worker.status === 'stopped') return 'stopped';
-		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
-		if (worker.status === 'running') return 'idle';
-		return 'stopped'; // fallback for unknown statuses
-	}
+	let statusFilter = $state<Filter>('all');
 
 	function navigateToWorker(workerId: string) {
 		goto(`${base}/workers/${encodeURIComponent(workerId)}`);
 	}
 
+	let states = $derived(
+		$workersStore.workers.map((w) => ({ worker: w, state: workerState(w, $workersStore.servers) }))
+	);
+
+	function countState(s: WorkerState): number {
+		return states.filter((x) => x.state === s).length;
+	}
+
+	let filterItems = $derived<{ value: Filter; label: string; count: number }[]>([
+		{ value: 'all', label: 'All', count: states.length },
+		{ value: 'processing', label: 'Processing', count: countState('processing') },
+		{ value: 'idle', label: 'Idle', count: countState('idle') },
+		{ value: 'bootstrapping', label: 'Bootstrapping', count: countState('bootstrapping') },
+		{ value: 'stale', label: 'Stale', count: countState('stale') },
+		{ value: 'stopped', label: 'Stopped', count: countState('stopped') }
+	]);
+
 	let filteredWorkers = $derived(
-		$workersStore.workers.filter((w) => {
-			const status = getWorkerStatus(w);
-			if (statusFilter === 'processing' && status !== 'processing') return false;
-			if (statusFilter === 'idle' && status !== 'idle') return false;
-			if (statusFilter === 'stale' && status !== 'stale') return false;
-			if (statusFilter === 'bootstrapping' && status !== 'bootstrapping') return false;
-			if (statusFilter === 'stopped' && status !== 'stopped') return false;
-			return true;
-		})
+		states.filter((x) => statusFilter === 'all' || x.state === statusFilter).map((x) => x.worker)
 	);
 
 	async function loadData() {
 		await workersStore.fetch();
-	}
-
-	async function handleRefresh() {
-		refreshing = true;
-		await loadData();
-		setTimeout(() => { refreshing = false; }, 500);
 	}
 
 	onMount(() => {
@@ -76,146 +57,53 @@
 	<title>Workers - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-8">
-	<!-- Header -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="rq-page-title">Workers</h1>
-			<p class="text-surface-500">
-				{filteredWorkers.length} worker{filteredWorkers.length !== 1 ? 's' : ''}
-				{#if $workersStore.lastUpdated}
-					&middot; Updated {formatRelativeTime($workersStore.lastUpdated)}
-				{/if}
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-					/>
-				</svg>
-				Refresh
-			</button>
-		</div>
+<div class="rq-page space-y-6">
+	<PageHeader
+		title="Workers"
+		subtitle="{filteredWorkers.length} worker{filteredWorkers.length !== 1 ? 's' : ''}"
+		updatedAt={$workersStore.lastUpdated}
+		onrefresh={loadData}
+	/>
+
+	<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+		<StatTile label="Total workers" value={$workerStats.total} />
+		<StatTile label="Processing" value={$workerStats.processing} tone={$workerStats.processing > 0 ? 'accent' : 'default'} />
+		<StatTile label="Idle" value={$workerStats.idle} />
+		<StatTile label="Bootstrapping" value={$workerStats.bootstrapping} />
+		<StatTile label="Stale" value={$workerStats.stale} tone={$workerStats.stale > 0 ? 'warning' : 'default'} />
+		<StatTile label="Stopped" value={$workerStats.stopped} tone="neutral" />
 	</div>
 
-	<!-- Stats -->
-	<div class="grid grid-cols-2 md:grid-cols-6 gap-4">
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight">{$workerStats.total}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Total Workers</div>
-		</div>
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight text-primary-500">{$workerStats.processing}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Processing</div>
-		</div>
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight text-success-500">{$workerStats.idle}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Idle</div>
-		</div>
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight text-secondary-500">{$workerStats.bootstrapping}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Bootstrapping</div>
-		</div>
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight text-warning-500">{$workerStats.stale}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Stale</div>
-		</div>
-		<div class="rq-card p-4 text-center">
-			<div class="text-2xl font-semibold tracking-tight text-surface-500">{$workerStats.stopped}</div>
-			<div class="text-xs font-medium uppercase tracking-wider text-surface-400">Stopped</div>
-		</div>
+	<div class="max-w-full overflow-x-auto">
+		<Segmented items={filterItems} bind:value={statusFilter} label="Filter by status" />
 	</div>
 
-	<!-- Filters -->
-	<div class="flex items-center justify-between">
-		<div class="flex items-center gap-2 flex-wrap">
-			<button
-				type="button"
-				class="{statusFilter === null ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = null)}
-			>
-				All
-			</button>
-			<button
-				type="button"
-				class="{statusFilter === 'processing' ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = 'processing')}
-			>
-				Processing
-			</button>
-			<button
-				type="button"
-				class="{statusFilter === 'idle' ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = 'idle')}
-			>
-				Idle
-			</button>
-			<button
-				type="button"
-				class="{statusFilter === 'bootstrapping' ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = 'bootstrapping')}
-			>
-				Bootstrapping
-			</button>
-			<button
-				type="button"
-				class="{statusFilter === 'stale' ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = 'stale')}
-			>
-				Stale
-			</button>
-			<button
-				type="button"
-				class="{statusFilter === 'stopped' ? 'rq-pill-active' : 'rq-pill'}"
-				onclick={() => (statusFilter = 'stopped')}
-			>
-				Stopped
-			</button>
-		</div>
-	</div>
-
-	<!-- Error State -->
 	{#if $workersStore.error}
-		<div class="rq-card p-4">
-			<p class="text-error-500">Failed to load workers: {$workersStore.error}</p>
-		</div>
+		<Callout>Failed to load workers: {$workersStore.error}</Callout>
 	{/if}
 
-	<!-- Workers List -->
 	{#if $workersStore.loading && filteredWorkers.length === 0}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+		<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 			{#each [1, 2, 3] as i (i)}
-				<div class="rq-card p-5">
-					<div class="animate-pulse space-y-3">
-						<div class="h-5 bg-surface-300 dark:bg-surface-600 rounded w-2/3"></div>
-						<div class="h-4 bg-surface-300 dark:bg-surface-600 rounded w-1/2"></div>
-						<div class="h-12 bg-surface-300 dark:bg-surface-600 rounded"></div>
-					</div>
+				<div class="rq-card p-4 space-y-3">
+					<Shimmer class="h-4 w-2/3" />
+					<Shimmer class="h-3 w-1/3" />
+					<Shimmer class="h-12 w-full" />
 				</div>
 			{/each}
 		</div>
 	{:else if filteredWorkers.length === 0}
-		<div class="rq-card rq-empty-state">
-			<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					stroke-width="2"
-					d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-				/>
-			</svg>
-			<p class="text-surface-500">No workers found</p>
-			<p class="text-sm text-surface-400 mt-1">
-				{statusFilter ? 'No workers match the selected filter' : 'Workers will appear here when they connect'}
-			</p>
+		<div class="rq-card">
+			<EmptyState
+				icon={Cpu}
+				title="No workers found"
+				description={statusFilter !== 'all'
+					? 'No workers match the selected filter'
+					: 'Workers will appear here when they connect'}
+			/>
 		</div>
 	{:else}
-		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+		<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
 			{#each filteredWorkers as worker (worker.worker_id)}
 				<WorkerCard {worker} onclick={() => navigateToWorker(worker.worker_id)} />
 			{/each}

@@ -53,10 +53,6 @@
 }
 
 :root {
-	/* TEMPORARY aliases for inline styles in pages not migrated yet. */
-	--runqy-border-subtle: var(--color-line-subtle);
-	--runqy-border-default: var(--color-line);
-
 	--dur-fast: 120ms;
 	--dur-base: 180ms;
 	--dur-slow: 240ms;
@@ -206,6 +202,23 @@
 	outline: none;
 }
 
+/* Custom chevron: Skeleton keeps the native arrow, which forbids inline padding. */
+select.select:not([multiple]):not([size]) {
+	appearance: none;
+	padding-left: 0.625rem;
+	padding-right: 2rem;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 0.625rem center;
+	background-size: 0.875rem;
+	cursor: pointer;
+}
+
+select.select option {
+	background: var(--color-raised);
+	color: var(--color-fg);
+}
+
 .input::placeholder,
 .textarea::placeholder {
 	color: var(--color-fg-faint);
@@ -350,64 +363,8 @@
 	background: rgb(242 85 90 / 0.1);
 }
 
-/* Legacy aliases (pages not migrated yet). */
-.rq-btn-primary,
-.rq-btn-ghost {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: 0.375rem;
-	height: 2rem;
-	padding: 0 0.75rem;
-	border: 1px solid transparent;
-	border-radius: 0.375rem;
-	font-size: 0.8125rem;
-	font-weight: 500;
-	white-space: nowrap;
-	cursor: pointer;
-	transition:
-		background-color var(--dur-fast) ease,
-		border-color var(--dur-fast) ease,
-		color var(--dur-fast) ease;
-}
-
-.rq-btn-primary svg,
-.rq-btn-ghost svg {
-	width: 1rem;
-	height: 1rem;
-	margin-right: 0 !important;
-}
-
-.rq-btn-primary {
-	background: var(--color-primary-500);
-	color: #fff;
-	box-shadow:
-		inset 0 1px 0 rgb(255 255 255 / 0.14),
-		0 1px 2px rgb(0 0 0 / 0.3);
-}
-
-.rq-btn-primary:hover {
-	background: color-mix(in oklab, var(--color-primary-500), white 9%);
-}
-
-.rq-btn-ghost {
-	background: var(--color-raised);
-	border-color: var(--color-line);
-	color: var(--color-fg);
-}
-
-.rq-btn-ghost:hover {
-	background: var(--color-overlay);
-	border-color: var(--color-line-strong);
-}
-
-.rq-btn-ghost:disabled {
-	opacity: 0.5;
-	pointer-events: none;
-}
-
 /* =====================================================================================
-   Badges: .rq-badge + one tone. Used by ui/StatusBadge.svelte.
+   Badges: .rq-badge + one tone. Used by ui/Badge.svelte.
    ===================================================================================== */
 .rq-badge {
 	display: inline-flex;
@@ -483,12 +440,6 @@
 	}
 }
 
-.rq-page-header {
-	padding-bottom: 1.25rem;
-	border-bottom: 1px solid var(--color-line-subtle);
-	margin-bottom: 1.5rem;
-}
-
 .rq-page-title {
 	font-size: 1.25rem;
 	line-height: 1.75rem;
@@ -501,21 +452,6 @@
 	font-size: 0.8125rem;
 	color: var(--color-fg-muted);
 	margin-top: 0.125rem;
-}
-
-.rq-section-title {
-	font-size: 0.875rem;
-	font-weight: 600;
-	letter-spacing: -0.005em;
-	color: var(--color-fg);
-}
-
-/* Card headings (text-lg utilities on h2/h3) are oversized on phones. */
-@media (max-width: 767px) {
-	.rq-card h2,
-	.rq-card h3 {
-		font-size: 0.9375rem;
-	}
 }
 
 /* =====================================================================================
@@ -547,46 +483,12 @@
 }
 
 /* =====================================================================================
-   Filters (legacy pills, neutral selected state)
-   ===================================================================================== */
-.rq-pill,
-.rq-pill-active {
-	display: inline-flex;
-	align-items: center;
-	height: 1.75rem;
-	padding: 0 0.75rem;
-	font-size: 0.8125rem;
-	font-weight: 500;
-	border-radius: 0.375rem;
-	border: 1px solid var(--color-line);
-	cursor: pointer;
-	transition:
-		background-color var(--dur-fast) ease,
-		border-color var(--dur-fast) ease,
-		color var(--dur-fast) ease;
-}
-
-.rq-pill {
-	background: transparent;
-	color: var(--color-fg-muted);
-}
-
-.rq-pill:hover {
-	background: var(--color-hover);
-	color: var(--color-fg);
-}
-
-.rq-pill-active {
-	background: var(--color-raised);
-	border-color: var(--color-line-strong);
-	color: var(--color-fg);
-}
-
-/* =====================================================================================
    Tables
    ===================================================================================== */
 /* Tables scroll horizontally inside their container instead of the page. */
 .table-container {
+	/* Positioned so absolutely placed children (sr-only labels) are clipped too. */
+	position: relative;
 	overflow-x: auto;
 	-webkit-overflow-scrolling: touch;
 }
@@ -617,6 +519,11 @@
 	text-align: right;
 }
 
+.rq-table tbody td.font-mono,
+.rq-table tbody td .font-mono {
+	white-space: nowrap;
+}
+
 .rq-table tbody td {
 	padding: 0.625rem 0.75rem;
 	font-size: 0.8125rem;
@@ -632,7 +539,7 @@
 }
 
 /* =====================================================================================
-   Sidebar (rebuilt in the shell pass; tokens only here)
+   Sidebar navigation (lib/components/Sidebar.svelte)
    ===================================================================================== */
 .rq-sidebar {
 	background: var(--color-panel);
@@ -673,7 +580,7 @@
 }
 
 /* =====================================================================================
-   Progress, skeleton loaders, spinner, empty states
+   Progress bars, shimmer loaders, spinner
    ===================================================================================== */
 .rq-progress-track {
 	width: 100%;
@@ -703,25 +610,6 @@
 
 .rq-spin {
 	animation: rq-spin 0.8s linear infinite;
-}
-
-.rq-empty-state {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	padding: 3rem 1.5rem;
-	text-align: center;
-}
-
-.rq-empty-state svg {
-	opacity: 0.4;
-	margin-bottom: 0.75rem;
-}
-
-/* Refresh button: one spin per click. */
-.refresh-spinning svg {
-	animation: rq-spin 0.5s ease-in-out;
 }
 
 /* JSON viewer: keys in accent, literals neutral-bright, null faint. */
@@ -797,6 +685,10 @@
 /* Segmented (filters) */
 .rq-segmented[data-part='control'] {
 	display: inline-flex;
+	align-self: flex-start;
+	max-width: 100%;
+	overflow-x: auto;
+	scrollbar-width: none;
 	gap: 0.125rem;
 	padding: 0.125rem;
 	border-radius: 0.5rem;
@@ -949,127 +841,4 @@
 [data-scope='toast'][data-part='description'] {
 	font-size: 0.8125rem;
 	color: var(--color-fg-muted);
-}
-
-/* =====================================================================================
-   Skeleton preset compatibility (TEMPORARY, removed once every page uses ui/ components).
-   Brings the coloured Skeleton presets still used by unmigrated pages onto the design
-   system: no coloured buttons, soft status badges.
-   ===================================================================================== */
-.badge {
-	gap: 0.25rem;
-	padding: 0.125rem 0.5rem;
-	border-radius: 0.375rem;
-	font-size: 0.75rem;
-	font-weight: 500;
-	line-height: 1rem;
-}
-
-.badge.preset-filled-success-500 {
-	background: rgb(63 185 80 / 0.13);
-	color: var(--color-success-300);
-}
-
-.badge.preset-filled-warning-500,
-.badge.preset-filled-warning-600 {
-	background: rgb(210 153 34 / 0.15);
-	color: var(--color-warning-300);
-}
-
-.badge.preset-filled-error-500 {
-	background: rgb(242 85 90 / 0.14);
-	color: var(--color-error-300);
-}
-
-.badge.preset-filled-primary-500,
-.badge.preset-filled-secondary-500 {
-	background: rgb(76 130 247 / 0.14);
-	color: var(--color-primary-300);
-}
-
-.badge.preset-filled-surface-500 {
-	background: rgb(255 255 255 / 0.06);
-	color: var(--color-fg-muted);
-}
-
-.badge[class*='preset-outlined'] {
-	background: transparent;
-	border-color: var(--color-line-strong);
-	color: var(--color-fg-muted);
-}
-
-.badge.preset-outlined-warning-500 {
-	border-color: rgb(210 153 34 / 0.4);
-	color: var(--color-warning-300);
-}
-
-.badge.preset-outlined-error-500 {
-	border-color: rgb(242 85 90 / 0.4);
-	color: var(--color-error-300);
-}
-
-.btn,
-.btn-icon {
-	border-radius: 0.375rem;
-	font-size: 0.8125rem;
-	font-weight: 500;
-	transition:
-		background-color var(--dur-fast) ease,
-		border-color var(--dur-fast) ease,
-		color var(--dur-fast) ease;
-}
-
-/* Neutral filled / tonal / outlined presets -> secondary button. */
-.btn.preset-tonal,
-.btn-icon.preset-tonal,
-.btn[class*='preset-outlined'],
-.btn.preset-filled-warning-500,
-.btn.preset-filled-surface-500 {
-	background: var(--color-raised);
-	border-color: var(--color-line);
-	box-shadow: none;
-	color: var(--color-fg);
-}
-
-.btn.preset-tonal:hover,
-.btn-icon.preset-tonal:hover,
-.btn[class*='preset-outlined']:hover,
-.btn.preset-filled-warning-500:hover {
-	background: var(--color-overlay);
-	border-color: var(--color-line-strong);
-}
-
-/* Row deletes: neutral until hovered. */
-.btn.preset-outlined-error-500:hover,
-.btn-icon.preset-tonal-error:hover {
-	color: var(--color-error-300);
-	background: rgb(242 85 90 / 0.1);
-	border-color: rgb(242 85 90 / 0.35);
-}
-
-.btn-icon.preset-tonal-error {
-	background: transparent;
-	color: var(--color-fg-subtle);
-}
-
-/* The neutral "preset-filled" submit buttons rendered light grey: make them primary. */
-.btn.preset-filled,
-.btn.preset-filled-primary-500 {
-	background: var(--color-primary-500);
-	color: #fff;
-	box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.14);
-}
-
-.btn.preset-filled:hover,
-.btn.preset-filled-primary-500:hover {
-	background: color-mix(in oklab, var(--color-primary-500), white 9%);
-}
-
-.btn.preset-filled-error-500 {
-	background: var(--color-error-600);
-	color: #fff;
-}
-
-.btn.preset-filled-error-500:hover {
-	background: var(--color-error-500);
 }

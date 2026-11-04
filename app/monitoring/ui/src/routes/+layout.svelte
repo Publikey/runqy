@@ -111,7 +111,7 @@
 
 		<Sidebar mobileOpen={mobileNavOpen} />
 
-		<main class="main-content flex-1 overflow-y-auto">
+		<main class="main-content flex-1 min-w-0 overflow-y-auto">
 			{@render children()}
 		</main>
 	</div>

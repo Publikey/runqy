@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { AutoscaleProvider } from '$lib/api/types';
+	import { Callout, Button, Field, Modal, Toggle } from '$lib/components/ui';
 
 	interface Props {
 		open?: boolean;
@@ -70,15 +71,18 @@
 		});
 	}
 
+	// Set while the Cancel button closes the dialog, so onclose does not report it twice.
+	let cancelling = false;
+
 	function handleCancel() {
+		cancelling = true;
 		oncancel?.();
 		open = false;
 	}
 
-	function handleBackdropClick(e: MouseEvent) {
-		if (e.target === e.currentTarget) {
-			handleCancel();
-		}
+	function handleClose() {
+		if (!cancelling) oncancel?.();
+		cancelling = false;
 	}
 
 	$effect(() => {
@@ -99,83 +103,68 @@
 	});
 </script>
 
-{#if open}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div
-		class="fixed inset-0 z-50 bg-surface-950/70 backdrop-blur-sm flex justify-center items-center p-4 overflow-y-auto"
-		onclick={handleBackdropClick}
+<Modal
+	bind:open
+	title={mode === 'create' ? 'Add provider' : 'Edit provider'}
+	onclose={handleClose}
+>
+	<form
+		id="provider-form"
+		class="space-y-4"
+		onsubmit={(e) => {
+			e.preventDefault();
+			handleSubmit();
+		}}
 	>
-		<div class="card preset-outlined-surface-200-800 bg-surface-100-900 ring-1 ring-surface-300 dark:ring-surface-600 w-full max-w-md p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-			<h2 class="h4 mb-4">
-				{mode === 'create' ? 'Add Provider' : 'Edit Provider'}
-			</h2>
+		<Field label="Name" for="provider-name">
+			<input
+				id="provider-name"
+				type="text"
+				bind:value={name}
+				placeholder="my-provider"
+				class="input"
+				disabled={loading || mode === 'edit'}
+			/>
+		</Field>
 
-			<form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-				<div class="space-y-4">
-					<label class="label">
-						<span class="label-text">Name</span>
-						<input
-							type="text"
-							bind:value={name}
-							placeholder="my-provider"
-							class="input"
-							disabled={loading || mode === 'edit'}
-						/>
-					</label>
+		<Field label="Provider type" for="provider-type">
+			<select id="provider-type" bind:value={providerType} class="select" disabled={loading}>
+				{#if providerTypes.length === 0}
+					<option value="">No provider types available</option>
+				{:else}
+					{#each providerTypes as type (type)}
+						<option value={type}>{type}</option>
+					{/each}
+				{/if}
+			</select>
+		</Field>
 
-					<label class="label">
-						<span class="label-text">Provider Type</span>
-						<select bind:value={providerType} class="select" disabled={loading}>
-							{#if providerTypes.length === 0}
-								<option value="">No provider types available</option>
-							{:else}
-								{#each providerTypes as type}
-									<option value={type}>{type}</option>
-								{/each}
-							{/if}
-						</select>
-					</label>
+		<Field
+			label="Config (JSON)"
+			for="provider-config"
+			hint={mode === 'edit' ? 'Secret values are masked on read. Re-enter them to update.' : undefined}
+		>
+			<textarea
+				id="provider-config"
+				bind:value={configText}
+				placeholder={'{\n  "api_key": "..."\n}'}
+				class="textarea font-mono text-ui"
+				rows={8}
+				disabled={loading}
+			></textarea>
+		</Field>
 
-					<label class="label">
-						<span class="label-text">Config <span class="text-surface-500">(JSON)</span></span>
-						<textarea
-							bind:value={configText}
-							placeholder={'{\n  "api_key": "..."\n}'}
-							class="textarea font-mono text-sm"
-							rows={8}
-							disabled={loading}
-						></textarea>
-						{#if mode === 'edit'}
-							<span class="label-text text-surface-500">Secret values are masked on read. Re-enter them to update.</span>
-						{/if}
-					</label>
+		<Toggle bind:checked={enabled} label="Enabled" disabled={loading} />
 
-					<label class="flex items-center gap-3 cursor-pointer">
-						<input type="checkbox" bind:checked={enabled} class="checkbox" disabled={loading} />
-						<span class="text-sm">Enabled</span>
-					</label>
+		{#if error}
+			<Callout>{error}</Callout>
+		{/if}
+	</form>
 
-					{#if error}
-						<aside class="alert preset-filled-error-500">
-							<p>{error}</p>
-						</aside>
-					{/if}
-				</div>
-
-				<footer class="flex justify-end gap-2 mt-6">
-					<button type="button" class="btn preset-tonal" onclick={handleCancel} disabled={loading}>
-						Cancel
-					</button>
-					<button type="submit" class="btn preset-filled" disabled={loading}>
-						{#if loading}
-							Saving...
-						{:else}
-							{mode === 'create' ? 'Add Provider' : 'Update Provider'}
-						{/if}
-					</button>
-				</footer>
-			</form>
-		</div>
-	</div>
-{/if}
+	{#snippet footer()}
+		<Button variant="secondary" onclick={handleCancel} disabled={loading}>Cancel</Button>
+		<Button variant="primary" type="submit" form="provider-form" {loading}>
+			{#if loading}Saving...{:else}{mode === 'create' ? 'Add provider' : 'Update provider'}{/if}
+		</Button>
+	{/snippet}
+</Modal>

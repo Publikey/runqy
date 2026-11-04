@@ -1,8 +1,7 @@
 <script lang="ts">
 	// Frame of the signed-out screens (login, first-run setup).
 	import type { Snippet } from 'svelte';
-	import { CircleAlert } from '@lucide/svelte';
-	import { Logo } from '$lib/components/ui';
+	import { Callout, Logo } from '$lib/components/ui';
 
 	interface Props {
 		title: string;
@@ -32,10 +31,7 @@
 
 		<div class="rq-card p-6 sm:p-7">
 			{#if error}
-				<div class="mb-5 flex items-start gap-2.5 rounded-md border border-error-500/30 bg-error-500/10 px-3 py-2.5 text-ui text-error-200" role="alert">
-					<CircleAlert size={16} strokeWidth={1.75} class="mt-0.5 shrink-0" />
-					<span>{error}</span>
-				</div>
+				<Callout class="mb-5">{error}</Callout>
 			{/if}
 			{@render children()}
 		</div>

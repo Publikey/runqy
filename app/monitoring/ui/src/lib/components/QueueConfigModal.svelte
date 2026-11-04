@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { SegmentedControl } from '@skeletonlabs/skeleton-svelte';
+	import { Plus, X } from '@lucide/svelte';
+	import { Callout, Modal, Segmented, Field, Button, IconButton, Toggle } from '$lib/components/ui';
 	import type {
 		QueueConfigDetail,
 		DeploymentConfig,
@@ -46,6 +47,10 @@
 		onsavesubqueue,
 		oncancel
 	}: Props = $props();
+
+	// Unique per instance: ids for label/control pairs.
+	const uid = $props.id();
+	const formId = `${uid}-form`;
 
 	let createType = $state<'queue' | 'subqueue'>('queue');
 	let selectedParentQueue = $state('');
@@ -429,12 +434,6 @@
 		open = false;
 	}
 
-	function handleBackdropClick(e: MouseEvent) {
-		if (e.target === e.currentTarget) {
-			handleCancel();
-		}
-	}
-
 	function resetForm() {
 		createType = 'queue';
 		selectedParentQueue = '';
@@ -542,431 +541,358 @@
 	});
 </script>
 
-{#if open}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div
-		class="fixed inset-0 z-50 bg-surface-950/70 backdrop-blur-sm flex justify-center items-center p-4 overflow-y-auto"
-		onclick={handleBackdropClick}
-	>
-		<div class="card preset-outlined-surface-200-800 bg-surface-100-900 ring-1 ring-surface-300 dark:ring-surface-600 w-full max-w-2xl p-6 shadow-xl max-h-[90vh] overflow-y-auto">
-			<h2 class="h4 mb-4">
-				{mode === 'create' ? 'Create Queue' : 'Edit Queue Configuration'}
-			</h2>
+<Modal
+	bind:open
+	size="lg"
+	title={mode === 'create' ? 'Create queue' : 'Edit queue configuration'}
+	onclose={() => oncancel?.()}
+>
+	<form id={formId} class="space-y-5" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+		{#if mode === 'create'}
+			<Segmented
+				name="createType"
+				label="What to create"
+				items={[
+					{ value: 'queue', label: 'New Queue' },
+					{ value: 'subqueue', label: 'Add Subqueue', disabled: parentQueues().length === 0 }
+				]}
+				bind:value={createType}
+			/>
+		{/if}
 
-			<form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-				<div class="space-y-4">
-					{#if mode === 'create'}
-						<SegmentedControl
-							name="createType"
-							value={createType}
-							onValueChange={(e) => createType = e.value as 'queue' | 'subqueue'}
-						>
-							<SegmentedControl.Item value="queue">New Queue</SegmentedControl.Item>
-							<SegmentedControl.Item value="subqueue" disabled={parentQueues().length === 0}>Add Subqueue</SegmentedControl.Item>
-						</SegmentedControl>
-					{/if}
+		{#if mode === 'create' && createType === 'subqueue'}
+			<div class="space-y-4">
+				<Field label="Parent Queue" for="{uid}-parent">
+					<select id="{uid}-parent" bind:value={selectedParentQueue} class="select w-full" disabled={loading}>
+						<option value="">Select a queue...</option>
+						{#each parentQueues() as parent (parent)}
+							<option value={parent}>{parent}</option>
+						{/each}
+					</select>
+				</Field>
 
-					{#if mode === 'create' && createType === 'subqueue'}
-						<div class="space-y-4">
-							<label class="label">
-								<span class="label-text">Parent Queue</span>
-								<select bind:value={selectedParentQueue} class="select" disabled={loading}>
-									<option value="">Select a queue...</option>
-									{#each parentQueues() as parent}
-										<option value={parent}>{parent}</option>
-									{/each}
-								</select>
-							</label>
-
-							<div class="grid grid-cols-2 gap-4">
-								<label class="label">
-									<span class="label-text">Subqueue Name</span>
-									<div class="input-group grid-cols-[auto_1fr]">
-										<span class="ig-cell">{selectedParentQueue || '...'}.</span>
-										<input type="text" bind:value={subqueueName} placeholder="high" class="ig-input" disabled={loading} />
-									</div>
-								</label>
-								<label class="label">
-									<span class="label-text">Priority</span>
-									<input type="number" bind:value={subqueuePriority} min="1" class="input" disabled={loading} />
-								</label>
-							</div>
-							<p class="text-sm text-surface-500">
-								Higher priority subqueues are processed first.
-							</p>
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+					<Field label="Subqueue Name" for="{uid}-subname">
+						<div class="flex items-center gap-2">
+							<span class="shrink-0 font-mono text-ui text-fg-subtle">{selectedParentQueue || '...'}.</span>
+							<input id="{uid}-subname" type="text" bind:value={subqueueName} placeholder="high" class="input min-w-0 flex-1" disabled={loading} />
 						</div>
+					</Field>
+					<Field label="Priority" for="{uid}-subprio">
+						<input id="{uid}-subprio" type="number" bind:value={subqueuePriority} min="1" class="input w-full" disabled={loading} />
+					</Field>
+				</div>
+				<p class="text-ui text-fg-subtle">Higher priority subqueues are processed first.</p>
+			</div>
+		{:else}
+			<!-- Queue name + sub-queues -->
+			<div class="space-y-3">
+				<div class="flex items-end gap-3">
+					<Field label="Queue Name" for="{uid}-name" class="flex-1 min-w-0">
+						<input id="{uid}-name" type="text" bind:value={queueName} placeholder="inference" class="input w-full" disabled={loading || mode === 'edit'} />
+					</Field>
+					<Button variant="secondary" icon={Plus} onclick={addSubQueue} disabled={loading}>Add Subqueue</Button>
+				</div>
+
+				{#if subQueues.length === 0}
+					<p class="text-ui text-fg-subtle">
+						No subqueues defined. A <code class="text-fg-muted">.default</code> subqueue will be created automatically.
+					</p>
+				{:else}
+					<div class="space-y-2">
+						{#each subQueues as sq, index (index)}
+							<div class="flex items-center gap-2">
+								<span class="shrink-0 font-mono text-ui text-fg-subtle">{queueName || '...'}.</span>
+								<input type="text" bind:value={sq.name} placeholder="high" aria-label="Subqueue name" class="input min-w-0 flex-1" disabled={loading} />
+								<span class="shrink-0 text-xs text-fg-subtle">Priority</span>
+								<input type="number" bind:value={sq.priority} min="1" aria-label="Subqueue priority" class="input w-16 shrink-0" disabled={loading} />
+								<IconButton icon={X} label="Remove subqueue" danger onclick={() => removeSubQueue(index)} disabled={loading} />
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</div>
+
+			<!-- Deployment -->
+			<section class="space-y-4 border-t border-line-subtle pt-5">
+				<div>
+					<h3 class="text-sm font-semibold text-fg">Deployment Configuration</h3>
+					<p class="mt-0.5 text-ui text-fg-subtle">Configure Git-based code deployment for workers</p>
+				</div>
+
+				<Field label="Git URL" for="{uid}-git">
+					<input id="{uid}-git" type="text" bind:value={gitUrl} placeholder="https://github.com/org/repo.git" class="input w-full font-mono" disabled={loading} />
+				</Field>
+
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+					<Field label="Branch" for="{uid}-branch">
+						<input id="{uid}-branch" type="text" bind:value={branch} placeholder="main" class="input w-full" disabled={loading} />
+					</Field>
+					<Field label="Code Path" for="{uid}-path" hint="Optional">
+						<input id="{uid}-path" type="text" bind:value={codePath} placeholder="./src" class="input w-full" disabled={loading} />
+					</Field>
+				</div>
+
+				<Field label="Startup Command" for="{uid}-cmd">
+					<input id="{uid}-cmd" type="text" bind:value={startupCmd} placeholder="python main.py" class="input w-full font-mono" disabled={loading} />
+				</Field>
+
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+					<Field label="Mode" for="{uid}-mode">
+						<select id="{uid}-mode" bind:value={deploymentMode} class="select w-full" disabled={loading}>
+							<option value="long_running">Long Running</option>
+							<option value="one_shot">One Shot</option>
+						</select>
+					</Field>
+					<Field label="Startup Timeout (sec)" for="{uid}-timeout">
+						<input id="{uid}-timeout" type="number" bind:value={startupTimeout} min="1" class="input w-full" disabled={loading} />
+					</Field>
+				</div>
+
+				<Toggle bind:checked={redisStorage} label="Redis Storage" disabled={loading} />
+
+				<div class="space-y-1.5">
+					<span class="text-ui font-medium text-fg-muted">Vaults</span>
+					{#if loadingVaults}
+						<p class="text-ui text-fg-subtle">Loading vaults...</p>
+					{:else if availableVaults.length === 0}
+						<p class="text-ui text-fg-subtle">No vaults available</p>
 					{:else}
-						<div class="space-y-4">
-							<div class="flex items-end gap-4">
-								<label class="label flex-1">
-									<span class="label-text">Queue Name</span>
-									<input type="text" bind:value={queueName} placeholder="inference" class="input" disabled={loading || mode === 'edit'} />
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-32 overflow-y-auto rounded-md border border-line-subtle p-2">
+							{#each availableVaults as vault (vault.name)}
+								<label class="flex items-center gap-2 cursor-pointer rounded px-1.5 py-1 hover:bg-hover">
+									<input type="checkbox" checked={selectedVaults.has(vault.name)} onchange={() => toggleVault(vault.name)} class="checkbox" disabled={loading} />
+									<span class="text-ui text-fg truncate">{vault.name}</span>
+									<span class="text-xs text-fg-subtle tabular-nums">({vault.entry_count})</span>
 								</label>
-								<button type="button" class="btn preset-tonal" onclick={addSubQueue} disabled={loading}>
-									+ Add Subqueue
-								</button>
-							</div>
-
-							{#if subQueues.length === 0}
-								<p class="text-sm text-surface-500 py-2">
-									No subqueues defined. A <code>.default</code> subqueue will be created automatically.
-								</p>
-							{:else}
-								<div class="card preset-outlined p-3 space-y-2">
-									{#each subQueues as sq, index}
-										<div class="flex items-center gap-2">
-											<span class="text-surface-500 text-sm">{queueName || '...'}.</span>
-											<input type="text" bind:value={sq.name} placeholder="high" class="input flex-1" disabled={loading} />
-											<span class="text-xs text-surface-500">Priority:</span>
-											<input type="number" bind:value={sq.priority} min="1" class="input w-16" disabled={loading} />
-											<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeSubQueue(index)} disabled={loading}>
-												<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-													<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-												</svg>
-											</button>
-										</div>
-									{/each}
-								</div>
-							{/if}
-
-							<hr class="hr" />
-
-							<div>
-								<h5 class="h5 mb-1">Deployment Configuration</h5>
-								<p class="text-sm text-surface-500 mb-4">Configure Git-based code deployment for workers</p>
-							</div>
-
-							<div class="space-y-4">
-								<label class="label">
-									<span class="label-text">Git URL</span>
-									<input type="text" bind:value={gitUrl} placeholder="https://github.com/org/repo.git" class="input font-mono text-sm" disabled={loading} />
-								</label>
-
-								<div class="grid grid-cols-2 gap-4">
-									<label class="label">
-										<span class="label-text">Branch</span>
-										<input type="text" bind:value={branch} placeholder="main" class="input" disabled={loading} />
-									</label>
-									<label class="label">
-										<span class="label-text">Code Path <span class="text-surface-500">(optional)</span></span>
-										<input type="text" bind:value={codePath} placeholder="./src" class="input" disabled={loading} />
-									</label>
-								</div>
-
-								<label class="label">
-									<span class="label-text">Startup Command</span>
-									<input type="text" bind:value={startupCmd} placeholder="python main.py" class="input font-mono text-sm" disabled={loading} />
-								</label>
-
-								<div class="grid grid-cols-2 gap-4">
-									<label class="label">
-										<span class="label-text">Mode</span>
-										<select bind:value={deploymentMode} class="select" disabled={loading}>
-											<option value="long_running">Long Running</option>
-											<option value="one_shot">One Shot</option>
-										</select>
-									</label>
-									<label class="label">
-										<span class="label-text">Startup Timeout (sec)</span>
-										<input type="number" bind:value={startupTimeout} min="1" class="input" disabled={loading} />
-									</label>
-								</div>
-
-								<label class="flex items-center gap-3 cursor-pointer">
-									<input type="checkbox" bind:checked={redisStorage} class="checkbox" disabled={loading} />
-									<span class="text-sm">Redis Storage</span>
-								</label>
-
-								<div>
-									<span class="label-text">Vaults</span>
-									{#if loadingVaults}
-										<p class="text-sm text-surface-500">Loading vaults...</p>
-									{:else if availableVaults.length === 0}
-										<p class="text-sm text-surface-500">No vaults available</p>
-									{:else}
-										<div class="card preset-outlined p-2 max-h-32 overflow-y-auto grid grid-cols-2 gap-2 mt-1">
-											{#each availableVaults as vault}
-												<label class="flex items-center gap-2 cursor-pointer p-1 rounded hover:preset-tonal">
-													<input type="checkbox" checked={selectedVaults.has(vault.name)} onchange={() => toggleVault(vault.name)} class="checkbox" disabled={loading} />
-													<span class="text-sm">{vault.name}</span>
-													<span class="text-xs text-surface-400">({vault.entry_count})</span>
-												</label>
-											{/each}
-										</div>
-									{/if}
-								</div>
-
-								<div>
-									<span class="label-text">Git Token (from vault)</span>
-									<div class="grid grid-cols-2 gap-2 mt-1">
-										<select bind:value={gitTokenVault} class="select" disabled={loading || availableVaults.length === 0}>
-											<option value="">Select vault...</option>
-											{#each availableVaults as vault}
-												<option value={vault.name}>{vault.name}</option>
-											{/each}
-										</select>
-										<select bind:value={gitTokenKey} class="select" disabled={loading || !gitTokenVault || selectedVaultEntries.length === 0}>
-											<option value="">Select key...</option>
-											{#each selectedVaultEntries as key}
-												<option value={key}>{key}</option>
-											{/each}
-										</select>
-									</div>
-									{#if gitTokenVault && gitTokenKey}
-										<p class="text-xs text-surface-500 mt-1">
-											Reference: <code>vault://{gitTokenVault}/{gitTokenKey}</code>
-										</p>
-									{/if}
-								</div>
-							</div>
-
-							<hr class="hr" />
-
-							<div>
-								<div class="flex items-center justify-between">
-									<div>
-										<h5 class="h5 mb-1">Autoscaling</h5>
-										<p class="text-sm text-surface-500">Automatically provision GPU workers for this queue</p>
-									</div>
-									<label class="flex items-center gap-3 cursor-pointer">
-										<input type="checkbox" bind:checked={autoscaleEnabled} class="checkbox" disabled={loading} />
-										<span class="text-sm">Enabled</span>
-									</label>
-								</div>
-							</div>
-
-							{#if autoscaleEnabled}
-								<div class="space-y-4">
-									<label class="label">
-										<span class="label-text">Provider</span>
-										{#if loadingProviders}
-											<p class="text-sm text-surface-500">Loading providers...</p>
-										{:else}
-											<select bind:value={autoscaleProvider} class="select" disabled={loading}>
-												<option value="">Select provider...</option>
-												{#each availableProviders as provider}
-													<option value={provider.name}>{provider.name}</option>
-												{/each}
-											</select>
-											{#if availableProviders.length === 0}
-												<span class="label-text text-surface-500">No providers configured. Add one on the Autoscaling page.</span>
-											{/if}
-										{/if}
-									</label>
-
-									<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-										<label class="label">
-											<span class="label-text">Min Workers</span>
-											<input type="number" bind:value={autoscaleMinWorkers} min="0" class="input" disabled={loading} />
-										</label>
-										<label class="label">
-											<span class="label-text">Max Workers</span>
-											<input type="number" bind:value={autoscaleMaxWorkers} min="1" class="input" disabled={loading} />
-										</label>
-										<label class="label">
-											<span class="label-text">Poll Interval</span>
-											<input type="text" bind:value={autoscalePollInterval} placeholder="30s" class="input" disabled={loading} />
-										</label>
-										<label class="label">
-											<span class="label-text">Boot Timeout</span>
-											<input type="text" bind:value={autoscaleBootTimeout} placeholder="20m" class="input" disabled={loading} />
-										</label>
-									</div>
-
-									<!-- Scale Up Triggers -->
-									<div>
-										<div class="flex items-center justify-between mb-2">
-											<span class="label-text">Scale Up Triggers</span>
-											<button type="button" class="btn btn-sm preset-tonal" onclick={addScaleUp} disabled={loading}>
-												+ Add Trigger
-											</button>
-										</div>
-										{#if scaleUp.length === 0}
-											<p class="text-sm text-surface-500">No scale-up triggers defined.</p>
-										{:else}
-											<div class="card preset-outlined p-3 space-y-3">
-												{#each scaleUp as trigger, index}
-													<div class="flex flex-wrap items-end gap-2">
-														<label class="label flex-1 min-w-[140px]">
-															<span class="label-text text-xs">Type</span>
-															<select bind:value={trigger.trigger} class="select" disabled={loading}>
-																{#each scaleUpTypes as t}
-																	<option value={t}>{t}</option>
-																{/each}
-															</select>
-														</label>
-														{#if trigger.trigger === 'queue_depth'}
-															<label class="label w-28">
-																<span class="label-text text-xs">Threshold</span>
-																<input type="number" bind:value={trigger.threshold} min="0" class="input" disabled={loading} />
-															</label>
-														{:else if trigger.trigger === 'latency'}
-															<label class="label w-28">
-																<span class="label-text text-xs">Max Latency</span>
-																<input type="text" bind:value={trigger.max_latency} placeholder="5m" class="input" disabled={loading} />
-															</label>
-														{:else if trigger.trigger === 'schedule'}
-															<label class="label flex-1 min-w-[120px]">
-																<span class="label-text text-xs">Cron</span>
-																<input type="text" bind:value={trigger.cron} placeholder="0 9 * * *" class="input font-mono text-sm" disabled={loading} />
-															</label>
-															<label class="label w-24">
-																<span class="label-text text-xs">Workers</span>
-																<input type="number" bind:value={trigger.workers} min="0" class="input" disabled={loading} />
-															</label>
-															<label class="label w-24">
-																<span class="label-text text-xs">Hold for</span>
-																<input type="text" bind:value={trigger.duration} placeholder="8h" class="input" disabled={loading} />
-															</label>
-														{/if}
-														{#if watchesSubQueues(trigger.trigger)}
-															<label class="label flex-1 min-w-[140px]">
-																<span class="label-text text-xs">Sub-queues <span class="text-surface-500">(optional)</span></span>
-																<input
-																	type="text"
-																	bind:value={
-																		() => (trigger.sub_queues ?? []).join(', '),
-																		(v) => (trigger.sub_queues = parseSubQueueList(v))
-																	}
-																	placeholder="all"
-																	class="input"
-																	disabled={loading}
-																/>
-															</label>
-														{/if}
-														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleUp(index)} disabled={loading}>
-															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-															</svg>
-														</button>
-													</div>
-												{/each}
-											</div>
-										{/if}
-									</div>
-
-									<!-- Scale Down Triggers -->
-									<div>
-										<div class="flex items-center justify-between mb-2">
-											<span class="label-text">Scale Down Triggers</span>
-											<button type="button" class="btn btn-sm preset-tonal" onclick={addScaleDown} disabled={loading}>
-												+ Add Trigger
-											</button>
-										</div>
-										{#if scaleDown.length === 0}
-											<p class="text-sm text-surface-500">No scale-down triggers defined.</p>
-										{:else}
-											<div class="card preset-outlined p-3 space-y-3">
-												{#each scaleDown as trigger, index}
-													<div class="flex flex-wrap items-end gap-2">
-														<label class="label flex-1 min-w-[140px]">
-															<span class="label-text text-xs">Type</span>
-															<select bind:value={trigger.trigger} class="select" disabled={loading}>
-																{#each scaleDownTypes as t}
-																	<option value={t}>{t}</option>
-																{/each}
-															</select>
-														</label>
-														{#if trigger.trigger === 'schedule'}
-															<label class="label flex-1 min-w-[120px]">
-																<span class="label-text text-xs">Cron</span>
-																<input type="text" bind:value={trigger.cron} placeholder="0 18 * * *" class="input font-mono text-sm" disabled={loading} />
-															</label>
-														{:else if trigger.trigger === 'idle'}
-															<label class="label w-28">
-																<span class="label-text text-xs">Timeout</span>
-																<input type="text" bind:value={trigger.timeout} placeholder="10m" class="input" disabled={loading} />
-															</label>
-														{/if}
-														<button type="button" class="btn-icon preset-tonal-error" onclick={() => removeScaleDown(index)} disabled={loading}>
-															<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-																<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-															</svg>
-														</button>
-													</div>
-												{/each}
-											</div>
-										{/if}
-									</div>
-
-									<!-- Instance Spec -->
-									<div>
-										<span class="label-text">Instance Spec</span>
-										<div class="grid grid-cols-2 gap-4 mt-1">
-											<label class="label">
-												<span class="label-text text-xs">GPU <span class="text-surface-500">(optional)</span></span>
-												<input type="text" bind:value={instanceGpu} placeholder="A100" class="input" disabled={loading} />
-											</label>
-											<label class="label">
-												<span class="label-text text-xs">Image <span class="text-surface-500">(optional)</span></span>
-												<input type="text" bind:value={instanceImage} placeholder="nvidia/cuda:12" class="input font-mono text-sm" disabled={loading} />
-											</label>
-											<label class="label">
-												<span class="label-text text-xs">Disk (GB) <span class="text-surface-500">(optional)</span></span>
-												<input type="number" bind:value={instanceDiskGb} min="0" class="input" disabled={loading} />
-											</label>
-											<label class="label">
-												<span class="label-text text-xs">Max Price/hr <span class="text-surface-500">(optional)</span></span>
-												<input type="number" step="0.01" bind:value={instanceMaxPrice} min="0" class="input" disabled={loading} />
-											</label>
-											<label class="label">
-												<span class="label-text text-xs">Min RAM (GB) <span class="text-surface-500">(optional)</span></span>
-												<input type="number" bind:value={instanceMinRamGb} min="0" class="input" disabled={loading} />
-											</label>
-											<label class="label">
-												<span class="label-text text-xs">Min vCPUs <span class="text-surface-500">(optional)</span></span>
-												<input type="number" bind:value={instanceMinVcpu} min="0" class="input" disabled={loading} />
-											</label>
-										</div>
-									</div>
-								</div>
-							{/if}
-
-							<hr class="hr" />
-
-							<div class="space-y-3">
-								<div class="flex items-center justify-between gap-4">
-									<div>
-										<h5 class="h5 mb-1">Alerts</h5>
-										<p class="text-sm text-surface-500">Override the global alert rules for this queue</p>
-									</div>
-									<label class="flex items-center gap-3 cursor-pointer">
-										<input type="checkbox" bind:checked={alertsMuted} class="checkbox" disabled={loading} />
-										<span class="text-sm">Mute</span>
-									</label>
-								</div>
-								{#if !alertsMuted}
-									<AlertRulesEditor bind:rules={alertRules} override disabled={loading} />
-								{/if}
-							</div>
+							{/each}
 						</div>
-					{/if}
-
-					{#if error}
-						<aside class="alert preset-filled-error-500">
-							<p>{error}</p>
-						</aside>
 					{/if}
 				</div>
 
-				<footer class="flex justify-end gap-2 mt-6">
-					<button type="button" class="btn preset-tonal" onclick={handleCancel} disabled={loading}>
-						Cancel
-					</button>
-					<button type="submit" class="btn preset-filled" disabled={loading}>
-						{#if loading}
-							Saving...
-						{:else if mode === 'create' && createType === 'subqueue'}
-							Add Subqueue
-						{:else if mode === 'create'}
-							Create Queue
+				<Field
+					label="Git Token (from vault)"
+					for="{uid}-tokvault"
+					hint={gitTokenVault && gitTokenKey ? `Reference: vault://${gitTokenVault}/${gitTokenKey}` : undefined}
+				>
+					<div class="grid grid-cols-2 gap-2">
+						<select id="{uid}-tokvault" bind:value={gitTokenVault} class="select w-full" disabled={loading || availableVaults.length === 0}>
+							<option value="">Select vault...</option>
+							{#each availableVaults as vault (vault.name)}
+								<option value={vault.name}>{vault.name}</option>
+							{/each}
+						</select>
+						<select bind:value={gitTokenKey} aria-label="Git token key" class="select w-full" disabled={loading || !gitTokenVault || selectedVaultEntries.length === 0}>
+							<option value="">Select key...</option>
+							{#each selectedVaultEntries as key (key)}
+								<option value={key}>{key}</option>
+							{/each}
+						</select>
+					</div>
+				</Field>
+			</section>
+
+			<!-- Autoscaling -->
+			<section class="space-y-4 border-t border-line-subtle pt-5">
+				<div>
+					<h3 class="text-sm font-semibold text-fg">Autoscaling</h3>
+					<p class="mt-0.5 text-ui text-fg-subtle">Automatically provision GPU workers for this queue</p>
+				</div>
+				<Toggle bind:checked={autoscaleEnabled} label="Enabled" disabled={loading} />
+
+				{#if autoscaleEnabled}
+					<Field
+						label="Provider"
+						for="{uid}-provider"
+						hint={!loadingProviders && availableProviders.length === 0
+							? 'No providers configured. Add one on the Autoscaling page.'
+							: undefined}
+					>
+						{#if loadingProviders}
+							<p class="text-ui text-fg-subtle">Loading providers...</p>
 						{:else}
-							Update Queue
+							<select id="{uid}-provider" bind:value={autoscaleProvider} class="select w-full" disabled={loading}>
+								<option value="">Select provider...</option>
+								{#each availableProviders as provider (provider.name)}
+									<option value={provider.name}>{provider.name}</option>
+								{/each}
+							</select>
 						{/if}
-					</button>
-				</footer>
-			</form>
-		</div>
-	</div>
-{/if}
+					</Field>
+
+					<div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+						<Field label="Min Workers" for="{uid}-min">
+							<input id="{uid}-min" type="number" bind:value={autoscaleMinWorkers} min="0" class="input w-full" disabled={loading} />
+						</Field>
+						<Field label="Max Workers" for="{uid}-max">
+							<input id="{uid}-max" type="number" bind:value={autoscaleMaxWorkers} min="1" class="input w-full" disabled={loading} />
+						</Field>
+						<Field label="Poll Interval" for="{uid}-poll">
+							<input id="{uid}-poll" type="text" bind:value={autoscalePollInterval} placeholder="30s" class="input w-full" disabled={loading} />
+						</Field>
+						<Field label="Boot Timeout" for="{uid}-boot">
+							<input id="{uid}-boot" type="text" bind:value={autoscaleBootTimeout} placeholder="20m" class="input w-full" disabled={loading} />
+						</Field>
+					</div>
+
+					<!-- Scale Up Triggers -->
+					<div class="space-y-2">
+						<div class="flex items-center justify-between gap-2">
+							<span class="text-xs font-medium text-fg-subtle">Scale Up Triggers</span>
+							<Button variant="ghost" size="sm" icon={Plus} onclick={addScaleUp} disabled={loading}>Add Trigger</Button>
+						</div>
+						{#if scaleUp.length === 0}
+							<p class="text-ui text-fg-subtle">No scale-up triggers defined.</p>
+						{:else}
+							<div class="divide-y divide-line-subtle rounded-md border border-line-subtle">
+								{#each scaleUp as trigger, index (index)}
+									<div class="flex flex-wrap items-end gap-2 p-3">
+										<Field label="Type" for="{uid}-up{index}-type" class="flex-1 min-w-[140px]">
+											<select id="{uid}-up{index}-type" bind:value={trigger.trigger} class="select w-full" disabled={loading}>
+												{#each scaleUpTypes as t (t)}
+													<option value={t}>{t}</option>
+												{/each}
+											</select>
+										</Field>
+										{#if trigger.trigger === 'queue_depth'}
+											<Field label="Threshold" for="{uid}-up{index}-thr" class="w-28">
+												<input id="{uid}-up{index}-thr" type="number" bind:value={trigger.threshold} min="0" class="input w-full" disabled={loading} />
+											</Field>
+										{:else if trigger.trigger === 'latency'}
+											<Field label="Max Latency" for="{uid}-up{index}-lat" class="w-28">
+												<input id="{uid}-up{index}-lat" type="text" bind:value={trigger.max_latency} placeholder="5m" class="input w-full" disabled={loading} />
+											</Field>
+										{:else if trigger.trigger === 'schedule'}
+											<Field label="Cron" for="{uid}-up{index}-cron" class="flex-1 min-w-[120px]">
+												<input id="{uid}-up{index}-cron" type="text" bind:value={trigger.cron} placeholder="0 9 * * *" class="input w-full font-mono" disabled={loading} />
+											</Field>
+											<Field label="Workers" for="{uid}-up{index}-workers" class="w-24">
+												<input id="{uid}-up{index}-workers" type="number" bind:value={trigger.workers} min="0" class="input w-full" disabled={loading} />
+											</Field>
+											<Field label="Hold for" for="{uid}-up{index}-hold" class="w-24">
+												<input id="{uid}-up{index}-hold" type="text" bind:value={trigger.duration} placeholder="8h" class="input w-full" disabled={loading} />
+											</Field>
+										{/if}
+										{#if watchesSubQueues(trigger.trigger)}
+											<Field label="Sub-queues (optional)" for="{uid}-up{index}-subs" class="flex-1 min-w-[140px]">
+												<input
+													id="{uid}-up{index}-subs"
+													type="text"
+													bind:value={
+														() => (trigger.sub_queues ?? []).join(', '),
+														(v) => (trigger.sub_queues = parseSubQueueList(v))
+													}
+													placeholder="all"
+													class="input w-full"
+													disabled={loading}
+												/>
+											</Field>
+										{/if}
+										<div class="flex h-9 items-center">
+											<IconButton icon={X} label="Remove trigger" danger onclick={() => removeScaleUp(index)} disabled={loading} />
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<!-- Scale Down Triggers -->
+					<div class="space-y-2">
+						<div class="flex items-center justify-between gap-2">
+							<span class="text-xs font-medium text-fg-subtle">Scale Down Triggers</span>
+							<Button variant="ghost" size="sm" icon={Plus} onclick={addScaleDown} disabled={loading}>Add Trigger</Button>
+						</div>
+						{#if scaleDown.length === 0}
+							<p class="text-ui text-fg-subtle">No scale-down triggers defined.</p>
+						{:else}
+							<div class="divide-y divide-line-subtle rounded-md border border-line-subtle">
+								{#each scaleDown as trigger, index (index)}
+									<div class="flex flex-wrap items-end gap-2 p-3">
+										<Field label="Type" for="{uid}-down{index}-type" class="flex-1 min-w-[140px]">
+											<select id="{uid}-down{index}-type" bind:value={trigger.trigger} class="select w-full" disabled={loading}>
+												{#each scaleDownTypes as t (t)}
+													<option value={t}>{t}</option>
+												{/each}
+											</select>
+										</Field>
+										{#if trigger.trigger === 'schedule'}
+											<Field label="Cron" for="{uid}-down{index}-cron" class="flex-1 min-w-[120px]">
+												<input id="{uid}-down{index}-cron" type="text" bind:value={trigger.cron} placeholder="0 18 * * *" class="input w-full font-mono" disabled={loading} />
+											</Field>
+										{:else if trigger.trigger === 'idle'}
+											<Field label="Timeout" for="{uid}-down{index}-timeout" class="w-28">
+												<input id="{uid}-down{index}-timeout" type="text" bind:value={trigger.timeout} placeholder="10m" class="input w-full" disabled={loading} />
+											</Field>
+										{/if}
+										<div class="flex h-9 items-center">
+											<IconButton icon={X} label="Remove trigger" danger onclick={() => removeScaleDown(index)} disabled={loading} />
+										</div>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+
+					<!-- Instance Spec -->
+					<div class="space-y-2">
+						<span class="text-xs font-medium text-fg-subtle">Instance Spec</span>
+						<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+							<Field label="GPU" for="{uid}-gpu" hint="Optional">
+								<input id="{uid}-gpu" type="text" bind:value={instanceGpu} placeholder="A100" class="input w-full" disabled={loading} />
+							</Field>
+							<Field label="Image" for="{uid}-image" hint="Optional">
+								<input id="{uid}-image" type="text" bind:value={instanceImage} placeholder="nvidia/cuda:12" class="input w-full font-mono" disabled={loading} />
+							</Field>
+							<Field label="Disk (GB)" for="{uid}-disk" hint="Optional">
+								<input id="{uid}-disk" type="number" bind:value={instanceDiskGb} min="0" class="input w-full" disabled={loading} />
+							</Field>
+							<Field label="Max Price/hr" for="{uid}-price" hint="Optional">
+								<input id="{uid}-price" type="number" step="0.01" bind:value={instanceMaxPrice} min="0" class="input w-full" disabled={loading} />
+							</Field>
+							<Field label="Min RAM (GB)" for="{uid}-ram" hint="Optional">
+								<input id="{uid}-ram" type="number" bind:value={instanceMinRamGb} min="0" class="input w-full" disabled={loading} />
+							</Field>
+							<Field label="Min vCPUs" for="{uid}-vcpu" hint="Optional">
+								<input id="{uid}-vcpu" type="number" bind:value={instanceMinVcpu} min="0" class="input w-full" disabled={loading} />
+							</Field>
+						</div>
+					</div>
+				{/if}
+			</section>
+
+			<!-- Alerts -->
+			<section class="space-y-4 border-t border-line-subtle pt-5">
+				<div>
+					<h3 class="text-sm font-semibold text-fg">Alerts</h3>
+					<p class="mt-0.5 text-ui text-fg-subtle">Override the global alert rules for this queue</p>
+				</div>
+				<Toggle bind:checked={alertsMuted} label="Mute" disabled={loading} />
+				{#if !alertsMuted}
+					<AlertRulesEditor bind:rules={alertRules} override disabled={loading} />
+				{/if}
+			</section>
+		{/if}
+
+		{#if error}
+			<Callout>
+				{error}
+			</Callout>
+		{/if}
+	</form>
+
+	{#snippet footer()}
+		<Button variant="ghost" onclick={handleCancel} disabled={loading}>Cancel</Button>
+		<Button type="submit" form={formId} variant="primary" {loading}>
+			{#if loading}
+				Saving...
+			{:else if mode === 'create' && createType === 'subqueue'}
+				Add Subqueue
+			{:else if mode === 'create'}
+				Create Queue
+			{:else}
+				Update Queue
+			{/if}
+		</Button>
+	{/snippet}
+</Modal>

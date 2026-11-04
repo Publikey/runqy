@@ -9,12 +9,13 @@
 	import type { VaultDetail, VaultEntryView } from '$lib/api/types';
 	import EntryModal from '$lib/components/EntryModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { FileText, Lock, Pencil, Plus, Trash2 } from '@lucide/svelte';
+	import { Callout, Badge, Button, EmptyState, IconButton, KeyValue, PageHeader, Panel, Shimmer } from '$lib/components/ui';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let vault = $state<VaultDetail | null>(null);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
-	let refreshing = $state(false);
 
 	let entryModalOpen = $state(false);
 	let entryModalMode = $state<'create' | 'edit'>('create');
@@ -39,12 +40,6 @@
 		} finally {
 			loading = false;
 		}
-	}
-
-	async function handleRefresh() {
-		refreshing = true;
-		await loadData();
-		setTimeout(() => { refreshing = false; }, 500);
 	}
 
 	onMount(() => {
@@ -132,216 +127,103 @@
 	<title>{vaultName} - Vaults - runqy Monitor</title>
 </svelte:head>
 
-<div class="p-4 md:p-6 space-y-6">
-	<!-- Back Link -->
-	<a
-		href="{base}/vaults"
-		class="inline-flex items-center gap-2 text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
+<div class="rq-page space-y-6">
+	<PageHeader
+		title={vaultName}
+		mono
+		subtitle={vault?.description || undefined}
+		breadcrumbs={[{ label: 'Vaults', href: '/vaults' }, { label: vaultName }]}
+		onrefresh={loadData}
 	>
-		<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-			<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-		</svg>
-		Back to Vaults
-	</a>
-
-	<!-- Header -->
-	<div class="flex flex-wrap items-start justify-between gap-y-3">
-		<div>
-			<div class="flex items-center gap-3 mb-2">
-				<svg class="w-8 h-8 text-primary-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
-				</svg>
-				<h1 class="text-2xl font-bold">{vaultName}</h1>
-			</div>
-			{#if vault?.description}
-				<p class="text-surface-500">{vault.description}</p>
-			{/if}
+		{#snippet titleExtra()}
 			{#if vault}
-				<p class="text-sm text-surface-400 mt-1">
-					{vault.entries?.length || 0} {vault.entries?.length === 1 ? 'entry' : 'entries'}
-				</p>
+				<Badge tone="outline">{vault.entries?.length || 0} {vault.entries?.length === 1 ? 'entry' : 'entries'}</Badge>
 			{/if}
-		</div>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}"
-				onclick={handleRefresh}
-			>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-					/>
-				</svg>
-				Refresh
-			</button>
-			<button
-				type="button"
-				class="rq-btn-primary"
-				onclick={openAddEntry}
-			>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-				</svg>
-				Add Entry
-			</button>
-			<button
-				type="button"
-				class="btn preset-outlined-error-500"
-				onclick={confirmDeleteVault}
-				title="Delete vault"
-			>
-				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-				</svg>
-			</button>
-		</div>
-	</div>
+		{/snippet}
+		{#snippet actions()}
+			<IconButton icon={Trash2} label="Delete vault" variant="secondary" size="md" danger onclick={confirmDeleteVault} />
+			<Button variant="primary" icon={Plus} onclick={openAddEntry}>Add entry</Button>
+		{/snippet}
+	</PageHeader>
 
-	<!-- Error State -->
 	{#if error}
-		<div class="card p-4 preset-outlined-error-500">
-			<p class="text-error-500">Failed to load vault: {error}</p>
-		</div>
+		<Callout>
+			Failed to load vault: {error}
+		</Callout>
 	{/if}
 
-	<!-- Loading State -->
 	{#if loading}
-		<div class="table-container">
-			<table class="table">
-				<thead>
-					<tr>
-						<th>Key</th>
-						<th>Value</th>
-						<th>Type</th>
-						<th>Updated</th>
-						<th>Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each [1, 2, 3, 4, 5] as i (i)}
-						<tr>
-							<td colspan="5">
-								<div class="animate-pulse h-4 bg-surface-300 dark:bg-surface-600 rounded"></div>
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
+		<Panel title="Entries">
+			<Shimmer lines={5} />
+		</Panel>
 	{:else if vault && vault.entries?.length === 0}
-		<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-			<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-			</svg>
-			<p class="text-surface-500 mb-4">No entries in this vault</p>
-			<button
-				type="button"
-				class="btn preset-filled-primary-500"
-				onclick={openAddEntry}
-			>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-				</svg>
-				Add your first entry
-			</button>
-		</div>
+		<Panel title="Entries" flush>
+			<EmptyState icon={FileText} title="No entries in this vault" compact>
+				{#snippet action()}
+					<Button variant="secondary" size="sm" icon={Plus} onclick={openAddEntry}>Add your first entry</Button>
+				{/snippet}
+			</EmptyState>
+		</Panel>
 	{:else if vault}
-		<!-- Entries Table -->
-		<div class="table-container">
-			<table class="table table-hover">
-				<thead>
-					<tr>
-						<th>Key</th>
-						<th>Value</th>
-						<th>Type</th>
-						<th>Updated</th>
-						<th>Actions</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each vault.entries as entry (entry.key)}
+		<Panel title="Entries" flush>
+			<div class="table-container">
+				<table class="rq-table">
+					<thead>
 						<tr>
-							<td>
-								<span class="font-mono font-medium">{entry.key}</span>
-							</td>
-							<td>
-								<div class="flex items-center gap-2">
-									{#if entry.is_secret}
-										<svg class="w-4 h-4 text-warning-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-										</svg>
-									{/if}
-									<code class="text-sm bg-surface-200 dark:bg-surface-700 px-2 py-1 rounded max-w-xs truncate">
-										{entry.value}
-									</code>
-								</div>
-							</td>
-							<td>
-								{#if entry.is_secret}
-									<span class="badge preset-filled-warning-500 text-xs">Secret</span>
-								{:else}
-									<span class="badge preset-outlined-surface-500 text-xs">Plain</span>
-								{/if}
-							</td>
-							<td class="text-sm text-surface-500">
-								{formatDate(entry.updated_at)}
-							</td>
-							<td>
-								<div class="flex items-center gap-1">
-									<button
-										type="button"
-										class="btn btn-sm preset-outlined-primary-500"
-										onclick={() => openEditEntry(entry)}
-										title="Edit entry"
-									>
-										<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-										</svg>
-									</button>
-									<button
-										type="button"
-										class="btn btn-sm preset-outlined-error-500"
-										onclick={() => confirmDeleteEntry(entry)}
-										title="Delete entry"
-									>
-										<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-											<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-										</svg>
-									</button>
-								</div>
-							</td>
+							<th>Key</th>
+							<th>Value</th>
+							<th>Type</th>
+							<th>Updated</th>
+							<th class="text-right">Actions</th>
 						</tr>
-					{/each}
-				</tbody>
-			</table>
-		</div>
-
-		<!-- Vault Metadata -->
-		<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-4">
-			<h3 class="text-sm font-medium text-surface-500 mb-2">Vault Information</h3>
-			<div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-				<div>
-					<span class="text-surface-400">Created</span>
-					<p class="font-medium">{formatDate(vault.created_at)}</p>
-				</div>
-				<div>
-					<span class="text-surface-400">Updated</span>
-					<p class="font-medium">{formatDate(vault.updated_at)}</p>
-				</div>
-				<div>
-					<span class="text-surface-400">Total Entries</span>
-					<p class="font-medium">{vault.entries?.length || 0}</p>
-				</div>
-				<div>
-					<span class="text-surface-400">Secret Entries</span>
-					<p class="font-medium">{vault.entries?.filter(e => e.is_secret).length || 0}</p>
-				</div>
+					</thead>
+					<tbody>
+						{#each vault.entries as entry (entry.key)}
+							<tr>
+								<td class="font-mono font-medium text-fg">{entry.key}</td>
+								<td>
+									<div class="flex items-center gap-2 min-w-0">
+										{#if entry.is_secret}
+											<Lock size={14} strokeWidth={1.75} class="shrink-0 text-fg-subtle" />
+										{/if}
+										<code
+											class="font-mono text-xs text-fg-muted bg-raised border border-line-subtle rounded px-1.5 py-0.5 max-w-xs truncate"
+											>{entry.value}</code
+										>
+									</div>
+								</td>
+								<td>
+									{#if entry.is_secret}
+										<Badge tone="warning">Secret</Badge>
+									{:else}
+										<Badge tone="outline">Plain</Badge>
+									{/if}
+								</td>
+								<td class="text-fg-subtle whitespace-nowrap">{formatDate(entry.updated_at)}</td>
+								<td>
+									<div class="flex items-center justify-end gap-1">
+										<IconButton icon={Pencil} label="Edit entry" onclick={() => openEditEntry(entry)} />
+										<IconButton icon={Trash2} label="Delete entry" danger onclick={() => confirmDeleteEntry(entry)} />
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
-		</div>
+		</Panel>
+
+		<Panel title="Vault information">
+			<KeyValue
+				columns={2}
+				items={[
+					{ label: 'Created', value: formatDate(vault.created_at) },
+					{ label: 'Updated', value: formatDate(vault.updated_at) },
+					{ label: 'Total entries', value: vault.entries?.length || 0 },
+					{ label: 'Secret entries', value: vault.entries?.filter((e) => e.is_secret).length || 0 }
+				]}
+			/>
+		</Panel>
 	{/if}
 </div>
 

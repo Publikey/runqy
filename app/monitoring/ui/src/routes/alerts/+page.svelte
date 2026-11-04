@@ -7,6 +7,9 @@
 	import type { AlertsOverview, AlertSettings, AlertRule } from '$lib/api/types';
 	import { formatRelativeTime } from '$lib/utils/format';
 	import AlertRulesEditor from '$lib/components/AlertRulesEditor.svelte';
+	import { Bell, CircleCheck, Send } from '@lucide/svelte';
+	import { Callout, Badge, Button, EmptyState, Field, PageHeader, Panel, Shimmer, Toggle } from '$lib/components/ui';
+	import { alertStatus } from '$lib/utils/status';
 
 	const ruleLabels: Record<string, string> = {
 		no_workers: 'No workers',
@@ -16,16 +19,8 @@
 		autoscale_failure: 'Autoscaling failure'
 	};
 
-	const statusBadges: Record<string, string> = {
-		firing: 'badge preset-filled-error-500 text-xs',
-		repeat: 'badge preset-filled-error-500 text-xs',
-		resolved: 'badge preset-filled-success-500 text-xs',
-		event: 'badge preset-filled-warning-500 text-xs'
-	};
-
 	let overview = $state<AlertsOverview | null>(null);
 	let loadError = $state('');
-	let refreshing = $state(false);
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
 	// Settings form
@@ -137,12 +132,6 @@
 		}
 	}
 
-	async function handleRefresh() {
-		refreshing = true;
-		await loadOverview();
-		setTimeout(() => (refreshing = false), 500);
-	}
-
 	onMount(() => {
 		loadOverview();
 		loadSettings();
@@ -154,70 +143,42 @@
 	});
 
 	let firingCount = $derived(overview?.active.filter((a) => a.firing).length ?? 0);
+
+	let subtitle = $derived.by(() => {
+		if (!overview) return 'Loading...';
+		const parts = [overview.enabled ? 'Enabled' : 'Disabled', `${firingCount} firing`];
+		if (overview.status.last_eval) parts.push(`Evaluated ${formatRelativeTime(overview.status.last_eval)}`);
+		return parts.join(' · ');
+	});
 </script>
 
 <svelte:head>
 	<title>Alerts - runqy Monitor</title>
 </svelte:head>
 
-<div class="p-4 md:p-6 space-y-8">
-	<!-- Header -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold">Alerts</h1>
-			<p class="text-surface-500">
-				{#if overview}
-					{overview.enabled ? 'Enabled' : 'Disabled'}
-					&middot; {firingCount} firing
-					{#if overview.status.last_eval}
-						&middot; Evaluated {formatRelativeTime(overview.status.last_eval)}
-					{/if}
-				{:else}
-					Loading...
-				{/if}
-			</p>
-		</div>
-		<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
-			<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					stroke-width="2"
-					d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-				/>
-			</svg>
-			Refresh
-		</button>
-	</div>
+<div class="rq-page space-y-6">
+	<PageHeader title="Alerts" {subtitle} onrefresh={loadOverview} />
 
 	{#if loadError}
-		<div class="card p-4 preset-outlined-error-500">
-			<p class="text-error-500">{loadError}</p>
-		</div>
+		<Callout>{loadError}</Callout>
 	{/if}
 
 	{#if overview?.status.last_error}
-		<div class="card p-4 preset-outlined-error-500">
-			<p class="text-sm font-semibold text-error-500">Last delivery error</p>
-			<p class="text-sm text-surface-300 mt-1 break-words">{overview.status.last_error}</p>
+		<Callout>
+			<p class="font-medium">Last delivery error</p>
+			<p class="mt-1 break-words">{overview.status.last_error}</p>
 			{#if overview.status.last_error_at}
-				<p class="text-xs text-surface-500 mt-1">{formatRelativeTime(overview.status.last_error_at)}</p>
+				<p class="mt-1 text-xs text-error-300">{formatRelativeTime(overview.status.last_error_at)}</p>
 			{/if}
-		</div>
+		</Callout>
 	{/if}
 
 	<!-- Active alerts -->
-	<section class="space-y-4">
-		<h2 class="rq-section-title">Active</h2>
+	<Panel title="Active" flush>
 		{#if !overview || overview.active.length === 0}
-			<div class="rq-card rq-empty-state">
-				<svg class="w-12 h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-				</svg>
-				<p class="text-surface-400">No active alerts</p>
-			</div>
+			<EmptyState icon={CircleCheck} title="No active alerts" compact />
 		{:else}
-			<div class="rq-card table-container">
+			<div class="table-container">
 				<table class="rq-table">
 					<thead>
 						<tr><th>State</th><th>Queue</th><th>Alert</th><th>Since</th><th>Details</th></tr>
@@ -225,135 +186,181 @@
 					<tbody>
 						{#each overview.active as a (a.queue + a.rule)}
 							<tr>
-								<td>
-									{#if a.firing}
-										<span class="badge preset-filled-error-500 text-xs">Firing</span>
-									{:else}
-										<span class="badge preset-outlined-surface-500 text-xs">Pending</span>
-									{/if}
+								<td><Badge status={alertStatus(a.firing ? 'firing' : 'pending')} /></td>
+								<td class="font-mono">
+									<a class="text-primary-400 hover:text-primary-300" href="{base}/queues/{encodeURIComponent(a.queue)}"
+										>{a.queue}</a
+									>
 								</td>
-								<td><a class="anchor" href="{base}/queues/{encodeURIComponent(a.queue)}">{a.queue}</a></td>
 								<td>{ruleLabels[a.rule] ?? a.rule}</td>
-								<td class="text-surface-400">{formatRelativeTime(a.firing && a.fired_at ? a.fired_at : a.since)}</td>
-								<td class="text-surface-400">{a.message}</td>
+								<td class="text-fg-subtle whitespace-nowrap">
+									{formatRelativeTime(a.firing && a.fired_at ? a.fired_at : a.since)}
+								</td>
+								<td class="text-fg-muted">{a.message}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
 		{/if}
-	</section>
+	</Panel>
 
 	<!-- Settings -->
-	<section class="space-y-4">
-		<h2 class="rq-section-title">Settings</h2>
-		<div class="rq-card p-5 space-y-6">
-			{#if !settingsLoaded}
-				<p class="text-surface-500">Loading settings...</p>
-			{:else}
-				<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div>
-						<h3 class="font-semibold">Email notifications</h3>
-						<p class="text-sm text-surface-400">
-							A top-level <code>alerts</code> block in a queue YAML file replaces these settings on the next config reload.
-						</p>
-					</div>
-					<label class="flex items-center gap-3 cursor-pointer">
-						<input type="checkbox" bind:checked={form.enabled} class="checkbox" disabled={saving} />
-						<span class="text-sm">Enabled</span>
-					</label>
-				</div>
+	<Panel title="Settings">
+		{#if !settingsLoaded}
+			<Shimmer lines={4} />
+		{:else}
+			<div class="space-y-6">
+				<Toggle
+					bind:checked={form.enabled}
+					label="Email notifications"
+					description="A top-level alerts block in a queue YAML file replaces these settings on the next config reload."
+					disabled={saving}
+				/>
 
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-					<label class="label">
-						<span class="label-text">Provider</span>
-						<select bind:value={form.provider} class="select" disabled={saving}>
+					<Field label="Provider" for="alerts-provider">
+						<select id="alerts-provider" bind:value={form.provider} class="select" disabled={saving}>
 							<option value="smtp">SMTP</option>
 							<option value="sendgrid">SendGrid</option>
 						</select>
-					</label>
-					<label class="label">
-						<span class="label-text">From</span>
-						<input type="text" bind:value={form.from} placeholder="runqy <alerts@example.com>" class="input" disabled={saving} />
-					</label>
-					<label class="label md:col-span-2">
-						<span class="label-text">Recipients <span class="text-surface-500">(one per line)</span></span>
-						<textarea bind:value={recipientsText} rows="3" placeholder="ops@example.com" class="textarea" disabled={saving}></textarea>
-					</label>
+					</Field>
+					<Field label="From" for="alerts-from">
+						<input
+							id="alerts-from"
+							type="text"
+							bind:value={form.from}
+							placeholder="runqy <alerts@example.com>"
+							class="input"
+							disabled={saving}
+						/>
+					</Field>
+					<Field label="Recipients" for="alerts-recipients" hint="One per line." class="md:col-span-2">
+						<textarea
+							id="alerts-recipients"
+							bind:value={recipientsText}
+							rows="3"
+							placeholder="ops@example.com"
+							class="textarea"
+							disabled={saving}
+						></textarea>
+					</Field>
 				</div>
 
 				{#if form.provider === 'smtp' && form.smtp}
 					<div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-						<label class="label sm:col-span-2">
-							<span class="label-text">SMTP host</span>
-							<input type="text" bind:value={form.smtp.host} placeholder="smtp.example.com" class="input" disabled={saving} />
-						</label>
-						<label class="label">
-							<span class="label-text">Security</span>
-							<select bind:value={form.smtp.tls} class="select" disabled={saving}>
+						<Field label="SMTP host" for="alerts-smtp-host" class="sm:col-span-2">
+							<input
+								id="alerts-smtp-host"
+								type="text"
+								bind:value={form.smtp.host}
+								placeholder="smtp.example.com"
+								class="input"
+								disabled={saving}
+							/>
+						</Field>
+						<Field label="Security" for="alerts-smtp-tls">
+							<select id="alerts-smtp-tls" bind:value={form.smtp.tls} class="select" disabled={saving}>
 								<option value="starttls">STARTTLS (587)</option>
 								<option value="tls">TLS (465)</option>
 								<option value="none">None (25)</option>
 							</select>
-						</label>
-						<label class="label">
-							<span class="label-text">Port <span class="text-surface-500">(optional)</span></span>
-							<input type="number" bind:value={form.smtp.port} min="1" max="65535" class="input" disabled={saving} />
-						</label>
-						<label class="label sm:col-span-2">
-							<span class="label-text">Username</span>
-							<input type="text" bind:value={form.smtp.username} autocomplete="off" class="input" disabled={saving} />
-						</label>
-						<label class="label sm:col-span-2">
-							<span class="label-text">Password</span>
-							<input type="password" bind:value={form.smtp.password} autocomplete="new-password" placeholder="vault://vault/key, or empty to use RUNQY_SMTP_PASSWORD" class="input" disabled={saving} />
-						</label>
+						</Field>
+						<Field label="Port (optional)" for="alerts-smtp-port">
+							<input
+								id="alerts-smtp-port"
+								type="number"
+								bind:value={form.smtp.port}
+								min="1"
+								max="65535"
+								class="input"
+								disabled={saving}
+							/>
+						</Field>
+						<Field label="Username" for="alerts-smtp-user" class="sm:col-span-2">
+							<input
+								id="alerts-smtp-user"
+								type="text"
+								bind:value={form.smtp.username}
+								autocomplete="off"
+								class="input"
+								disabled={saving}
+							/>
+						</Field>
+						<Field label="Password" for="alerts-smtp-password" class="sm:col-span-2">
+							<input
+								id="alerts-smtp-password"
+								type="password"
+								bind:value={form.smtp.password}
+								autocomplete="new-password"
+								placeholder="vault://vault/key, or empty to use RUNQY_SMTP_PASSWORD"
+								class="input"
+								disabled={saving}
+							/>
+						</Field>
 					</div>
 				{:else if form.provider === 'sendgrid' && form.sendgrid}
-					<label class="label">
-						<span class="label-text">SendGrid API key</span>
-						<input type="password" bind:value={form.sendgrid.api_key} autocomplete="new-password" placeholder="vault://vault/key, or empty to use RUNQY_SENDGRID_API_KEY" class="input" disabled={saving} />
-					</label>
+					<Field label="SendGrid API key" for="alerts-sendgrid-key">
+						<input
+							id="alerts-sendgrid-key"
+							type="password"
+							bind:value={form.sendgrid.api_key}
+							autocomplete="new-password"
+							placeholder="vault://vault/key, or empty to use RUNQY_SENDGRID_API_KEY"
+							class="input"
+							disabled={saving}
+						/>
+					</Field>
 				{/if}
 
-				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-					<label class="label">
-						<span class="label-text">Repeat while firing</span>
-						<input type="text" bind:value={form.repeat_interval} placeholder="4h (0 = once)" class="input" disabled={saving} />
-					</label>
-					<label class="flex items-center gap-3 cursor-pointer sm:mt-6">
-						<input type="checkbox" bind:checked={sendResolved} class="checkbox" disabled={saving} />
-						<span class="text-sm">Notify when an alert resolves</span>
-					</label>
+				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:items-end">
+					<Field label="Repeat while firing" for="alerts-repeat">
+						<input
+							id="alerts-repeat"
+							type="text"
+							bind:value={form.repeat_interval}
+							placeholder="4h (0 = once)"
+							class="input"
+							disabled={saving}
+						/>
+					</Field>
+					<div class="sm:pb-1.5">
+						<Toggle bind:checked={sendResolved} label="Notify when an alert resolves" disabled={saving} />
+					</div>
 				</div>
 
-				<div class="space-y-2">
-					<h3 class="font-semibold">Default rules</h3>
-					<p class="text-sm text-surface-400">Applied to every queue. A queue can override or turn off a rule in its configuration.</p>
+				<div class="space-y-3 border-t border-line-subtle pt-5">
+					<div>
+						<h3 class="text-sm font-semibold text-fg">Default rules</h3>
+						<p class="mt-0.5 text-ui text-fg-subtle">
+							Applied to every queue. A queue can override or turn off a rule in its configuration.
+						</p>
+					</div>
 					<AlertRulesEditor bind:rules disabled={saving} />
 				</div>
+			</div>
+		{/if}
 
-				<div class="flex flex-wrap justify-end gap-2 pt-2">
-					<button type="button" class="rq-btn-ghost" onclick={handleTest} disabled={testing || saving}>
+		{#snippet footer()}
+			{#if settingsLoaded}
+				<div class="flex flex-wrap justify-end gap-2">
+					<Button variant="secondary" icon={Send} onclick={handleTest} loading={testing} disabled={saving}>
 						{testing ? 'Sending...' : 'Send test email'}
-					</button>
-					<button type="button" class="rq-btn-primary" onclick={handleSave} disabled={saving}>
+					</Button>
+					<Button variant="primary" onclick={handleSave} loading={saving}>
 						{saving ? 'Saving...' : 'Save settings'}
-					</button>
+					</Button>
 				</div>
 			{/if}
-		</div>
-	</section>
+		{/snippet}
+	</Panel>
 
 	<!-- History -->
-	<section class="space-y-4">
-		<h2 class="rq-section-title">Recent notifications</h2>
+	<Panel title="Recent notifications" flush>
 		{#if !overview || overview.history.length === 0}
-			<div class="rq-card rq-empty-state">
-				<p class="text-surface-400">No notifications sent yet</p>
-			</div>
+			<EmptyState icon={Bell} title="No notifications sent yet" compact />
 		{:else}
-			<div class="rq-card table-container">
+			<div class="table-container">
 				<table class="rq-table">
 					<thead>
 						<tr><th>Time</th><th>Status</th><th>Queue</th><th>Alert</th><th>Details</th></tr>
@@ -361,16 +368,18 @@
 					<tbody>
 						{#each overview.history as h, i (i)}
 							<tr>
-								<td class="text-surface-400 whitespace-nowrap" title={new Date(h.time).toLocaleString()}>{formatRelativeTime(h.time)}</td>
-								<td><span class={statusBadges[h.status] ?? 'badge preset-outlined-surface-500 text-xs'}>{h.status}</span></td>
-								<td>{h.queue}</td>
+								<td class="text-fg-subtle whitespace-nowrap" title={new Date(h.time).toLocaleString()}>
+									{formatRelativeTime(h.time)}
+								</td>
+								<td><Badge status={alertStatus(h.status)} /></td>
+								<td class="font-mono">{h.queue}</td>
 								<td>{ruleLabels[h.rule] ?? h.rule}</td>
-								<td class="text-surface-400">{h.message}</td>
+								<td class="text-fg-muted">{h.message}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
 		{/if}
-	</section>
+	</Panel>
 </div>

@@ -6,6 +6,7 @@
 		value: T;
 		label: string;
 		count?: number;
+		disabled?: boolean;
 	}
 
 	interface Props {
@@ -30,7 +31,7 @@
 >
 	<SegmentedControl.Control class="rq-segmented">
 		{#each items as item (item.value)}
-			<SegmentedControl.Item value={item.value} class="rq-segmented-item">
+			<SegmentedControl.Item value={item.value} disabled={item.disabled} class="rq-segmented-item">
 				<SegmentedControl.ItemText>
 					{item.label}{#if item.count !== undefined}<span class="rq-segmented-count">{item.count}</span>{/if}
 				</SegmentedControl.ItemText>

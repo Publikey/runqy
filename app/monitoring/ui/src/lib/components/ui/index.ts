@@ -17,3 +17,4 @@ export { default as Spinner } from './Spinner.svelte';
 export { default as StatTile } from './StatTile.svelte';
 export { default as Tabs } from './Tabs.svelte';
 export { default as Toggle } from './Toggle.svelte';
+export { default as Callout } from './Callout.svelte';

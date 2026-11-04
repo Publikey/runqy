@@ -5,14 +5,13 @@
 	import { queuesStore, totalStats } from '$lib/stores/queues';
 	import { workersStore, workerStats } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
-	import StatCard from '$lib/components/StatCard.svelte';
+	import { Callout, Badge, PageHeader, Panel, StatTile } from '$lib/components/ui';
 	import ThroughputChart from '$lib/components/charts/ThroughputChart.svelte';
 	import QueueSizesChart from '$lib/components/charts/QueueSizesChart.svelte';
-	import { formatDuration, formatNumber, formatRelativeTime } from '$lib/utils/format';
+	import { formatDuration, formatNumber } from '$lib/utils/format';
 	import { groupQueues, type QueueGroup } from '$lib/utils/queueGrouping';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	let refreshing = $state(false);
 
 	let queueGroups = $derived(groupQueues($queuesStore.queues));
 
@@ -66,12 +65,6 @@
 		await Promise.all([queuesStore.fetch(), workersStore.fetch()]);
 	}
 
-	async function handleRefresh() {
-		refreshing = true;
-		await loadData();
-		setTimeout(() => { refreshing = false; }, 500);
-	}
-
 	onMount(() => {
 		loadData();
 		pollInterval = setInterval(loadData, $settings.pollInterval * 1000);
@@ -86,176 +79,142 @@
 	<title>Dashboard - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-8">
-	<!-- Header -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="rq-page-title">Dashboard</h1>
-			<p class="text-surface-500">
-				{#if $queuesStore.lastUpdated}
-					Last updated {formatRelativeTime($queuesStore.lastUpdated)}
-				{:else}
-					Loading...
-				{/if}
-			</p>
-		</div>
-		<button type="button" class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}" onclick={handleRefresh}>
-			<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path
-					stroke-linecap="round"
-					stroke-linejoin="round"
-					stroke-width="2"
-					d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-				/>
-			</svg>
-			Refresh
-		</button>
+<div class="rq-page space-y-6">
+	<PageHeader
+		title="Dashboard"
+		subtitle={$queuesStore.lastUpdated ? undefined : 'Loading…'}
+		updatedAt={$queuesStore.lastUpdated}
+		onrefresh={loadData}
+	/>
+
+	<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+		<StatTile label="Queues" value={queueGroups.length} href="/queues" />
+		<StatTile label="Pending" value={$totalStats.totalPending} tone={$totalStats.totalPending > 0 ? 'warning' : 'default'} />
+		<StatTile label="Active" value={$totalStats.totalActive} tone={$totalStats.totalActive > 0 ? 'accent' : 'default'} />
+		<StatTile label="Processed" value={$totalStats.totalProcessed} />
+		<StatTile label="Failed" value={$totalStats.totalFailed} tone={$totalStats.totalFailed > 0 ? 'danger' : 'default'} />
+		<StatTile label="Workers" value={$workerStats.total} href="/workers" />
 	</div>
 
-	<!-- Stats Overview -->
-	<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-		<StatCard label="Queues" value={queueGroups.length} variant="primary" href="/queues" />
-		<StatCard label="Pending" value={$totalStats.totalPending} variant="warning" />
-		<StatCard label="Active" value={$totalStats.totalActive} variant="success" />
-		<StatCard label="Processed" value={$totalStats.totalProcessed} variant="default" />
-		<StatCard label="Failed" value={$totalStats.totalFailed} variant="error" />
-		<StatCard label="Workers" value={$workerStats.total} variant="primary" href="/workers" />
-	</div>
-
-	<!-- Charts Section -->
-	<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+	<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
 		<ThroughputChart height={280} />
 		<QueueSizesChart height={280} maxQueues={6} />
 	</div>
 
 	{#if $queuesStore.error}
-		<div class="rq-card p-4">
-			<p class="text-error-500">Failed to load queues: {$queuesStore.error}</p>
-		</div>
+		<Callout>Failed to load queues: {$queuesStore.error}</Callout>
 	{/if}
 
-	<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-		<!-- Queues Overview -->
-		<section class="rq-card p-5 space-y-5">
-			<div class="flex items-center justify-between">
-				<h2 class="rq-section-title">Queues</h2>
-				<a href="{base}/queues" class="text-primary-500 hover:text-primary-600 text-sm font-medium">View all →</a>
-			</div>
+	<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+		<Panel title="Queues" class="min-w-0">
+			{#snippet actions()}
+				<a href="{base}/queues" class="text-ui font-medium text-primary-400 hover:text-primary-300">View all</a>
+			{/snippet}
 
-			<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-				<div class="rq-metric-box text-center">
-					<div class="text-xl font-bold">{queueGroups.length}</div>
-					<div class="text-xs text-surface-500">Queues</div>
-				</div>
-				<div class="rq-metric-box text-center">
-					<div class="text-xl font-bold">{$queuesStore.queues.length}</div>
-					<div class="text-xs text-surface-500">Sub-queues</div>
-				</div>
-				<div class="rq-metric-box text-center">
-					<div class="text-xl font-bold {pausedSubQueues > 0 ? 'text-warning-500' : ''}">{pausedSubQueues}</div>
-					<div class="text-xs text-surface-500">Paused</div>
-				</div>
-				<div class="rq-metric-box text-center">
-					<div class="text-xl font-bold {groupsWithoutWorkers.length > 0 ? 'text-warning-500' : ''}">{groupsWithoutWorkers.length}</div>
-					<div class="text-xs text-surface-500">Without worker</div>
-				</div>
-			</div>
-
-			{#if $queuesStore.queues.length === 0}
-				<p class="text-sm text-surface-400">
-					{$queuesStore.loading ? 'Loading…' : 'No queues yet. They appear once configured.'}
-				</p>
-			{:else}
-				<div>
-					<h3 class="text-xs font-medium uppercase tracking-wider text-surface-400 mb-2">Needs attention</h3>
-					{#if attention.length === 0}
-						<p class="text-sm text-success-500">Every queue has a worker, none is paused and nothing failed.</p>
-					{:else}
-						<ul class="space-y-1">
-							{#each attention as a (a.group.name)}
-								<li>
-									<a href={queueHref(a.group)} class="flex flex-wrap items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-surface-100-900">
-										<span class="font-mono text-sm truncate">{a.group.name}</span>
-										<span class="flex flex-wrap gap-1">
-											{#each a.issues as issue (issue)}
-												<span class="badge preset-outlined-warning-500 text-xs">{issue}</span>
-											{/each}
-										</span>
-									</a>
-								</li>
-							{/each}
-						</ul>
-					{/if}
+			<div class="space-y-6">
+				<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+					<StatTile inset label="Queues" value={queueGroups.length} />
+					<StatTile inset label="Sub-queues" value={$queuesStore.queues.length} />
+					<StatTile inset label="Paused" value={pausedSubQueues} tone={pausedSubQueues > 0 ? 'warning' : 'default'} />
+					<StatTile
+						inset
+						label="Without worker"
+						value={groupsWithoutWorkers.length}
+						tone={groupsWithoutWorkers.length > 0 ? 'warning' : 'default'}
+					/>
 				</div>
 
-				{#if busiest.length > 0}
+				{#if $queuesStore.queues.length === 0}
+					<p class="text-ui text-fg-subtle">
+						{$queuesStore.loading ? 'Loading…' : 'No queues yet. They appear once configured.'}
+					</p>
+				{:else}
 					<div>
-						<div class="flex items-center justify-between mb-2 px-2">
-							<h3 class="text-xs font-medium uppercase tracking-wider text-surface-400">Busiest</h3>
-							<span class="flex items-center gap-3 text-[0.65rem] uppercase tracking-wider text-surface-400">
-								<span class="text-warning-500">Pending</span>
-								<span class="text-success-500">Active</span>
-								<span>Latency</span>
-							</span>
-						</div>
-						<ul class="space-y-1">
-							{#each busiest as g (g.name)}
-								<li>
-									<a href={queueHref(g)} class="flex items-center justify-between gap-3 rounded px-2 py-1.5 hover:bg-surface-100-900 text-sm">
-										<span class="font-mono truncate">{g.name}</span>
-										<span class="flex items-center gap-3 font-mono shrink-0">
-											<span class="text-warning-500" title="Pending">{formatNumber(g.pending)}</span>
-											<span class="text-success-500" title="Active">{formatNumber(g.active)}</span>
-											<span class="text-surface-500" title="Highest latency">{formatDuration(g.latency_msec)}</span>
-										</span>
-									</a>
-								</li>
-							{/each}
-						</ul>
+						<h3 class="text-xs font-medium text-fg-subtle mb-2">Needs attention</h3>
+						{#if attention.length === 0}
+							<p class="text-ui text-fg-muted">Every queue has a worker, none is paused and nothing failed.</p>
+						{:else}
+							<ul class="-mx-2">
+								{#each attention as a (a.group.name)}
+									<li>
+										<a
+											href={queueHref(a.group)}
+											class="flex flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-hover transition-colors"
+										>
+											<span class="font-mono text-ui text-fg truncate min-w-0">{a.group.name}</span>
+											<span class="flex flex-wrap gap-1">
+												{#each a.issues as issue (issue)}
+													<Badge tone="warning">{issue}</Badge>
+												{/each}
+											</span>
+										</a>
+									</li>
+								{/each}
+							</ul>
+						{/if}
 					</div>
-				{/if}
-			{/if}
-		</section>
 
-		<!-- Workers Overview -->
-		<section class="rq-card p-5 space-y-5">
-			<div class="flex items-center justify-between">
-				<h2 class="rq-section-title">Workers</h2>
-				<a href="{base}/workers" class="text-primary-500 hover:text-primary-600 text-sm font-medium">View all →</a>
+					{#if busiest.length > 0}
+						<div>
+							<div class="flex items-center justify-between gap-3 mb-2">
+								<h3 class="text-xs font-medium text-fg-subtle">Busiest</h3>
+								<span class="flex items-center gap-3 text-2xs text-fg-subtle">
+									<span class="w-14 text-right">Pending</span>
+									<span class="w-14 text-right">Active</span>
+									<span class="w-16 text-right">Latency</span>
+								</span>
+							</div>
+							<ul class="-mx-2">
+								{#each busiest as g (g.name)}
+									<li>
+										<a
+											href={queueHref(g)}
+											class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-hover transition-colors text-ui"
+										>
+											<span class="font-mono text-fg truncate min-w-0">{g.name}</span>
+											<span class="flex items-center gap-3 tabular-nums shrink-0">
+												<span class="w-14 text-right {g.pending > 0 ? 'text-warning-300' : 'text-fg-muted'}" title="Pending"
+													>{formatNumber(g.pending)}</span
+												>
+												<span class="w-14 text-right {g.active > 0 ? 'text-primary-300' : 'text-fg-muted'}" title="Active"
+													>{formatNumber(g.active)}</span
+												>
+												<span class="w-16 text-right text-fg-subtle" title="Highest latency">{formatDuration(g.latency_msec)}</span>
+											</span>
+										</a>
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				{/if}
 			</div>
+		</Panel>
+
+		<Panel title="Workers" class="min-w-0">
+			{#snippet actions()}
+				<a href="{base}/workers" class="text-ui font-medium text-primary-400 hover:text-primary-300">View all</a>
+			{/snippet}
 
 			{#if $workersStore.workers.length === 0}
-				<p class="text-sm text-surface-400">
+				<p class="text-ui text-fg-subtle">
 					{$workersStore.loading ? 'Loading…' : 'No workers connected. They appear here when they register.'}
 				</p>
 			{:else}
 				<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold">{$workerStats.total}</div>
-						<div class="text-xs text-surface-500">Total</div>
-					</div>
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold text-primary-500">{$workerStats.processing}</div>
-						<div class="text-xs text-surface-500">Processing</div>
-					</div>
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold text-success-500">{$workerStats.idle}</div>
-						<div class="text-xs text-surface-500">Idle</div>
-					</div>
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold text-secondary-500">{$workerStats.bootstrapping}</div>
-						<div class="text-xs text-surface-500">Bootstrapping</div>
-					</div>
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold {$workerStats.stale > 0 ? 'text-warning-500' : ''}">{$workerStats.stale}</div>
-						<div class="text-xs text-surface-500">Stale</div>
-					</div>
-					<div class="rq-metric-box text-center">
-						<div class="text-xl font-bold text-surface-500">{$workerStats.stopped}</div>
-						<div class="text-xs text-surface-500">Stopped</div>
-					</div>
+					<StatTile inset label="Total" value={$workerStats.total} />
+					<StatTile
+						inset
+						label="Processing"
+						value={$workerStats.processing}
+						tone={$workerStats.processing > 0 ? 'accent' : 'default'}
+					/>
+					<StatTile inset label="Idle" value={$workerStats.idle} />
+					<StatTile inset label="Bootstrapping" value={$workerStats.bootstrapping} />
+					<StatTile inset label="Stale" value={$workerStats.stale} tone={$workerStats.stale > 0 ? 'warning' : 'default'} />
+					<StatTile inset label="Stopped" value={$workerStats.stopped} tone="neutral" />
 				</div>
 			{/if}
-		</section>
+		</Panel>
 	</div>
 </div>

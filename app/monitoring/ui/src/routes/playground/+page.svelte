@@ -8,6 +8,9 @@
 	import { toaster } from '$lib/stores/toaster';
 	import { formatRelativeTime, truncate } from '$lib/utils/format';
 	import JsonViewer from '$lib/components/JsonViewer.svelte';
+	import { PageHeader, Panel, Field, Button, Badge, EmptyState } from '$lib/components/ui';
+	import { taskStatus } from '$lib/utils/status';
+	import { ChevronRight, Send, RotateCw, History } from '@lucide/svelte';
 
 	const HISTORY_KEY = 'runqy-playground-history';
 	const HISTORY_MAX = 20;
@@ -68,15 +71,6 @@
 	});
 
 	let canSend = $derived(!sending && !payloadError && queueName.length > 0 && count >= 1 && count <= 100);
-
-	const stateBadge: Record<string, string> = {
-		pending: 'preset-filled-warning-500',
-		active: 'preset-filled-primary-500',
-		scheduled: 'preset-outlined-surface-500',
-		retry: 'preset-filled-warning-500',
-		completed: 'preset-filled-success-500',
-		archived: 'preset-filled-error-500'
-	};
 
 	function isTerminal(state: string | undefined): boolean {
 		return state === 'completed' || state === 'archived';
@@ -253,19 +247,21 @@
 </svelte:head>
 
 <div class="rq-page space-y-6">
-	<div class="rq-page-header">
-		<h1 class="rq-page-title">Playground</h1>
-		<p class="rq-page-subtitle">Manually enqueue tasks for testing. Tasks land in pending, exactly like client-enqueued ones.</p>
-	</div>
+	<PageHeader
+		title="Playground"
+		subtitle="Manually enqueue tasks for testing. Tasks land in pending, exactly like client-enqueued ones."
+	/>
 
 	<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
 		<!-- Compose -->
-		<div class="rq-card p-6 lg:col-span-2 space-y-4">
-			<h2 class="text-lg font-semibold">New task</h2>
-
+		<Panel title="New task" class="lg:col-span-2" bodyClass="space-y-4">
 			<div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-				<div class="md:col-span-2">
-					<label class="text-xs text-surface-400" for="pg-queue">Queue</label>
+				<Field label="Queue" for="pg-queue" class="md:col-span-2">
+					{#snippet aside()}
+						<Button variant="ghost" size="sm" onclick={() => (useCustomQueue = !useCustomQueue)}>
+							{useCustomQueue ? 'Pick an existing queue' : 'Type a name manually'}
+						</Button>
+					{/snippet}
 					{#if useCustomQueue}
 						<input
 							id="pg-queue"
@@ -282,21 +278,12 @@
 							{/each}
 						</select>
 					{/if}
-					<button
-						type="button"
-						class="text-xs text-surface-500 hover:text-surface-300 mt-1"
-						onclick={() => (useCustomQueue = !useCustomQueue)}
-					>
-						{useCustomQueue ? '← Pick an existing queue' : 'Or type a queue name manually'}
-					</button>
-				</div>
+				</Field>
 				<div class="grid grid-cols-2 gap-4">
-					<div>
-						<label class="text-xs text-surface-400" for="pg-count">Count</label>
+					<Field label="Count" for="pg-count">
 						<input id="pg-count" type="number" min="1" max="100" class="input w-full" bind:value={count} />
-					</div>
-					<div>
-						<label class="text-xs text-surface-400" for="pg-timeout">Timeout (s)</label>
+					</Field>
+					<Field label="Timeout (s)" for="pg-timeout">
 						<input
 							id="pg-timeout"
 							type="number"
@@ -305,57 +292,53 @@
 							placeholder="default"
 							bind:value={timeoutSecs}
 						/>
-					</div>
+					</Field>
 				</div>
 			</div>
 
-			<div>
-				<div class="flex items-center justify-between">
-					<label class="text-xs text-surface-400" for="pg-payload">Payload (JSON)</label>
+			<Field
+				label="Payload (JSON)"
+				for="pg-payload"
+				error={payloadError ?? undefined}
+			>
+				{#snippet aside()}
 					{#if inputSchema && inputSchema.length > 0}
-						<button
-							type="button"
-							class="text-xs text-primary-500 hover:text-primary-400"
-							onclick={applySkeleton}
-						>
-							Reset to skeleton
-						</button>
+						<Button variant="ghost" size="sm" onclick={applySkeleton}>Reset to skeleton</Button>
 					{/if}
-				</div>
+				{/snippet}
 				<textarea
 					id="pg-payload"
 					rows="12"
-					class="textarea w-full p-4 rounded text-sm font-mono leading-relaxed scrollbar-thin"
+					class="textarea w-full p-4 text-sm font-mono leading-relaxed"
 					spellcheck="false"
 					bind:value={payloadText}
 				></textarea>
-				{#if payloadError}
-					<p class="text-xs text-error-500 mt-1">{payloadError}</p>
-				{:else if missingRequired.length > 0}
-					<p class="text-xs text-warning-500 mt-1">
+				{#if !payloadError && missingRequired.length > 0}
+					<p class="text-xs text-warning-300">
 						Missing required field{missingRequired.length > 1 ? 's' : ''}: {missingRequired.join(', ')}
 					</p>
 				{/if}
-			</div>
+			</Field>
 
 			{#if inputSchema && inputSchema.length > 0}
-				<details>
-					<summary class="cursor-pointer text-xs text-surface-400 select-none">
+				<details class="group">
+					<summary class="inline-flex cursor-pointer select-none items-center gap-1 text-xs font-medium text-fg-subtle hover:text-fg-muted">
+						<ChevronRight size={14} strokeWidth={1.75} class="transition-transform duration-150 group-open:rotate-90" />
 						Input schema ({inputSchema.length} fields)
 					</summary>
 					<div class="mt-2 space-y-1">
 						{#each inputSchema as field (field.name)}
-							<div class="flex items-baseline gap-2 text-xs">
-								<span class="font-mono text-surface-200">{field.name}</span>
-								<span class="text-surface-500">{field.type?.join(' | ')}</span>
+							<div class="flex flex-wrap items-baseline gap-x-2 text-xs">
+								<span class="font-mono text-fg">{field.name}</span>
+								<span class="text-fg-subtle">{field.type?.join(' | ')}</span>
 								{#if field.required !== false}
-									<span class="text-warning-500">required</span>
+									<span class="text-warning-300">required</span>
 								{/if}
 								{#if field.default !== undefined}
-									<span class="text-surface-500 font-mono">= {JSON.stringify(field.default)}</span>
+									<span class="text-fg-subtle font-mono">= {JSON.stringify(field.default)}</span>
 								{/if}
 								{#if field.description}
-									<span class="text-surface-500 truncate">— {field.description}</span>
+									<span class="text-fg-subtle truncate">— {field.description}</span>
 								{/if}
 							</div>
 						{/each}
@@ -363,83 +346,73 @@
 				</details>
 			{/if}
 
-			<div class="flex items-center justify-end gap-3">
+			<div class="flex flex-wrap items-center justify-end gap-3">
 				{#if count > 1}
-					<span class="text-xs text-surface-500">{count} copies will be enqueued</span>
+					<span class="text-xs text-fg-subtle">{count} copies will be enqueued</span>
 				{/if}
-				<button type="button" class="rq-btn-primary" disabled={!canSend} onclick={handleSend}>
-					{#if sending}
-						Sending…
-					{:else}
-						Send to queue
-					{/if}
-				</button>
+				<Button variant="primary" icon={Send} loading={sending} disabled={!canSend} onclick={handleSend}>
+					{sending ? 'Sending…' : 'Send to queue'}
+				</Button>
 			</div>
-		</div>
+		</Panel>
 
 		<!-- History -->
-		<div class="rq-card p-6 space-y-3">
-			<div class="flex items-center justify-between">
-				<h2 class="text-lg font-semibold">History</h2>
+		<Panel title="History" flush>
+			{#snippet actions()}
 				{#if history.length > 0}
-					<button type="button" class="text-xs text-surface-500 hover:text-error-500" onclick={clearHistory}>
-						Clear
-					</button>
+					<Button variant="ghost" size="sm" class="rq-btn-danger-hover" onclick={clearHistory}>Clear</Button>
 				{/if}
-			</div>
+			{/snippet}
 			{#if history.length === 0}
-				<p class="text-sm text-surface-500">Nothing sent yet.</p>
+				<EmptyState icon={History} title="Nothing sent yet" compact />
 			{:else}
-				<div class="space-y-2 max-h-[480px] overflow-y-auto scrollbar-thin">
+				<ul class="divide-y divide-line-subtle max-h-[480px] overflow-y-auto">
 					{#each history as entry, i (entry.sentAt + i)}
-						<div class="rq-metric-box space-y-1">
+						<li class="px-4 md:px-5 py-3 space-y-1">
 							<div class="flex items-center justify-between gap-2">
-								<span class="text-sm font-medium truncate">{entry.queue}</span>
-								<span class="text-xs text-surface-500 shrink-0">{formatRelativeTime(new Date(entry.sentAt))}</span>
+								<span class="text-ui font-mono text-fg truncate">{entry.queue}</span>
+								<span class="text-xs text-fg-subtle shrink-0">{formatRelativeTime(new Date(entry.sentAt))}</span>
 							</div>
-							<div class="text-xs font-mono text-surface-400 truncate">{truncate(entry.payload.replace(/\s+/g, ' '), 60)}</div>
+							<div class="text-xs font-mono text-fg-muted truncate">{truncate(entry.payload.replace(/\s+/g, ' '), 60)}</div>
 							<div class="flex items-center gap-2">
 								{#if entry.count > 1}
-									<span class="text-xs text-surface-500">x{entry.count}</span>
+									<span class="text-xs text-fg-subtle tabular-nums">x{entry.count}</span>
 								{/if}
 								{#if entry.timeout > 0}
-									<span class="text-xs text-surface-500">{entry.timeout}s timeout</span>
+									<span class="text-xs text-fg-subtle tabular-nums">{entry.timeout}s timeout</span>
 								{/if}
 								<div class="flex-1"></div>
-								<button type="button" class="text-xs text-primary-500 hover:text-primary-400" onclick={() => loadEntry(entry)}>
-									Load
-								</button>
-								<button type="button" class="text-xs text-primary-500 hover:text-primary-400" onclick={() => handleResend(entry)}>
-									Resend
-								</button>
+								<Button variant="ghost" size="sm" onclick={() => loadEntry(entry)}>Load</Button>
+								<Button variant="ghost" size="sm" icon={RotateCw} onclick={() => handleResend(entry)}>Resend</Button>
 							</div>
-						</div>
+						</li>
 					{/each}
-				</div>
+				</ul>
 			{/if}
-		</div>
+		</Panel>
 	</div>
 
 	<!-- Live tracking -->
 	{#if tracked.length > 0}
-		<div class="rq-card p-6 space-y-3">
-			<h2 class="text-lg font-semibold">Last batch</h2>
-			{#if extraSent > 0}
-				<p class="text-xs text-surface-500">Tracking the first {TRACK_MAX} tasks — {extraSent} more were enqueued.</p>
-			{/if}
-			<div class="space-y-2">
+		<Panel
+			title="Last batch"
+			description={extraSent > 0 ? `Tracking the first ${TRACK_MAX} tasks — ${extraSent} more were enqueued.` : undefined}
+			flush
+		>
+			<ul class="divide-y divide-line-subtle">
 				{#each tracked as t (t.id)}
-					<div class="rq-metric-box">
-						<div class="flex items-center gap-3">
-							<a href="{base}/queues/{encodeURIComponent(t.queue)}" class="text-sm font-mono text-primary-500 hover:text-primary-400">
+					<li class="px-4 md:px-5 py-3">
+						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
+							<a
+								href="{base}/queues/{encodeURIComponent(t.queue)}"
+								class="text-ui font-mono text-primary-400 hover:text-primary-300 break-all"
+							>
 								{t.id}
 							</a>
-							<span class="badge {stateBadge[t.task?.state ?? 'pending']} text-xs">
-								{t.task?.state ?? 'pending'}
-							</span>
-							<span class="text-xs text-surface-500">{t.queue}</span>
+							<Badge status={taskStatus(t.task?.state)} />
+							<span class="text-xs font-mono text-fg-subtle">{t.queue}</span>
 							{#if t.task?.state === 'retry' || t.task?.state === 'archived'}
-								<span class="text-xs text-error-500 truncate" title={t.task.error_message}>
+								<span class="text-xs text-error-300 truncate" title={t.task.error_message}>
 									{truncate(t.task.error_message ?? '', 80)}
 								</span>
 							{/if}
@@ -449,9 +422,9 @@
 								<JsonViewer data={t.task.result} collapsed={true} maxHeight="200px" />
 							</div>
 						{/if}
-					</div>
+					</li>
 				{/each}
-			</div>
-		</div>
+			</ul>
+		</Panel>
 	{/if}
 </div>

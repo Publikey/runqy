@@ -4,6 +4,7 @@
 	import { queuesStore } from '$lib/stores/queues';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { Panel, Shimmer } from '$lib/components/ui';
 
 	interface Props {
 		height?: number;
@@ -12,12 +13,17 @@
 
 	let { height = 250, maxQueues = 8 }: Props = $props();
 
-	// Colors for each state
+	// Colour per state: text-* classes, applied to bars through fill="currentColor";
+	// bg-* for legend and tooltip dots.
 	const stateColors = {
-		pending: 'rgb(234, 179, 8)',   // yellow-500
-		active: 'rgb(59, 130, 246)',   // blue-500
-		retry: 'rgb(249, 115, 22)'    // orange-500
+		pending: { text: 'text-warning-500', bg: 'bg-warning-500' },
+		active: { text: 'text-primary-500', bg: 'bg-primary-500' },
+		retry: { text: 'text-warning-300', bg: 'bg-warning-300' }
 	};
+
+	const states = ['pending', 'active', 'retry'] as const;
+
+	const tickLabelProps = { style: 'fill: var(--color-fg-subtle); stroke: none; font-size: 11px;' };
 
 	const stateLabels = {
 		pending: 'Pending',
@@ -95,100 +101,95 @@
 	}
 </script>
 
-<div class="rq-card p-5">
-	<div class="flex items-center justify-between mb-4">
-		<h3 class="text-lg font-semibold">Live Queue Sizes</h3>
+<Panel title="Live Queue Sizes" class="min-w-0" bodyClass="min-w-0">
+	{#snippet actions()}
 		{#if $queuesStore.queues.length > maxQueues}
-			<span class="text-sm text-surface-500">
-				Top {maxQueues} of {$queuesStore.queues.length} queues
-			</span>
+			<span class="text-xs text-fg-subtle">Top {maxQueues} of {$queuesStore.queues.length} queues</span>
 		{/if}
-	</div>
+	{/snippet}
 
 	{#if $queuesStore.loading && $queuesStore.queues.length === 0}
-		<div class="flex items-center justify-center" style="height: {height}px">
-			<div class="animate-pulse text-surface-500">Loading queues...</div>
+		<div style="height: {height}px">
+			<Shimmer class="h-full w-full" />
 		</div>
 	{:else if $queuesStore.queues.length === 0}
 		<div class="flex items-center justify-center" style="height: {height}px">
-			<p class="text-surface-500">No queues available</p>
+			<p class="text-ui text-fg-subtle">No queues available</p>
 		</div>
 	{:else if chartData.queues.length > 0}
-		<div style="height: {height}px">
+		<div class="w-full min-w-0 overflow-hidden" style="height: {height}px">
 			<Chart
 				data={chartData.flattened}
 				x={(d: ChartDataPoint) => d.queue}
 				xScale={scaleBand().padding(0.3)}
 				xDomain={chartData.queues}
+				x1={(d: ChartDataPoint) => d.state}
+				x1Scale={scaleBand().padding(0.12)}
+				x1Domain={[...states]}
+				x1Range={({ xScale }) => [0, xScale.bandwidth?.() ?? 0]}
 				y={(d: ChartDataPoint) => d.value}
 				yScale={scaleLinear()}
 				yDomain={[0, maxValue]}
 				yNice
-				padding={{ top: 20, right: 20, bottom: 54, left: 50 }}
+				padding={{ top: 12, right: 12, bottom: 40, left: 44 }}
 			>
 				<Svg>
-					<!-- Grid lines -->
-					<g class="grid-lines">
-						{#each [0.25, 0.5, 0.75, 1] as ratio}
-							<line
-								x1="0"
-								x2="100%"
-								y1="{(1 - ratio) * 100}%"
-								y2="{(1 - ratio) * 100}%"
-								stroke="currentColor"
-								stroke-opacity="0.1"
-							/>
-						{/each}
-					</g>
+					<Axis
+						placement="left"
+						format={formatNumber}
+						ticks={5}
+						tickLength={0}
+						grid={{ class: 'stroke-line-subtle' }}
+						{tickLabelProps}
+					/>
 
-					<!-- Grouped bars for each queue -->
-					{#each chartData.queues as queue}
-						{@const queueData = chartData.flattened.filter(d => d.queue === queue)}
-						{@const states = ['pending', 'active', 'retry']}
-						{#each states as state, i}
-							{@const d = queueData.find(x => x.state === state)}
+					<!-- One bar per queue and state, grouped within the queue band -->
+					{#each chartData.queues as queue (queue)}
+						{@const queueData = chartData.flattened.filter((d) => d.queue === queue)}
+						{#each states as state (state)}
+							{@const d = queueData.find((x) => x.state === state)}
 							{#if d && d.value > 0}
 								<Bars
 									data={[d]}
-									groupBy="state"
-									inset={2}
 									radius={2}
-									fill={stateColors[state as keyof typeof stateColors]}
+									fill="currentColor"
 									onclick={() => handleQueueClick(queue)}
-									class="cursor-pointer hover:opacity-80 transition-opacity"
+									class="{stateColors[state].text} cursor-pointer hover:opacity-80 transition-opacity"
 								/>
 							{/if}
 						{/each}
 					{/each}
 
-					<!-- Axes -->
-					<Axis placement="bottom" classes={{ tickLabel: '!fill-[#9ca3af] !stroke-[#111118]' }}>
+					<Axis placement="bottom" tickLength={0}>
 						<svelte:fragment slot="tickLabel" let:labelProps>
 							{@const label = truncateQueueName(labelProps.value)}
 							<text
 								x={labelProps.x}
 								y={labelProps.y}
-								dy={4}
+								dy={6}
 								text-anchor="middle"
 								dominant-baseline="hanging"
+								style="fill: var(--color-fg-subtle); font-size: 11px;"
 							>
-								<tspan x={labelProps.x} fill="#9ca3af" stroke="#111118" stroke-width="0.3" font-size="0.75rem">{label.line1}</tspan>
+								<tspan x={labelProps.x}>{label.line1}</tspan>
 								{#if label.line2}
-									<tspan x={labelProps.x} dy="1.1em" fill="#9ca3af" stroke="#111118" stroke-width="0.3" font-size="0.7rem">{label.line2}</tspan>
+									<tspan x={labelProps.x} dy="1.2em" style="fill: var(--color-fg-faint);">{label.line2}</tspan>
 								{/if}
 							</text>
 						</svelte:fragment>
 					</Axis>
-					<Axis placement="left" format={formatNumber} ticks={5} classes={{ tickLabel: '!fill-[#9ca3af] !stroke-[#111118]' }} />
 				</Svg>
 
-				<Tooltip.Root let:data>
+				<Tooltip.Root variant="none" let:data>
 					{#if data}
-						<div class="bg-surface-800 text-white p-2 rounded shadow-lg text-sm">
-							<div class="font-medium mb-1">{data.queue}</div>
-							<div class="flex justify-between gap-4">
-								<span>{stateLabels[data.state as keyof typeof stateLabels]}:</span>
-								<span>{formatNumber(data.value)}</span>
+						<div class="rounded-md border border-line bg-overlay px-2.5 py-2 text-xs text-fg" style="box-shadow: var(--shadow-overlay)">
+							<div class="font-mono font-medium mb-1">{data.queue}</div>
+							<div class="flex items-center justify-between gap-4">
+								<span class="flex items-center gap-1.5 text-fg-muted">
+									<span class="h-2 w-2 rounded-full {stateColors[data.state as keyof typeof stateColors]?.bg}"></span>
+									{stateLabels[data.state as keyof typeof stateLabels]}
+								</span>
+								<span class="tabular-nums">{formatNumber(data.value)}</span>
 							</div>
 						</div>
 					{/if}
@@ -196,16 +197,13 @@
 			</Chart>
 		</div>
 
-		<!-- Legend -->
-		<div class="flex items-center justify-center gap-4 mt-3 flex-wrap">
-			{#each Object.entries(stateColors) as [state, color]}
-				<div class="flex items-center gap-2">
-					<div class="w-3 h-3 rounded" style="background-color: {color};"></div>
-					<span class="text-sm text-surface-600 dark:text-surface-400">
-						{stateLabels[state as keyof typeof stateLabels]}
-					</span>
-				</div>
+		<div class="flex items-center justify-center gap-4 mt-3 flex-wrap text-xs text-fg-muted">
+			{#each states as state (state)}
+				<span class="flex items-center gap-1.5">
+					<span class="h-2 w-2 rounded-full {stateColors[state].bg}"></span>
+					{stateLabels[state]}
+				</span>
 			{/each}
 		</div>
 	{/if}
-</div>
+</Panel>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { VaultEntryView } from '$lib/api/types';
+	import { Callout, Button, Field, Modal, Toggle } from '$lib/components/ui';
 
 	interface Props {
 		open?: boolean;
@@ -41,19 +42,22 @@
 		onsave?.(key.trim(), value, isSecret);
 	}
 
+	// Set while the Cancel button closes the dialog, so onclose does not report it twice.
+	let cancelling = false;
+
 	function handleCancel() {
 		key = '';
 		value = '';
 		isSecret = true;
 		error = '';
+		cancelling = true;
 		oncancel?.();
 		open = false;
 	}
 
-	function handleBackdropClick(e: MouseEvent) {
-		if (e.target === e.currentTarget) {
-			handleCancel();
-		}
+	function handleClose() {
+		if (!cancelling) oncancel?.();
+		cancelling = false;
 	}
 
 	$effect(() => {
@@ -70,73 +74,57 @@
 	});
 </script>
 
-{#if open}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div
-		class="fixed inset-0 z-50 bg-surface-950/70 backdrop-blur-sm flex justify-center items-center p-4"
-		onclick={handleBackdropClick}
+<Modal bind:open title={mode === 'create' ? 'Add entry' : 'Edit entry'} onclose={handleClose}>
+	<form
+		id="entry-form"
+		class="space-y-4"
+		onsubmit={(e) => {
+			e.preventDefault();
+			handleSubmit();
+		}}
 	>
-		<div class="card preset-outlined-surface-200-800 bg-surface-100-900 ring-1 ring-surface-300 dark:ring-surface-600 w-full max-w-md p-6 shadow-xl">
-			<h2 class="h4 mb-4">
-				{mode === 'create' ? 'Add Entry' : 'Edit Entry'}
-			</h2>
+		<Field label="Key" for="entry-key">
+			<input
+				id="entry-key"
+				type="text"
+				bind:value={key}
+				placeholder="API_KEY"
+				class="input font-mono"
+				disabled={loading || mode === 'edit'}
+			/>
+		</Field>
 
-			<form onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-				<div class="space-y-4">
-					<label class="label">
-						<span class="label-text">Key</span>
-						<input
-							type="text"
-							bind:value={key}
-							placeholder="API_KEY"
-							class="input"
-							disabled={loading || mode === 'edit'}
-						/>
-					</label>
+		<Field
+			label="Value"
+			for="entry-value"
+			hint={mode === 'edit' ? 'Enter a new value to update this entry' : undefined}
+		>
+			<textarea
+				id="entry-value"
+				bind:value
+				placeholder={mode === 'edit' ? 'Enter new value...' : 'Enter value...'}
+				class="textarea font-mono text-ui"
+				rows={4}
+				disabled={loading}
+			></textarea>
+		</Field>
 
-					<label class="label">
-						<span class="label-text">Value</span>
-						<textarea
-							bind:value={value}
-							placeholder={mode === 'edit' ? 'Enter new value...' : 'Enter value...'}
-							class="textarea font-mono text-sm"
-							rows={4}
-							disabled={loading}
-						></textarea>
-						{#if mode === 'edit'}
-							<span class="label-text text-surface-500">Enter a new value to update this entry</span>
-						{/if}
-					</label>
+		<Toggle
+			bind:checked={isSecret}
+			label="Secret value"
+			description={isSecret ? 'Value will be masked in UI' : 'Value will be visible in UI'}
+			disabled={loading}
+		/>
 
-					<label class="flex items-center gap-3 cursor-pointer">
-						<input type="checkbox" bind:checked={isSecret} class="checkbox" disabled={loading} />
-						<span class="text-sm">Secret value</span>
-						<span class="text-xs text-surface-500">
-							{isSecret ? 'Value will be masked in UI' : 'Value will be visible in UI'}
-						</span>
-					</label>
+		{#if error}
+			<Callout>{error}</Callout>
+		{/if}
+	</form>
 
-					{#if error}
-						<aside class="alert preset-filled-error-500">
-							<p>{error}</p>
-						</aside>
-					{/if}
-				</div>
-
-				<footer class="flex justify-end gap-2 mt-6">
-					<button type="button" class="btn preset-tonal" onclick={handleCancel} disabled={loading}>
-						Cancel
-					</button>
-					<button type="submit" class="btn preset-filled" disabled={loading}>
-						{#if loading}
-							Saving...
-						{:else}
-							{mode === 'create' ? 'Add Entry' : 'Update Entry'}
-						{/if}
-					</button>
-				</footer>
-			</form>
-		</div>
-	</div>
-{/if}
+	{#snippet footer()}
+		<Button variant="secondary" onclick={handleCancel} disabled={loading}>Cancel</Button>
+		<Button variant="primary" type="submit" form="entry-form" {loading}>
+			{#if loading}Saving...{:else}{mode === 'create' ? 'Add entry' : 'Update entry'}{/if}
+		</Button>
+	{/snippet}
+</Modal>

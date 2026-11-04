@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { AlertRule, AlertRuleType } from '$lib/api/types';
+	import { Plus, X } from '@lucide/svelte';
+	import { Button, Field, IconButton } from '$lib/components/ui';
 
 	let {
 		rules = $bindable([]),
@@ -11,6 +13,9 @@
 		override?: boolean;
 		disabled?: boolean;
 	} = $props();
+
+	// Unique per instance: the editor can be on the page and in a modal at once.
+	const uid = $props.id();
 
 	const ruleTypes: { value: AlertRuleType; label: string; hint: string }[] = [
 		{ value: 'no_workers', label: 'No workers', hint: 'No live worker serves the queue' },
@@ -43,63 +48,56 @@
 
 <div class="space-y-3">
 	{#if rules.length === 0}
-		<p class="text-sm text-surface-500">
+		<p class="text-ui text-fg-subtle">
 			{override ? 'No overrides: this queue uses the global rules.' : 'No rules defined.'}
 		</p>
 	{:else}
 		{#each rules as rule, index (index)}
-			<div class="rq-metric-box space-y-2">
+			{@const id = `${uid}-rule-${index}`}
+			<div class="rounded-md border border-line-subtle bg-canvas p-3 space-y-2">
 				<div class="flex flex-wrap items-end gap-2">
-					<label class="label flex-1 min-w-[160px]">
-						<span class="label-text text-xs">Rule</span>
-						<select bind:value={rule.type} class="select" {disabled}>
+					<Field label="Rule" for="{id}-type" class="flex-1 min-w-40">
+						<select id="{id}-type" bind:value={rule.type} class="select" {disabled}>
 							{#each ruleTypes as t (t.value)}
 								<option value={t.value} disabled={t.value !== rule.type && usedTypes.has(t.value)}>{t.label}</option>
 							{/each}
 						</select>
-					</label>
+					</Field>
 					{#if !rule.disabled}
 						{#if rule.type === 'latency'}
-							<label class="label w-28">
-								<span class="label-text text-xs">Max latency</span>
-								<input type="text" bind:value={rule.max_latency} placeholder="10m" class="input" {disabled} />
-							</label>
+							<Field label="Max latency" for="{id}-latency" class="w-28">
+								<input id="{id}-latency" type="text" bind:value={rule.max_latency} placeholder="10m" class="input" {disabled} />
+							</Field>
 						{:else if rule.type === 'pending'}
-							<label class="label w-28">
-								<span class="label-text text-xs">Threshold</span>
-								<input type="number" bind:value={rule.threshold} min="1" class="input" {disabled} />
-							</label>
+							<Field label="Threshold" for="{id}-threshold" class="w-28">
+								<input id="{id}-threshold" type="number" bind:value={rule.threshold} min="1" class="input" {disabled} />
+							</Field>
 						{/if}
 						{#if rule.type !== 'autoscale_failure'}
-							<label class="label w-24">
-								<span class="label-text text-xs">For</span>
-								<input type="text" bind:value={rule.for} placeholder="0s" class="input" {disabled} />
-							</label>
+							<Field label="For" for="{id}-for" class="w-24">
+								<input id="{id}-for" type="text" bind:value={rule.for} placeholder="0s" class="input" {disabled} />
+							</Field>
 						{/if}
 					{/if}
-					<button
-						type="button"
-						class="btn-icon preset-tonal"
-						onclick={() => removeRule(index)}
+					<IconButton
+						icon={X}
+						label="Remove rule"
+						size="md"
+						danger
 						{disabled}
-						title="Remove rule"
-						aria-label="Remove rule"
-					>
-						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-						</svg>
-					</button>
+						onclick={() => removeRule(index)}
+					/>
 				</div>
 				<div class="flex flex-wrap items-center gap-x-4 gap-y-1">
-					<span class="text-xs text-surface-500">{hintFor(rule.type)}</span>
+					<span class="text-xs text-fg-subtle">{hintFor(rule.type)}</span>
 					{#if rule.type === 'no_workers' && !rule.disabled}
-						<label class="flex items-center gap-2 text-xs text-surface-400 cursor-pointer">
+						<label class="flex items-center gap-2 text-xs text-fg-muted cursor-pointer">
 							<input type="checkbox" bind:checked={rule.when_idle} class="checkbox" {disabled} />
 							Also when nothing is pending
 						</label>
 					{/if}
 					{#if override}
-						<label class="flex items-center gap-2 text-xs text-surface-400 cursor-pointer">
+						<label class="flex items-center gap-2 text-xs text-fg-muted cursor-pointer">
 							<input type="checkbox" bind:checked={rule.disabled} class="checkbox" {disabled} />
 							Turn this rule off for this queue
 						</label>
@@ -109,11 +107,6 @@
 		{/each}
 	{/if}
 	{#if nextType}
-		<button type="button" class="rq-btn-ghost" onclick={addRule} {disabled}>
-			<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-			</svg>
-			Add rule
-		</button>
+		<Button variant="secondary" size="sm" icon={Plus} onclick={addRule} {disabled}>Add rule</Button>
 	{/if}
 </div>
