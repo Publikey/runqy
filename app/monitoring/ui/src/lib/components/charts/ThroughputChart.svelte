@@ -81,6 +81,13 @@
 
 	let barMaxValue = $derived(Math.max(1, ...barChartData.map((d) => d.value)));
 
+	// Nothing processed or failed in the selected period: a short line instead of a flat chart.
+	let isEmpty = $derived(
+		$queueStatsStore.selectedTimeRange === 'today'
+			? barChartData.every((d) => !d.value)
+			: $dailyThroughputData.every((d) => !d.processed && !d.failed)
+	);
+
 	// Format functions
 	function formatDate(date: Date): string {
 		return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -141,6 +148,10 @@
 		<div class="flex items-center justify-center" style="height: {height}px">
 			<p class="text-ui text-error-300">{$queueStatsStore.error}</p>
 		</div>
+	{:else if isEmpty}
+		<div class="flex h-20 items-center justify-center">
+			<p class="text-ui text-fg-subtle">No tasks processed in this period</p>
+		</div>
 	{:else if $queueStatsStore.selectedTimeRange === 'today'}
 		<!-- Today: two bars -->
 		<div style="height: {height}px" class="flex items-end justify-center pb-2">
@@ -158,10 +169,6 @@
 					</div>
 				{/each}
 			</div>
-		</div>
-	{:else if $dailyThroughputData.length === 0}
-		<div class="flex items-center justify-center" style="height: {height}px">
-			<p class="text-ui text-fg-subtle">No historical data available</p>
 		</div>
 	{:else}
 		<!-- 7D/30D: stacked areas -->
@@ -196,7 +203,11 @@
 							y1={(d) => d[1]}
 							fill="currentColor"
 							fillOpacity={0.35}
-							line={{ stroke: 'currentColor', strokeWidth: 1.5, class: seriesClass[i] }}
+							line={/* Stacked: the failed band's top edge is processed + failed, so only
+							       the processed series gets a line (red there would read as failures). */
+							i === 0
+								? { stroke: 'currentColor', strokeWidth: 1.5, class: seriesClass[i] }
+								: { stroke: 'none' }}
 							class={seriesClass[i]}
 							curve={curveMonotoneX}
 							tweened
@@ -229,8 +240,10 @@
 		</div>
 	{/if}
 
-	<div class="flex items-center justify-center gap-4 mt-3 text-xs text-fg-muted">
-		<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-success-500"></span>Processed</span>
-		<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-error-500"></span>Failed</span>
-	</div>
+	{#if !isEmpty && !$queueStatsStore.error}
+		<div class="flex items-center justify-center gap-4 mt-3 text-xs text-fg-muted">
+			<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-success-500"></span>Processed</span>
+			<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-error-500"></span>Failed</span>
+		</div>
+	{/if}
 </Panel>

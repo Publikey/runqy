@@ -574,7 +574,7 @@
 				<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
 					<Field label="Subqueue Name" for="{uid}-subname">
 						<div class="flex items-center gap-2">
-							<span class="shrink-0 font-mono text-ui text-fg-subtle">{selectedParentQueue || '...'}.</span>
+							<span class="shrink-0 text-ui text-fg-subtle">{selectedParentQueue || '...'}.</span>
 							<input id="{uid}-subname" type="text" bind:value={subqueueName} placeholder="high" class="input min-w-0 flex-1" disabled={loading} />
 						</div>
 					</Field>
@@ -602,7 +602,7 @@
 					<div class="space-y-2">
 						{#each subQueues as sq, index (index)}
 							<div class="flex items-center gap-2">
-								<span class="shrink-0 font-mono text-ui text-fg-subtle">{queueName || '...'}.</span>
+								<span class="shrink-0 text-ui text-fg-subtle">{queueName || '...'}.</span>
 								<input type="text" bind:value={sq.name} placeholder="high" aria-label="Subqueue name" class="input min-w-0 flex-1" disabled={loading} />
 								<span class="shrink-0 text-xs text-fg-subtle">Priority</span>
 								<input type="number" bind:value={sq.priority} min="1" aria-label="Subqueue priority" class="input w-16 shrink-0" disabled={loading} />

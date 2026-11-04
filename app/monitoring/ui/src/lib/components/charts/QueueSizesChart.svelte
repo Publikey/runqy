@@ -16,9 +16,10 @@
 	// Colour per state: text-* classes, applied to bars through fill="currentColor";
 	// bg-* for legend and tooltip dots.
 	const stateColors = {
-		pending: { text: 'text-warning-500', bg: 'bg-warning-500' },
+		// Pending is normal work: neutral grey. Retry is the anomaly.
+		pending: { text: 'text-fg-muted', bg: 'bg-fg-muted' },
 		active: { text: 'text-primary-500', bg: 'bg-primary-500' },
-		retry: { text: 'text-warning-300', bg: 'bg-warning-300' }
+		retry: { text: 'text-warning-500', bg: 'bg-warning-500' }
 	};
 
 	const states = ['pending', 'active', 'retry'] as const;
@@ -71,6 +72,9 @@
 	});
 
 	// Calculate max value for y domain
+	// Every queue empty (nothing pending, active or retrying): no flat chart.
+	let allEmpty = $derived(chartData.flattened.every((d) => !d.value));
+
 	let maxValue = $derived(
 		Math.max(1, ...chartData.flattened.map(d => d.value))
 	);
@@ -113,8 +117,12 @@
 			<Shimmer class="h-full w-full" />
 		</div>
 	{:else if $queuesStore.queues.length === 0}
-		<div class="flex items-center justify-center" style="height: {height}px">
+		<div class="flex h-20 items-center justify-center">
 			<p class="text-ui text-fg-subtle">No queues available</p>
+		</div>
+	{:else if allEmpty}
+		<div class="flex h-20 items-center justify-center">
+			<p class="text-ui text-fg-subtle">All queues are empty</p>
 		</div>
 	{:else if chartData.queues.length > 0}
 		<div class="w-full min-w-0 overflow-hidden" style="height: {height}px">
@@ -183,7 +191,7 @@
 				<Tooltip.Root variant="none" let:data>
 					{#if data}
 						<div class="rounded-md border border-line bg-overlay px-2.5 py-2 text-xs text-fg" style="box-shadow: var(--shadow-overlay)">
-							<div class="font-mono font-medium mb-1">{data.queue}</div>
+							<div class="font-medium mb-1">{data.queue}</div>
 							<div class="flex items-center justify-between gap-4">
 								<span class="flex items-center gap-1.5 text-fg-muted">
 									<span class="h-2 w-2 rounded-full {stateColors[data.state as keyof typeof stateColors]?.bg}"></span>

@@ -1,0 +1,1 @@
+import"./CfDybbhu.js";import{b as p,r as s}from"./C4fEglLl.js";import{I as n}from"./B_lwdMaR.js";const o={name:"x",size:24,node:[["path",{d:"M18 6 6 18"}],["path",{d:"m6 6 12 12"}]]};o.node;function c(t,r){let e=s(r,["$$slots","$$events","$$legacy"]);n(t,p(()=>e,{get icon(){return o}}))}export{c as X};

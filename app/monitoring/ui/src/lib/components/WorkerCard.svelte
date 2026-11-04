@@ -29,7 +29,12 @@
 			</h3>
 			<p class="text-xs text-fg-subtle mt-0.5">Concurrency {worker.concurrency}</p>
 		</div>
-		<Badge status={workerStatus(status)} />
+		{#if status === 'idle'}
+			<!-- Idle is the healthy default: no badge. -->
+			<span class="text-xs text-fg-subtle shrink-0">Idle</span>
+		{:else}
+			<Badge status={workerStatus(status)} />
+		{/if}
 	</div>
 
 	{#if m}
@@ -58,11 +63,11 @@
 		<div class="flex flex-wrap gap-1">
 			{#each queues as queue (queue.name)}
 				<Badge tone="outline">
-					<span class="font-mono">{queue.name}</span>
+					<span>{queue.name}</span>
 					{#if queue.priority === 0 && status === 'bootstrapping'}
 						<Spinner size={11} class="ml-1" />
 					{:else}
-						<span class="text-fg-faint ml-1 tabular-nums">p:{queue.priority}</span>
+						<span class="text-fg-faint ml-1 font-mono tabular-nums">p:{queue.priority}</span>
 					{/if}
 				</Badge>
 			{/each}

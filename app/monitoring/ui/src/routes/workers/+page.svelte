@@ -6,7 +6,7 @@
 	import { workersStore, workerStats } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
 	import WorkerCard from '$lib/components/WorkerCard.svelte';
-	import { Callout, EmptyState, PageHeader, Segmented, Shimmer, StatTile } from '$lib/components/ui';
+	import { Callout, EmptyState, PageHeader, Segmented, Shimmer, StatStrip } from '$lib/components/ui';
 	import { workerState, type WorkerState } from '$lib/utils/status';
 
 	type Filter = 'all' | 'processing' | 'idle' | 'bootstrapping' | 'stale' | 'stopped';
@@ -61,18 +61,22 @@
 	<PageHeader
 		title="Workers"
 		subtitle="{filteredWorkers.length} worker{filteredWorkers.length !== 1 ? 's' : ''}"
-		updatedAt={$workersStore.lastUpdated}
 		onrefresh={loadData}
 	/>
 
 	<!-- Phones: the filter below already shows these counts. -->
-	<div class="hidden md:grid grid-cols-3 xl:grid-cols-6 gap-4">
-		<StatTile label="Total workers" value={$workerStats.total} />
-		<StatTile label="Processing" value={$workerStats.processing} tone={$workerStats.processing > 0 ? 'accent' : 'default'} />
-		<StatTile label="Idle" value={$workerStats.idle} />
-		<StatTile label="Bootstrapping" value={$workerStats.bootstrapping} />
-		<StatTile label="Stale" value={$workerStats.stale} tone={$workerStats.stale > 0 ? 'warning' : 'default'} />
-		<StatTile label="Stopped" value={$workerStats.stopped} tone="neutral" />
+	<div class="hidden md:block">
+		<StatStrip
+			card
+			items={[
+				{ label: 'Total workers', value: $workerStats.total },
+				{ label: 'Processing', value: $workerStats.processing },
+				{ label: 'Idle', value: $workerStats.idle },
+				{ label: 'Bootstrapping', value: $workerStats.bootstrapping },
+				{ label: 'Stale', value: $workerStats.stale, tone: 'warning' },
+				{ label: 'Stopped', value: $workerStats.stopped }
+			]}
+		/>
 	</div>
 
 	<div class="max-w-full min-w-0">

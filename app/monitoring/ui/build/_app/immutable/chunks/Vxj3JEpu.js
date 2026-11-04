@@ -1,0 +1,1 @@
+import"./CfDybbhu.js";import{b as s,r as p}from"./C4fEglLl.js";import{I as a}from"./B_lwdMaR.js";const e={name:"pause",size:24,node:[["rect",{x:"14",y:"3",width:"5",height:"18",rx:"1"}],["rect",{x:"5",y:"3",width:"5",height:"18",rx:"1"}]]};e.node;function h(t,r){let o=p(r,["$$slots","$$events","$$legacy"]);a(t,s(()=>o,{get icon(){return e}}))}export{h as P};

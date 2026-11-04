@@ -157,7 +157,6 @@
 		title={workerId}
 		mono
 		breadcrumbs={[{ label: 'Workers', href: '/workers' }, { label: workerId }]}
-		updatedAt={$workersStore.lastUpdated}
 		onrefresh={() => workersStore.fetch()}
 	>
 		{#snippet titleExtra()}
@@ -182,8 +181,8 @@
 					<div class="flex flex-wrap gap-1">
 						{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
 							<Badge tone="outline">
-								<span class="font-mono">{queue.name}</span>
-								<span class="text-fg-faint ml-1 tabular-nums">p:{queue.priority}</span>
+								<span>{queue.name}</span>
+								<span class="text-fg-faint ml-1 font-mono tabular-nums">p:{queue.priority}</span>
 							</Badge>
 						{/each}
 					</div>
@@ -193,18 +192,19 @@
 
 		{#if m}
 			<Panel title="Resources">
-				<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-					<div class="rounded-md border border-line-subtle bg-raised p-3 space-y-3">
+				<!-- Figures sit directly in the panel (no box-in-a-box). -->
+				<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-x-8 gap-y-5">
+					<div class="min-w-0 space-y-2">
 						<div>
-							<div class="text-ui text-fg-muted">CPU</div>
-							<div class="mt-1 text-xl font-semibold tracking-tight tabular-nums text-fg">{m.cpu_percent.toFixed(1)}%</div>
+							<div class="text-xs text-fg-subtle">CPU</div>
+							<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">{m.cpu_percent.toFixed(1)}%</div>
 						</div>
 						<ProgressBar value={m.cpu_percent} />
 					</div>
-					<div class="rounded-md border border-line-subtle bg-raised p-3 space-y-3">
+					<div class="min-w-0 space-y-2">
 						<div>
-							<div class="text-ui text-fg-muted">Memory</div>
-							<div class="mt-1 text-xl font-semibold tracking-tight tabular-nums text-fg">
+							<div class="text-xs text-fg-subtle">Memory</div>
+							<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">
 								{formatBytes(m.memory_used_bytes)}
 								<span class="text-ui font-normal text-fg-subtle">/ {formatBytes(m.memory_total_bytes)}</span>
 							</div>
@@ -214,10 +214,10 @@
 					{#if m.gpus && m.gpus.length > 0}
 						{#each m.gpus as gpu (gpu.index)}
 							{@const gpuMemPercent = gpu.memory_total_mb > 0 ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100 : 0}
-							<div class="rounded-md border border-line-subtle bg-raised p-3 space-y-3 min-w-0">
+							<div class="min-w-0 space-y-2">
 								<div class="min-w-0">
-									<div class="text-ui text-fg-muted truncate" title={gpu.name}>GPU {gpu.index} · {gpu.name}</div>
-									<div class="mt-1 text-xl font-semibold tracking-tight tabular-nums text-fg">
+									<div class="text-xs text-fg-subtle truncate" title={gpu.name}>GPU {gpu.index} · {gpu.name}</div>
+									<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">
 										{gpu.utilization_percent.toFixed(0)}%
 									</div>
 								</div>
@@ -322,14 +322,14 @@
 			{/snippet}
 			<div
 				bind:this={logContainer}
-				class="h-96 overflow-y-auto bg-canvas rounded-b-lg px-4 py-3 font-mono text-xs text-fg"
+				class="min-h-[120px] max-h-[60vh] overflow-y-auto bg-canvas rounded-b-lg px-4 py-3 font-mono text-xs text-fg"
 			>
 				{#if logsLoading}
 					<Shimmer lines={4} />
 				{:else if logLines.length === 0}
-					<div class="text-fg-subtle">
-						No logs available. Logs appear when the worker process outputs to stderr or non-JSON stdout.
-					</div>
+					<p class="font-sans text-ui text-fg-subtle">
+						No logs yet. They appear when the task process writes to stderr or non-JSON stdout.
+					</p>
 				{:else}
 					{#each logLines as line (line.seq || line.ts)}
 						<div class="flex gap-2 py-px hover:bg-hover">

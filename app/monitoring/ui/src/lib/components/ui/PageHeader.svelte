@@ -55,7 +55,8 @@
 		</nav>
 	{/if}
 	<div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
-		<div class="min-w-0 flex-1">
+		<!-- Basis 12rem: the actions wrap below the title before the title gets squeezed. -->
+		<div class="min-w-0 flex-[1_1_12rem]">
 			<div class="flex flex-wrap items-center gap-x-3 gap-y-1">
 				<h1 class="rq-page-title truncate {mono ? 'font-mono' : ''}">{title}</h1>
 				{@render titleExtra?.()}
@@ -65,7 +66,7 @@
 			{/if}
 		</div>
 		{#if actions}
-			<div class="flex flex-wrap items-center gap-2 shrink-0">
+			<div class="flex flex-wrap items-center gap-2 max-w-full">
 				{@render actions()}
 			</div>
 		{/if}

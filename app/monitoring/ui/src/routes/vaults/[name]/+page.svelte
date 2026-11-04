@@ -130,7 +130,6 @@
 <div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title={vaultName}
-		mono
 		subtitle={vault?.description || undefined}
 		breadcrumbs={[{ label: 'Vaults', href: '/vaults' }, { label: vaultName }]}
 		onrefresh={loadData}
@@ -194,9 +193,9 @@
 								</td>
 								<td>
 									{#if entry.is_secret}
-										<Badge tone="warning">Secret</Badge>
+										<Badge tone="neutral">Secret</Badge>
 									{:else}
-										<Badge tone="outline">Plain</Badge>
+										<span class="text-ui text-fg-subtle">Plain</span>
 									{/if}
 								</td>
 								<td class="text-fg-subtle whitespace-nowrap">{formatDate(entry.updated_at)}</td>

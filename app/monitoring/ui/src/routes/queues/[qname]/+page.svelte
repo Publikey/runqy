@@ -29,11 +29,11 @@
 	import { parseQueueName } from '$lib/utils/queueGrouping';
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
-	import { Callout, PageHeader, Panel, Button, Badge, KeyValue, Tabs } from '$lib/components/ui';
-	import { queueStatus, workerState, workerStatus, instanceStatus } from '$lib/utils/status';
+	import { Callout, PageHeader, Panel, Button, Badge, KeyValue, Tabs, MoreLink } from '$lib/components/ui';
+	import { queueStatus, workerState, workerStatus, instanceStatus, countClass } from '$lib/utils/status';
 	import { autoscaleStore } from '$lib/stores/autoscale';
 	import { describeInstance, describeTrigger, formatUntil, isActiveInstance } from '$lib/utils/autoscale';
-	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert, ArrowRight } from '@lucide/svelte';
+	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert } from '@lucide/svelte';
 
 	let qname = $derived(decodeURIComponent($page.params.qname ?? ''));
 
@@ -161,6 +161,7 @@
 					priority: entry.priority,
 					running,
 					held: (w.held ?? []).includes(parent),
+					state: workerState(w, $workersStore.servers),
 					status: workerStatus(workerState(w, $workersStore.servers))
 				};
 			})
@@ -371,7 +372,6 @@
 <div class="rq-page space-y-4 md:space-y-6">
 	<PageHeader
 		title={qname}
-		mono
 		breadcrumbs={[{ label: 'Queues', href: '/queues' }, { label: qname }]}
 		subtitle={headerMeta}
 		onrefresh={loadData}
@@ -410,13 +410,17 @@
 						>
 							<span class="font-mono text-ui text-fg truncate min-w-0 flex-1 basis-40">{qw.worker.worker_id}</span>
 							<span class="flex flex-wrap items-center gap-2">
-								<Badge status={qw.status} />
+								{#if qw.state === 'idle'}
+									<span class="text-xs text-fg-subtle">{qw.status.label}</span>
+								{:else}
+									<Badge status={qw.status} />
+								{/if}
 								{#if qw.held}<Badge tone="warning" title="Not taking new tasks from this queue (drain or code update)">Held</Badge>{/if}
 							</span>
 							<span class="text-xs text-fg-subtle tabular-nums" title="Tasks of this queue running on the worker / worker concurrency">
-								<span class={qw.running > 0 ? 'text-primary-300' : 'text-fg-muted'}>{qw.running}</span>/{qw.worker.concurrency} running
+								<span class={countClass(qw.running)}>{qw.running}</span>/{qw.worker.concurrency} running
 							</span>
-							<span class="text-xs text-fg-subtle tabular-nums">p:{qw.priority}</span>
+							<span class="font-mono text-xs text-fg-subtle tabular-nums">p:{qw.priority}</span>
 							<span class="text-xs text-fg-subtle">Heartbeat {formatRelativeTime(new Date(qw.worker.last_beat * 1000))}</span>
 						</a>
 					</li>
@@ -431,13 +435,13 @@
 		<Panel title="Autoscaling" flush>
 			{#snippet titleExtra()}
 				{#if asc.enabled}
-					<Badge tone="success" dot>Enabled</Badge>
+					<span class="text-xs text-fg-subtle">Enabled</span>
 				{:else}
 					<Badge tone="outline">Disabled</Badge>
 				{/if}
 			{/snippet}
 			{#snippet actions()}
-				<Button variant="ghost" size="sm" icon={ArrowRight} href="{base}/autoscaling">Autoscaling</Button>
+				<MoreLink href="/autoscaling" label="Autoscaling" />
 			{/snippet}
 			<ul class="divide-y divide-line-subtle">
 				{#each autoscalePauses as p (p.kind)}
@@ -490,7 +494,7 @@
 					{@const d = cfg.deployment}
 					{#snippet redisValue()}
 						{#if d.redis_storage}
-							<Badge tone="success">Enabled</Badge>
+							<span class="text-fg">Enabled</span>
 						{:else}
 							<span class="text-fg-subtle">Disabled</span>
 						{/if}
@@ -663,7 +667,7 @@
 {/snippet}
 
 	{#snippet provider(asc: AutoscaleConfig)}
-		<span class="font-mono text-fg">{asc.provider || '—'}</span>
+		<span class="font-medium text-fg">{asc.provider || '—'}</span>
 		{#if !$autoscaleStore.featureDisabled}
 			{#if !autoscaleProvider}
 				<Badge tone="danger" title="No provider with this name is registered">unknown provider</Badge>

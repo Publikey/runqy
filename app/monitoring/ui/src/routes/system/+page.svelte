@@ -3,8 +3,8 @@
 	import type { RedisInfo, DatabaseInfo, SystemEnvInfo } from '$lib/api/types';
 	import { getRedisInfo, getDatabaseInfo, getSystemEnv } from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
-	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { Callout, Badge, Button, KeyValue, PageHeader, Panel, Shimmer, StatTile } from '$lib/components/ui';
+	import { ChevronDown, ChevronUp, Search } from '@lucide/svelte';
+	import { Callout, Badge, Button, KeyValue, PageHeader, Panel, Shimmer, StatStrip } from '$lib/components/ui';
 	import type { KV } from '$lib/components/ui/KeyValue.svelte';
 
 	let redisInfo = $state<RedisInfo | null>(null);
@@ -48,20 +48,27 @@
 		loading = false;
 	}
 
-	let envText = $derived(
-		envVars ? envVars.vars.map((v) => `${v.name}=${v.value}`).join('\n') : ''
-	);
+	let envFilter = $state('');
+	let filteredEnv = $derived.by(() => {
+		const q = envFilter.trim().toLowerCase();
+		const vars = envVars?.vars ?? [];
+		return q ? vars.filter((v) => v.name.toLowerCase().includes(q)) : vars;
+	});
+
+	// Unset and masked values carry nothing worth reading: dimmed.
+	function isDimValue(value: string): boolean {
+		return !value || value === '(not set)' || value.startsWith('•');
+	}
 
 	let dbItems = $derived.by((): KV[] => {
 		if (!dbInfo) return [];
-		const items: KV[] = [{ label: 'Type', value: dbInfo.type, mono: true }];
+		const items: KV[] = [{ label: 'Type', value: dbInfo.type }];
 		if (dbInfo.host) items.push({ label: 'Host', value: dbInfo.host, mono: true });
 		if (dbInfo.database) items.push({ label: 'Database', value: dbInfo.database, mono: true });
 		if (dbInfo.stats) {
 			items.push({
 				label: 'Connections',
-				value: `${dbInfo.stats.open_connections} open (${dbInfo.stats.in_use} in use, ${dbInfo.stats.idle} idle)`,
-				mono: true
+				value: `${dbInfo.stats.open_connections} open (${dbInfo.stats.in_use} in use, ${dbInfo.stats.idle} idle)`
 			});
 		}
 		return items;
@@ -92,7 +99,7 @@
 		<Panel title="Redis" class="min-w-0">
 			{#snippet titleExtra()}
 				{#if redisInfo}
-					<Badge tone="success" dot>Connected</Badge>
+					<span class="text-xs text-fg-subtle">Connected</span>
 				{:else if loading}
 					<Badge tone="neutral" dot>Checking…</Badge>
 				{:else}
@@ -109,7 +116,7 @@
 						{ label: 'Address', value: redisInfo.address, mono: true },
 						{ label: 'Version', value: redisInfo.info.version || 'N/A', mono: true },
 						{ label: 'Uptime', value: `${redisInfo.info.uptime_in_days} days` },
-						{ label: 'Connected clients', value: redisInfo.info.connected_clients, mono: true }
+						{ label: 'Connected clients', value: redisInfo.info.connected_clients }
 					]}
 				/>
 			{:else}
@@ -120,7 +127,7 @@
 		<Panel title="Database" class="min-w-0">
 			{#snippet titleExtra()}
 				{#if dbInfo?.connected}
-					<Badge tone="success" dot>Connected</Badge>
+					<span class="text-xs text-fg-subtle">Connected</span>
 				{:else if loading}
 					<Badge tone="neutral" dot>Checking…</Badge>
 				{:else if dbInfo}
@@ -142,28 +149,32 @@
 
 	{#if redisInfo}
 		<Panel title="Redis memory">
-			<div class="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3">
-				<StatTile inset label="Used memory" value={redisInfo.info.used_memory_human} />
-				<StatTile inset label="Peak memory" value={redisInfo.info.used_memory_peak_human} />
-				<StatTile inset label="Clients" value={redisInfo.info.connected_clients} />
-				<StatTile inset label="Uptime (days)" value={redisInfo.info.uptime_in_days} />
-			</div>
+			<StatStrip
+				mobileColumns={2}
+				items={[
+					{ label: 'Used memory', value: redisInfo.info.used_memory_human },
+					{ label: 'Peak memory', value: redisInfo.info.used_memory_peak_human },
+					{ label: 'Clients', value: redisInfo.info.connected_clients },
+					{ label: 'Uptime (days)', value: redisInfo.info.uptime_in_days }
+				]}
+			/>
 		</Panel>
 
 		{#if redisInfo.cluster}
 			<Panel title="Cluster">
-				<div class="grid grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3">
-					<StatTile
-						inset
-						label="State"
-						value={redisInfo.cluster.cluster_state}
-						tone={redisInfo.cluster.cluster_state === 'ok' ? 'success' : 'danger'}
-					/>
-					<StatTile inset label="Slots assigned" value={redisInfo.cluster.cluster_slots_assigned} />
-					<StatTile inset label="Slots OK" value={redisInfo.cluster.cluster_slots_ok} />
-					<StatTile inset label="Known nodes" value={redisInfo.cluster.cluster_known_nodes} />
-					<StatTile inset label="Cluster size" value={redisInfo.cluster.cluster_size} />
-				</div>
+				<StatStrip
+					items={[
+						{
+							label: 'State',
+							value: redisInfo.cluster.cluster_state,
+							tone: redisInfo.cluster.cluster_state === 'ok' ? 'default' : 'danger'
+						},
+						{ label: 'Slots assigned', value: redisInfo.cluster.cluster_slots_assigned },
+						{ label: 'Slots OK', value: redisInfo.cluster.cluster_slots_ok },
+						{ label: 'Known nodes', value: redisInfo.cluster.cluster_known_nodes },
+						{ label: 'Cluster size', value: redisInfo.cluster.cluster_size }
+					]}
+				/>
 			</Panel>
 		{/if}
 
@@ -189,12 +200,54 @@
 	<Panel
 		title="Environment variables"
 		description="Read-only view of the server's runqy configuration (effective values, defaults included). Secrets are masked."
+		flush
+		class="overflow-hidden"
 	>
+		{#snippet actions()}
+			{#if envVars}
+				<div class="relative w-full sm:w-64">
+					<Search
+						size={16}
+						strokeWidth={1.75}
+						class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+					/>
+					<input
+						type="text"
+						bind:value={envFilter}
+						placeholder="Filter variables..."
+						aria-label="Filter environment variables"
+						class="input pl-9 w-full"
+					/>
+				</div>
+			{/if}
+		{/snippet}
 		{#if envVars}
-			<pre
-				class="max-h-[32rem] bg-canvas border border-line-subtle rounded-md p-3 text-xs font-mono leading-relaxed text-fg-muted overflow-auto">{envText}</pre>
+			{#if filteredEnv.length === 0}
+				<p class="px-3.5 md:px-5 py-4 text-ui text-fg-subtle">No variable matches “{envFilter}”.</p>
+			{:else}
+				<div class="table-container max-h-[32rem] overflow-auto">
+					<table class="rq-table">
+						<thead>
+							<tr>
+								<th>Variable</th>
+								<th>Value</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each filteredEnv as v (v.name)}
+								<tr>
+									<td class="font-mono text-fg whitespace-nowrap">{v.name}</td>
+									<td class="font-mono break-all {isDimValue(v.value) ? 'text-fg-faint' : 'text-fg-muted'}"
+										>{v.value || '(empty)'}</td
+									>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
 		{:else}
-			<p class="text-ui text-fg-subtle">Environment information is not available.</p>
+			<p class="px-3.5 md:px-5 py-4 text-ui text-fg-subtle">Environment information is not available.</p>
 		{/if}
 	</Panel>
 </div>

@@ -194,7 +194,7 @@
 				{#if deliveryError}
 					<Badge tone="danger" dot>Delivery failing</Badge>
 				{:else if saved?.enabled}
-					<Badge tone="success" dot>Enabled</Badge>
+					<span class="text-xs text-fg-subtle">Enabled</span>
 				{:else}
 					<Badge tone="outline">Disabled</Badge>
 				{/if}
@@ -411,7 +411,7 @@
 							{#each overview.active as a (a.queue + a.rule)}
 								<tr>
 									<td><Badge status={alertStatus(a.firing ? 'firing' : 'pending')} /></td>
-									<td class="font-mono">
+									<td class="font-medium">
 										<a class="text-primary-400 hover:text-primary-300" href="{base}/queues/{encodeURIComponent(a.queue)}"
 											>{a.queue}</a
 										>
@@ -442,7 +442,7 @@
 									{formatRelativeTime(h.time)}
 								</td>
 								<td><Badge status={alertStatus(h.status)} /></td>
-								<td class="font-mono">{h.queue}</td>
+								<td>{h.queue}</td>
 								<td>{ruleLabels[h.rule] ?? h.rule}</td>
 								<td class="text-fg-muted">{h.message}</td>
 							</tr>

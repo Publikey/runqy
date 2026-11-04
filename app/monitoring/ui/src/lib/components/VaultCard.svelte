@@ -22,7 +22,7 @@
 	<div class="flex items-start justify-between gap-2">
 		<div class="flex items-center gap-2 min-w-0">
 			<KeyRound size={16} strokeWidth={1.75} class="shrink-0 text-fg-subtle" />
-			<h3 class="text-sm font-semibold text-fg font-mono truncate">{vault.name}</h3>
+			<h3 class="text-sm font-medium text-fg truncate">{vault.name}</h3>
 		</div>
 		<IconButton icon={Trash2} label="Delete vault" danger onclick={() => onDelete?.()} class="-mr-1 -mt-1" />
 	</div>

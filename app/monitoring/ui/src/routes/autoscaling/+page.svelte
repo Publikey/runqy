@@ -2,7 +2,6 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { base } from '$app/paths';
 	import {
-		ArrowRight,
 		ChevronDown,
 		ChevronRight,
 		Cloud,
@@ -51,11 +50,12 @@
 		EmptyState,
 		IconButton,
 		KeyValue,
+		MoreLink,
 		PageHeader,
 		Panel,
 		Segmented
 	} from '$lib/components/ui';
-	import { instanceStatus } from '$lib/utils/status';
+	import { instanceStatus, countClass } from '$lib/utils/status';
 	import { ACTIVE_INSTANCE_STATUSES, describeInstance, describeTrigger, formatUntil } from '$lib/utils/autoscale';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
@@ -110,6 +110,12 @@
 	let visibleInstances = $derived(
 		$autoscaleStore.instances.filter((i) => matchesFilter(i, instanceFilter))
 	);
+
+	// "as-dc50c028-1467-…" → "as-dc50c028"; the full id is in the title and the expanded row.
+	function shortInstanceId(id: string): string {
+		const m = /^(as-[0-9a-f]{8})-[0-9a-f-]{27}$/.exec(id);
+		return m ? m[1] : id;
+	}
 
 	function toggleExpanded(id: string) {
 		const next = new Set(expanded);
@@ -356,7 +362,6 @@
 	<PageHeader
 		title="Autoscaling"
 		subtitle="{counts.active} active instance{counts.active !== 1 ? 's' : ''}"
-		updatedAt={$autoscaleStore.lastUpdated}
 		onrefresh={loadData}
 	/>
 
@@ -407,11 +412,11 @@
 					<tbody>
 						{#each $autoscaleStore.providers as provider (provider.name)}
 							<tr>
-								<td class="font-mono font-medium text-fg">{provider.name}</td>
+								<td class="font-medium text-fg">{provider.name}</td>
 								<td>{provider.provider_type}</td>
 								<td>
 									{#if provider.enabled}
-										<Badge tone="success" dot>Enabled</Badge>
+										<span class="text-fg-subtle">Enabled</span>
 									{:else}
 										<Badge tone="outline">Disabled</Badge>
 									{/if}
@@ -439,7 +444,7 @@
 	<!-- Queue autoscale configs -->
 	<Panel title="Queues" flush>
 		{#snippet actions()}
-			<Button variant="ghost" size="sm" href="{base}/queues" icon={ArrowRight}>All queues</Button>
+			<MoreLink href="/queues" label="All queues" />
 		{/snippet}
 
 		{#if queueRows.length === 0}
@@ -469,7 +474,7 @@
 							{@const asc = row.autoscale}
 							{@const prov = providerFor(asc.provider)}
 							<tr>
-								<td class="font-mono font-medium">
+								<td class="font-medium">
 									<a
 										href="{base}/queues/{encodeURIComponent(row.configName)}"
 										class="text-primary-400 hover:text-primary-300">{row.parent}</a
@@ -477,7 +482,7 @@
 								</td>
 								<td>
 									{#if asc.enabled}
-										<Badge tone="success" dot>Enabled</Badge>
+										<span class="text-fg-subtle">Enabled</span>
 									{:else}
 										<Badge tone="outline">Disabled</Badge>
 									{/if}
@@ -492,7 +497,7 @@
 									{/each}
 								</td>
 								<td>
-									<div class="font-mono">{asc.provider || '-'}</div>
+									<div class="font-medium text-fg">{asc.provider || '-'}</div>
 									{#if !$autoscaleStore.featureDisabled}
 										{#if !prov}
 											<Badge tone="danger" class="mt-1" title="No provider with this name is registered">unknown provider</Badge>
@@ -510,7 +515,7 @@
 									{/if}
 								</td>
 								<td class="whitespace-nowrap">
-									<span class="font-semibold text-fg tabular-nums">{liveCount(row.parent)}</span>
+									<span class="font-semibold tabular-nums {countClass(liveCount(row.parent))}">{liveCount(row.parent)}</span>
 									<span class="text-fg-subtle">live · {asc.min_workers}–{asc.max_workers}</span>
 									{#if asc.boot_timeout}
 										<div class="text-xs text-fg-subtle">boot timeout {asc.boot_timeout}</div>
@@ -570,7 +575,7 @@
 				onchange={(v) => setFilter(v as InstanceFilter)}
 			/>
 			<span class="text-ui text-fg-subtle whitespace-nowrap">
-				Total cost <span class="font-medium text-fg tabular-nums">{formatCost($autoscaleStore.totalCost)}</span>
+				Total cost <span class="font-medium tabular-nums {countClass($autoscaleStore.totalCost ?? 0)}">{formatCost($autoscaleStore.totalCost)}</span>
 			</span>
 		{/snippet}
 
@@ -619,11 +624,11 @@
 										{:else}
 											<ChevronRight size={14} strokeWidth={1.75} class="text-fg-subtle" />
 										{/if}
-										{instance.instance_id}
+										<span title={instance.instance_id}>{shortInstanceId(instance.instance_id)}</span>
 									</span>
 								</td>
-								<td class="font-mono">{instance.queue}</td>
-								<td>
+								<td class="whitespace-nowrap">{instance.queue}</td>
+								<td class="whitespace-nowrap">
 									{instance.provider}
 									{#if instance.gpu}
 										<div class="text-xs text-fg-subtle">{instance.gpu}</div>
@@ -650,11 +655,11 @@
 									{#if instance.protected}
 										<Badge tone="warning">Protected</Badge>
 									{:else}
-										<span class="text-fg-subtle">No</span>
+										<span class="text-fg-faint">-</span>
 									{/if}
 								</td>
-								<td class="text-right tabular-nums font-mono whitespace-nowrap">
-									{formatCost(instance.cost_accumulated)}
+								<td class="text-right tabular-nums whitespace-nowrap">
+									<span class={countClass(instance.cost_accumulated ?? 0)}>{formatCost(instance.cost_accumulated)}</span>
 									<span class="text-xs text-fg-subtle">({formatCost(instance.price_per_hour)}/hr)</span>
 								</td>
 								<td class="text-fg-subtle whitespace-nowrap">{formatRelativeTime(instance.created_at)}</td>
@@ -696,6 +701,7 @@
 											<KeyValue
 												columns={3}
 												items={[
+													{ label: 'Instance ID', value: instance.instance_id, mono: true },
 													{
 														label: 'Provider instance',
 														value: instance.provider_instance_id || '- (no machine rented)',

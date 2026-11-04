@@ -5,7 +5,9 @@
 	import { queuesStore, totalStats } from '$lib/stores/queues';
 	import { workersStore, workerStats } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
-	import { Callout, Badge, PageHeader, Panel, StatTile } from '$lib/components/ui';
+	import { Callout, Badge, MoreLink, PageHeader, Panel, StatStrip } from '$lib/components/ui';
+	import { todayStats } from '$lib/stores/metrics';
+	import { countClass } from '$lib/utils/status';
 	import ThroughputChart from '$lib/components/charts/ThroughputChart.svelte';
 	import QueueSizesChart from '$lib/components/charts/QueueSizesChart.svelte';
 	import { formatDuration, formatNumber } from '$lib/utils/format';
@@ -30,6 +32,9 @@
 		const names = new Set(group.queues.map((q) => q.queue));
 		return $workersStore.workers.some((w) => workerQueueNames(w.queues).some((n) => names.has(n)));
 	}
+
+	// Oldest waiting task across all queues.
+	let maxLatency = $derived(Math.max(0, ...$queuesStore.queues.map((q) => q.latency_msec || 0)));
 
 	let pausedSubQueues = $derived($queuesStore.queues.filter((q) => q.paused).length);
 	let groupsWithoutWorkers = $derived(queueGroups.filter((g) => !hasWorkers(g)));
@@ -90,21 +95,18 @@
 </svelte:head>
 
 <div class="rq-page space-y-4 md:space-y-6">
-	<PageHeader
-		title="Dashboard"
-		subtitle={$queuesStore.lastUpdated ? undefined : 'Loading…'}
-		updatedAt={$queuesStore.lastUpdated}
-		onrefresh={loadData}
-	/>
+	<PageHeader title="Dashboard" subtitle={$queuesStore.lastUpdated ? undefined : 'Loading…'} onrefresh={loadData} />
 
-	<div class="grid grid-cols-3 xl:grid-cols-6 gap-2 md:gap-4">
-		<StatTile label="Queues" value={queueGroups.length} href="/queues" />
-		<StatTile label="Pending" value={$totalStats.totalPending} tone={$totalStats.totalPending > 0 ? 'warning' : 'default'} />
-		<StatTile label="Active" value={$totalStats.totalActive} tone={$totalStats.totalActive > 0 ? 'accent' : 'default'} />
-		<StatTile label="Processed" value={$totalStats.totalProcessed} />
-		<StatTile label="Failed" value={$totalStats.totalFailed} tone={$totalStats.totalFailed > 0 ? 'danger' : 'default'} />
-		<StatTile label="Workers" value={$workerStats.total} href="/workers" />
-	</div>
+	<StatStrip
+		card
+		items={[
+			{ label: 'Pending', value: $totalStats.totalPending },
+			{ label: 'Active', value: $totalStats.totalActive },
+			{ label: 'Processed today', value: $todayStats.processed },
+			{ label: 'Failed today', value: $todayStats.failed, tone: 'danger' },
+			{ label: 'Max latency', value: maxLatency > 0 ? formatDuration(maxLatency) : 0 }
+		]}
+	/>
 
 	<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
 		<ThroughputChart height={chartHeight} />
@@ -118,21 +120,19 @@
 	<div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
 		<Panel title="Queues" class="min-w-0">
 			{#snippet actions()}
-				<a href="{base}/queues" class="text-ui font-medium text-primary-400 hover:text-primary-300">View all</a>
+				<MoreLink href="/queues" label="View all" />
 			{/snippet}
 
 			<div class="space-y-6">
-				<div class="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
-					<StatTile inset label="Queues" value={queueGroups.length} />
-					<StatTile inset label="Sub-queues" value={$queuesStore.queues.length} />
-					<StatTile inset label="Paused" value={pausedSubQueues} tone={pausedSubQueues > 0 ? 'warning' : 'default'} />
-					<StatTile
-						inset
-						label="Without worker"
-						value={groupsWithoutWorkers.length}
-						tone={groupsWithoutWorkers.length > 0 ? 'warning' : 'default'}
-					/>
-				</div>
+				<StatStrip
+					mobileColumns={2}
+					items={[
+						{ label: 'Queues', value: queueGroups.length },
+						{ label: 'Sub-queues', value: $queuesStore.queues.length },
+						{ label: 'Paused', value: pausedSubQueues, tone: 'warning' },
+						{ label: 'Without worker', value: groupsWithoutWorkers.length, tone: 'warning' }
+					]}
+				/>
 
 				{#if $queuesStore.queues.length === 0}
 					<p class="text-ui text-fg-subtle">
@@ -151,10 +151,10 @@
 											href={queueHref(a.group)}
 											class="flex flex-wrap items-center justify-between gap-2 rounded-md px-2 py-1.5 hover:bg-hover transition-colors"
 										>
-											<span class="font-mono text-ui text-fg truncate min-w-0">{a.group.name}</span>
+											<span class="text-ui font-medium text-fg truncate min-w-0">{a.group.name}</span>
 											<span class="flex flex-wrap gap-1">
 												{#each a.issues as issue (issue)}
-													<Badge tone="warning">{issue}</Badge>
+													<Badge tone={issue.endsWith(' failed') ? 'danger' : 'warning'}>{issue}</Badge>
 												{/each}
 											</span>
 										</a>
@@ -181,12 +181,12 @@
 											href={queueHref(g)}
 											class="flex items-center justify-between gap-3 rounded-md px-2 py-1.5 hover:bg-hover transition-colors text-ui"
 										>
-											<span class="font-mono text-fg truncate min-w-0">{g.name}</span>
+											<span class="font-medium text-fg truncate min-w-0">{g.name}</span>
 											<span class="flex items-center gap-3 tabular-nums shrink-0">
-												<span class="w-14 text-right {g.pending > 0 ? 'text-warning-300' : 'text-fg-muted'}" title="Pending"
+												<span class="w-14 text-right {countClass(g.pending)}" title="Pending"
 													>{formatNumber(g.pending)}</span
 												>
-												<span class="w-14 text-right {g.active > 0 ? 'text-primary-300' : 'text-fg-muted'}" title="Active"
+												<span class="w-14 text-right {countClass(g.active)}" title="Active"
 													>{formatNumber(g.active)}</span
 												>
 												<span class="w-16 text-right text-fg-subtle" title="Highest latency">{formatDuration(g.latency_msec)}</span>
@@ -203,7 +203,7 @@
 
 		<Panel title="Workers" class="min-w-0">
 			{#snippet actions()}
-				<a href="{base}/workers" class="text-ui font-medium text-primary-400 hover:text-primary-300">View all</a>
+				<MoreLink href="/workers" label="View all" />
 			{/snippet}
 
 			{#if $workersStore.workers.length === 0}
@@ -211,19 +211,16 @@
 					{$workersStore.loading ? 'Loading…' : 'No workers connected. They appear here when they register.'}
 				</p>
 			{:else}
-				<div class="grid grid-cols-3 gap-2 md:gap-3">
-					<StatTile inset label="Total" value={$workerStats.total} />
-					<StatTile
-						inset
-						label="Processing"
-						value={$workerStats.processing}
-						tone={$workerStats.processing > 0 ? 'accent' : 'default'}
-					/>
-					<StatTile inset label="Idle" value={$workerStats.idle} />
-					<StatTile inset label="Bootstrapping" value={$workerStats.bootstrapping} />
-					<StatTile inset label="Stale" value={$workerStats.stale} tone={$workerStats.stale > 0 ? 'warning' : 'default'} />
-					<StatTile inset label="Stopped" value={$workerStats.stopped} tone="neutral" />
-				</div>
+				<StatStrip
+					items={[
+						{ label: 'Total', value: $workerStats.total },
+						{ label: 'Processing', value: $workerStats.processing },
+						{ label: 'Idle', value: $workerStats.idle },
+						{ label: 'Bootstrapping', value: $workerStats.bootstrapping },
+						{ label: 'Stale', value: $workerStats.stale, tone: 'warning' },
+						{ label: 'Stopped', value: $workerStats.stopped }
+					]}
+				/>
 			{/if}
 		</Panel>
 	</div>

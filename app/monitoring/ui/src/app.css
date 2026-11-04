@@ -525,6 +525,13 @@ select.select option {
 	min-width: 640px;
 }
 
+/* Tables that hide columns on mobile instead of scrolling (TaskTable). */
+@media (max-width: 767px) {
+	.table-container > table.rq-table-fluid {
+		min-width: 0;
+	}
+}
+
 .rq-table {
 	width: 100%;
 	border-collapse: collapse;

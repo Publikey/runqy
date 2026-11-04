@@ -13,7 +13,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import QueueConfigModal from '$lib/components/QueueConfigModal.svelte';
 	import { Callout, PageHeader, Panel, Button, IconButton, Badge, Segmented, EmptyState, Shimmer } from '$lib/components/ui';
-	import { queueStatus } from '$lib/utils/status';
+	import { queueStatus, countClass } from '$lib/utils/status';
 	import { Plus, Search, Pause, Play, Trash2, Settings2, Layers, TriangleAlert, ChevronRight } from '@lucide/svelte';
 	import type { Queue, Worker, QueueConfigDetail, DeploymentConfig } from '$lib/api/types';
 
@@ -366,11 +366,11 @@
 								<tr class="cursor-pointer" onclick={() => navigateToQueue(queue.queue)}>
 									<td>
 										<div class="pl-4 flex items-center gap-2">
-											<span class="font-mono text-fg">{subName(queue)}</span>
-											<span class="text-2xs text-fg-faint tabular-nums">p:{priorityOf(queue.queue)}</span>
+											<span class="font-medium text-fg">{subName(queue)}</span>
+											<span class="font-mono text-2xs text-fg-faint tabular-nums">p:{priorityOf(queue.queue)}</span>
 										</div>
 									</td>
-									<td><Badge status={queueStatus(queue.paused)} /></td>
+									<td>{#if queue.paused}<Badge status={queueStatus(true)} />{/if}</td>
 									<td>{@render workersBadge(getWorkersForQueue(queue.queue))}</td>
 									{@render statCells(queue.pending, queue.active, queue.retry, queue.completed, queue.failed ?? 0)}
 									<td class="text-right tabular-nums text-fg-muted">{formatDuration(queue.latency_msec ?? 0)}</td>
@@ -383,7 +383,13 @@
 								<tr class="text-fg font-medium">
 									<td><div class="pl-4 text-xs font-medium text-fg-subtle">Total</div></td>
 									<td>{@render groupStatus(group)}</td>
-									<td>{@render workersBadge(getWorkersForGroup(group))}</td>
+									<td>
+										{#if getWorkersForGroup(group).length > 0}
+											{@render workersBadge(getWorkersForGroup(group))}
+										{:else}
+											<span class="text-ui text-fg-faint">—</span>
+										{/if}
+									</td>
 									{@render statCells(group.pending, group.active, group.retry, group.completed, group.failed)}
 									<td class="text-right tabular-nums text-fg-muted" title="Highest sub-queue latency">{formatDuration(group.latency_msec)}</td>
 									<td></td>
@@ -415,7 +421,7 @@
 						/>
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2 min-w-0">
-								<span class="font-mono text-ui font-medium text-fg truncate">{group.name}</span>
+								<span class="text-ui font-medium text-fg truncate">{group.name}</span>
 								{#if multi}<span class="text-2xs text-fg-subtle tabular-nums shrink-0">{group.queues.length}</span>{/if}
 								{@render compactStatus(group.queues.filter((q) => q.paused).length, group.queues.length)}
 							</div>
@@ -428,8 +434,8 @@
 								<div class="flex items-center gap-2 pl-9 pr-2 py-2 border-b border-line-subtle last:border-b-0">
 									<button type="button" class="min-w-0 flex-1 text-left" onclick={() => navigateToQueue(queue.queue)}>
 										<div class="flex items-center gap-2 min-w-0">
-											<span class="font-mono text-ui text-fg truncate">{subName(queue)}</span>
-											<span class="text-2xs text-fg-faint tabular-nums shrink-0">p:{priorityOf(queue.queue)}</span>
+											<span class="text-ui font-medium text-fg truncate">{subName(queue)}</span>
+											<span class="font-mono text-2xs text-fg-faint tabular-nums shrink-0">p:{priorityOf(queue.queue)}</span>
 											{@render compactStatus(queue.paused ? 1 : 0, 1)}
 										</div>
 										{@render compactMeta(queue.pending, queue.active, queue.failed ?? 0, queue.latency_msec ?? 0, getWorkersForQueue(queue.queue).length)}
@@ -453,7 +459,7 @@
 {#snippet groupTitle(group: QueueGroup)}
 	{@const redis = queueConfigMap.get(group.queues[0]?.queue)?.deployment?.redis_storage}
 	<div class="flex flex-wrap items-center gap-2 min-w-0">
-		<span class="font-mono font-semibold text-fg truncate">{group.name}</span>
+		<span class="font-semibold text-fg truncate">{group.name}</span>
 		{#if group.queues.length > 1}
 			<Badge tone="outline">{group.queues.length} sub-queues</Badge>
 		{/if}
@@ -473,11 +479,9 @@
 
 {#snippet groupStatus(group: QueueGroup)}
 	{@const paused = group.queues.filter((q) => q.paused).length}
-	{#if paused === 0}
-		<Badge status={queueStatus(false)} />
-	{:else if paused === group.queues.length}
+	{#if paused > 0 && paused === group.queues.length}
 		<Badge status={queueStatus(true)} />
-	{:else}
+	{:else if paused > 0}
 		<Badge tone="warning">{paused}/{group.queues.length} paused</Badge>
 	{/if}
 {/snippet}
@@ -489,18 +493,18 @@
 			No worker
 		</Badge>
 	{:else}
-		<Badge tone="outline" title={workersTitle(ws)}>
+		<span class="text-ui text-fg-muted tabular-nums" title={workersTitle(ws)}>
 			{ws.length} worker{ws.length !== 1 ? 's' : ''}
-		</Badge>
+		</span>
 	{/if}
 {/snippet}
 
 {#snippet statCells(pending: number, active: number, retry: number, completed: number, failed: number)}
-	<td class="text-right tabular-nums {pending > 0 ? 'text-warning-300' : 'text-fg-muted'}">{formatNumber(pending)}</td>
-	<td class="text-right tabular-nums text-fg-muted">{formatNumber(active)}</td>
-	<td class="text-right tabular-nums text-fg-muted">{formatNumber(retry)}</td>
-	<td class="text-right tabular-nums text-fg-muted">{formatNumber(completed)}</td>
-	<td class="text-right tabular-nums {failed > 0 ? 'text-error-300' : 'text-fg-muted'}">{formatNumber(failed)}</td>
+	<td class="text-right tabular-nums {countClass(pending)}">{formatNumber(pending)}</td>
+	<td class="text-right tabular-nums {countClass(active)}">{formatNumber(active)}</td>
+	<td class="text-right tabular-nums {countClass(retry)}">{formatNumber(retry)}</td>
+	<td class="text-right tabular-nums {countClass(completed)}">{formatNumber(completed)}</td>
+	<td class="text-right tabular-nums {countClass(failed, 'danger')}">{formatNumber(failed)}</td>
 {/snippet}
 
 {#snippet compactStatus(paused: number, total: number)}
@@ -513,8 +517,8 @@
 
 {#snippet compactMeta(pending: number, active: number, failed: number, latency: number, workers: number)}
 	<div class="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs tabular-nums text-fg-subtle">
-		<span><span class={pending > 0 ? 'text-warning-300' : 'text-fg-muted'}>{formatNumber(pending)}</span> pending</span>
-		<span><span class="text-fg-muted">{formatNumber(active)}</span> active</span>
+		<span><span class={countClass(pending)}>{formatNumber(pending)}</span> pending</span>
+		<span><span class={countClass(active)}>{formatNumber(active)}</span> active</span>
 		{#if failed > 0}<span><span class="text-error-300">{formatNumber(failed)}</span> failed</span>{/if}
 		<span>{formatDuration(latency)}</span>
 		{#if workers === 0}
