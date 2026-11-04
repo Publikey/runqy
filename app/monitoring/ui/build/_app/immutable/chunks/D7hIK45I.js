@@ -1,1 +1,0 @@
-import{af as u,k as g,ag as o,l as t,D as _,F as l,ah as i,I as d,C as p,J as m}from"./ByoIXhom.js";function E(n,r){let a=null,f=t;var s;if(t){a=p;for(var e=m(document.head);e!==null&&(e.nodeType!==_||e.data!==n);)e=l(e);if(e===null)i(!1);else{var y=l(e);e.remove(),d(y)}}t||(s=document.head.appendChild(u()));try{g(()=>r(s),o)}finally{f&&(i(!0),d(a))}}export{E as h};
