@@ -318,15 +318,35 @@ export interface AutoscaleInstance {
 	price_per_hour: number; // price actually rented when the provider reports it
 	cost_accumulated: number;
 	gpu?: string; // GPU model actually rented
+	provider_instance_id?: string; // provider's own id (empty when renting failed)
+	reason?: string; // why the instance was torn down
+	error?: string; // provider error when the machine could not be rented
 	created_at: string;
 	last_job_at?: string;
 	updated_at: string;
+}
+
+export interface AutoscalePause {
+	queue: string; // parent queue
+	kind: 'provision' | 'boot' | 'host' | string;
+	failures: number;
+	until: string;
+	cause: string;
 }
 
 export interface AutoscaleStatus {
 	instances: AutoscaleInstance[];
 	count: number;
 	total_cost: number;
+	pauses?: AutoscalePause[]; // provisioning on hold after repeated failures
+}
+
+export interface AutoscaleInstanceLogs {
+	instance_id: string;
+	logs: string;
+	source: 'live' | 'saved';
+	fetched_at?: string;
+	error?: string; // why the capture failed (saved logs)
 }
 
 export interface AutoscaleProvider {
@@ -461,4 +481,31 @@ export interface AlertsOverview {
 		last_error?: string;
 		last_error_at?: string;
 	};
+}
+
+// ---- Cross-queue tasks (Tasks page, live task page) ----
+
+/** Task states listable across queues (GET /api/tasks). */
+export type ListableTaskState = 'active' | 'pending' | 'scheduled' | 'retry' | 'archived' | 'completed';
+
+/** A task as returned by GET /api/tasks and GET /api/tasks/{id}: the per-queue task detail plus its queue. */
+export interface TaskDetail extends Task {
+	/** RFC3339; set while pending when the task hash records it. */
+	pending_since?: string;
+	/** Seconds the task has left to be retained (completed only, from the retention). */
+	ttl_seconds?: number;
+	/** Remaining lifetime of the task hash in Redis, seconds (absent: no expiry). */
+	key_ttl_seconds?: number;
+	/** Lifecycle limits stamped on the task at enqueue, seconds. */
+	limits?: Partial<Record<'ttl_completed' | 'ttl_archived' | 'pending_timeout' | 'active_timeout', number>>;
+	/** Only when the task is active and its worker reports it (asynq-native servers). */
+	worker?: { id: string; started: string; deadline?: string };
+}
+
+export interface AllTasksResponse {
+	tasks: TaskDetail[];
+	/** Number of tasks in this state over the queues (from queue stats). */
+	total: number;
+	page: number;
+	size: number;
 }

@@ -1,17 +1,25 @@
 <script lang="ts">
+	import { ChevronRight, Copy, Check } from '@lucide/svelte';
 	import { tryParseJson } from '$lib/utils/format';
+	import { Button, IconButton } from '$lib/components/ui';
 
-	export let data: string | unknown;
-	export let collapsed: boolean = true;
-	export let maxHeight: string = '400px';
+	interface Props {
+		data: string | unknown;
+		collapsed?: boolean;
+		maxHeight?: string;
+	}
 
-	let isCollapsed = collapsed;
-	let copySuccess = false;
+	let { data, collapsed = true, maxHeight = '400px' }: Props = $props();
 
-	$: parsed = typeof data === 'string' ? tryParseJson(data) : data;
-	$: displayData = parsed !== null ? parsed : data;
-	$: isValidJson = parsed !== null;
-	$: formattedJson = isValidJson ? JSON.stringify(displayData, null, 2) : String(data);
+	// Initial state only, like before: the viewer then toggles on its own.
+	// svelte-ignore state_referenced_locally
+	let isCollapsed = $state(collapsed);
+	let copySuccess = $state(false);
+
+	let parsed = $derived(typeof data === 'string' ? tryParseJson(data) : data);
+	let displayData = $derived(parsed !== null ? parsed : data);
+	let isValidJson = $derived(parsed !== null);
+	let formattedJson = $derived(isValidJson ? JSON.stringify(displayData, null, 2) : String(data));
 
 	function toggleCollapse() {
 		isCollapsed = !isCollapsed;
@@ -27,8 +35,12 @@
 		}
 	}
 
+	function escapeHtml(s: string): string {
+		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
 	function syntaxHighlight(json: string): string {
-		return json.replace(
+		return escapeHtml(json).replace(
 			/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
 			(match) => {
 				let cls = 'json-number';
@@ -49,58 +61,35 @@
 	}
 </script>
 
-<div class="json-viewer rounded-lg bg-surface-100 dark:bg-surface-800 border border-surface-300 dark:border-surface-600">
-	<div class="flex items-center justify-between px-3 py-2 border-b border-surface-300 dark:border-surface-600">
-		<button
-			type="button"
-			class="flex items-center gap-2 text-sm text-surface-600 dark:text-surface-400 hover:text-surface-900 dark:hover:text-surface-100"
-			on:click={toggleCollapse}
-		>
-			<svg
-				class="w-4 h-4 transition-transform {isCollapsed ? '' : 'rotate-90'}"
-				fill="none"
-				stroke="currentColor"
-				viewBox="0 0 24 24"
-			>
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-			</svg>
-			<span>{isValidJson ? 'JSON' : 'Raw'}</span>
+<div class="json-viewer rounded-md border border-line-subtle bg-canvas font-mono text-xs">
+	<div class="flex items-center justify-between gap-2 px-1.5 py-1 border-b border-line-subtle">
+		<Button variant="ghost" size="sm" onclick={toggleCollapse} aria-expanded={!isCollapsed}>
+			<ChevronRight
+				size={14}
+				strokeWidth={1.75}
+				class="transition-transform duration-150 {isCollapsed ? '' : 'rotate-90'}"
+			/>
+			<span class="font-sans">{isValidJson ? 'JSON' : 'Raw'}</span>
 			{#if isValidJson && typeof displayData === 'object' && displayData !== null}
-				<span class="text-xs opacity-60">
+				<span class="text-fg-subtle">
 					{Array.isArray(displayData)
 						? `[${displayData.length} items]`
 						: `{${Object.keys(displayData).length} keys}`}
 				</span>
 			{/if}
-		</button>
+		</Button>
 
-		<button
-			type="button"
-			class="p-1.5 rounded hover:bg-surface-200 dark:hover:bg-surface-700 text-surface-600 dark:text-surface-400"
-			on:click={copyToClipboard}
-			title="Copy to clipboard"
-		>
-			{#if copySuccess}
-				<svg class="w-4 h-4 text-success-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-				</svg>
-			{:else}
-				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
-					/>
-				</svg>
-			{/if}
-		</button>
+		<IconButton
+			icon={copySuccess ? Check : Copy}
+			label={copySuccess ? 'Copied' : 'Copy to clipboard'}
+			onclick={copyToClipboard}
+		/>
 	</div>
 
 	{#if !isCollapsed}
-		<div class="overflow-auto scrollbar-thin" style="max-height: {maxHeight}">
+		<div class="overflow-auto" style="max-height: {maxHeight}">
 			<pre
-				class="p-3 text-sm font-mono whitespace-pre-wrap break-all">{#if isValidJson}{@html syntaxHighlight(formattedJson)}{:else}{formattedJson}{/if}</pre>
+				class="m-0 p-3 text-xs text-fg whitespace-pre-wrap break-all">{#if isValidJson}{@html syntaxHighlight(formattedJson)}{:else}{formattedJson}{/if}</pre>
 		</div>
 	{/if}
 </div>

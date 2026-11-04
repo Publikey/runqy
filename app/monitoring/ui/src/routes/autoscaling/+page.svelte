@@ -1,5 +1,20 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import { base } from '$app/paths';
+	import {
+		ChevronDown,
+		ChevronRight,
+		Cloud,
+		Layers,
+		Pencil,
+		Plus,
+		ScrollText,
+		Server,
+		Shield,
+		ShieldOff,
+		Trash2,
+		TriangleAlert
+	} from '@lucide/svelte';
 	import { autoscaleStore } from '$lib/stores/autoscale';
 	import { settings } from '$lib/stores/settings';
 	import { toaster } from '$lib/stores/toaster';
@@ -9,15 +24,218 @@
 		getAutoscaleProviderTypes,
 		createAutoscaleProvider,
 		updateAutoscaleProvider,
-		deleteAutoscaleProvider
+		deleteAutoscaleProvider,
+		getQueueConfigs,
+		getQueueConfig,
+		updateQueueConfig,
+		getAutoscaleInstanceLogs
 	} from '$lib/api/client';
-	import type { AutoscaleInstance, AutoscaleProvider } from '$lib/api/types';
-	import { formatRelativeTime } from '$lib/utils/format';
+	import type {
+		AutoscaleConfig,
+		AutoscaleInstance,
+		AutoscaleInstanceLogs,
+		AutoscalePause,
+		AutoscaleProvider,
+		DeploymentConfig,
+		QueueConfigDetail
+	} from '$lib/api/types';
+	import { formatRelativeTime, formatDateTime } from '$lib/utils/format';
+	import { parseQueueName } from '$lib/utils/queueGrouping';
 	import ProviderModal from '$lib/components/ProviderModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import QueueConfigModal from '$lib/components/QueueConfigModal.svelte';
+	import { Callout,
+		Badge,
+		Button,
+		EmptyState,
+		IconButton,
+		KeyValue,
+		MoreLink,
+		PageHeader,
+		Panel,
+		Segmented
+	} from '$lib/components/ui';
+	import { instanceStatus, countClass } from '$lib/utils/status';
+	import { ACTIVE_INSTANCE_STATUSES, describeInstance, describeTrigger, formatUntil } from '$lib/utils/autoscale';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	let refreshing = $state(false);
+
+	// ---- Instances: filter + details ----
+
+	type InstanceFilter = 'active' | 'failed' | 'terminated' | 'all';
+	const FILTER_KEY = 'runqy.autoscaling.instanceFilter';
+
+	function loadFilter(): InstanceFilter {
+		try {
+			const v = localStorage.getItem(FILTER_KEY);
+			if (v === 'active' || v === 'failed' || v === 'terminated' || v === 'all') return v;
+		} catch {
+			// storage unavailable: use the default
+		}
+		return 'active';
+	}
+
+	let instanceFilter = $state<InstanceFilter>(loadFilter());
+	let expanded = $state<Set<string>>(new Set());
+
+	function setFilter(v: InstanceFilter) {
+		instanceFilter = v;
+		try {
+			localStorage.setItem(FILTER_KEY, v);
+		} catch {
+			// ignore
+		}
+	}
+
+	function matchesFilter(i: AutoscaleInstance, f: InstanceFilter): boolean {
+		switch (f) {
+			case 'active':
+				return ACTIVE_INSTANCE_STATUSES.includes(i.status);
+			case 'failed':
+				return i.status === 'failed';
+			case 'terminated':
+				return i.status === 'terminated';
+			default:
+				return true;
+		}
+	}
+
+	let counts = $derived({
+		active: $autoscaleStore.instances.filter((i) => matchesFilter(i, 'active')).length,
+		failed: $autoscaleStore.instances.filter((i) => matchesFilter(i, 'failed')).length,
+		terminated: $autoscaleStore.instances.filter((i) => matchesFilter(i, 'terminated')).length,
+		all: $autoscaleStore.instances.length
+	});
+
+	let visibleInstances = $derived(
+		$autoscaleStore.instances.filter((i) => matchesFilter(i, instanceFilter))
+	);
+
+	// "as-dc50c028-1467-…" → "as-dc50c028"; the full id is in the title and the expanded row.
+	function shortInstanceId(id: string): string {
+		const m = /^(as-[0-9a-f]{8})-[0-9a-f-]{27}$/.exec(id);
+		return m ? m[1] : id;
+	}
+
+	function toggleExpanded(id: string) {
+		const next = new Set(expanded);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expanded = next;
+	}
+
+	function instanceReason(i: AutoscaleInstance): string {
+		return i.error ? `Provisioning failed: ${i.error}` : i.reason || '';
+	}
+
+	// Machine logs, loaded on demand per instance: live from the provider while the
+	// machine exists, otherwise those saved when the autoscaler destroyed it.
+	interface LogsState {
+		loading: boolean;
+		data?: AutoscaleInstanceLogs;
+		error?: string;
+	}
+	let logsById = $state<Record<string, LogsState>>({});
+
+	function isEnded(i: AutoscaleInstance): boolean {
+		return i.status === 'failed' || i.status === 'terminated';
+	}
+
+	async function loadLogs(i: AutoscaleInstance) {
+		logsById[i.instance_id] = { loading: true };
+		try {
+			logsById[i.instance_id] = { loading: false, data: await getAutoscaleInstanceLogs(i.instance_id) };
+		} catch (e) {
+			logsById[i.instance_id] = {
+				loading: false,
+				error: e instanceof Error ? e.message : 'Failed to fetch logs'
+			};
+		}
+	}
+
+	// ---- Provisioning pauses ----
+
+	function pausesFor(parent: string): AutoscalePause[] {
+		return $autoscaleStore.pauses.filter((p) => p.queue === parent);
+	}
+
+
+	// ---- Queue autoscale configs ----
+
+	interface QueueAutoscaleRow {
+		parent: string;
+		configName: string; // a full queue name, used to load/edit the shared deployment
+		autoscale: AutoscaleConfig;
+	}
+
+	let queueRows = $state<QueueAutoscaleRow[]>([]);
+	let queueConfigModalOpen = $state(false);
+	let queueConfigModalLoading = $state(false);
+	let selectedQueueConfig = $state<QueueConfigDetail | null>(null);
+
+	async function loadQueueConfigs() {
+		try {
+			const response = await getQueueConfigs();
+			const byParent = new Map<string, QueueAutoscaleRow>();
+			for (const q of response.queues) {
+				const asc = q.deployment?.autoscale;
+				if (!asc) continue;
+				const { parent } = parseQueueName(q.name);
+				if (!byParent.has(parent)) {
+					byParent.set(parent, { parent, configName: q.name, autoscale: asc });
+				}
+			}
+			queueRows = [...byParent.values()].sort((a, b) => a.parent.localeCompare(b.parent));
+		} catch (e) {
+			console.error('Failed to load queue configs:', e);
+		}
+	}
+
+	function providerFor(name: string): AutoscaleProvider | undefined {
+		return $autoscaleStore.providers.find((p) => p.name === name);
+	}
+
+	function liveCount(parent: string): number {
+		return $autoscaleStore.instances.filter(
+			(i) => i.queue === parent && ACTIVE_INSTANCE_STATUSES.includes(i.status)
+		).length;
+	}
+
+
+
+
+	async function openEditQueueConfig(name: string) {
+		try {
+			selectedQueueConfig = await getQueueConfig(name);
+			queueConfigModalOpen = true;
+		} catch (e) {
+			toaster.error({
+				title: 'Error',
+				description: `Failed to load queue config: ${e instanceof Error ? e.message : 'Unknown error'}`
+			});
+		}
+	}
+
+	async function handleSaveQueueConfig(
+		queues: { name: string; priority: number; deployment: DeploymentConfig | null }[]
+	) {
+		const q = queues[0];
+		if (!q) return;
+		queueConfigModalLoading = true;
+		try {
+			await updateQueueConfig(q.name, q.priority, q.deployment || undefined);
+			toaster.success({ title: 'Queue Updated', description: `Queue "${q.name}" updated` });
+			await loadData();
+			queueConfigModalOpen = false;
+		} catch (e) {
+			toaster.error({
+				title: 'Error',
+				description: e instanceof Error ? e.message : 'Failed to save queue config'
+			});
+		} finally {
+			queueConfigModalLoading = false;
+		}
+	}
 
 	let providerTypes = $state<string[]>([]);
 	let providerModalOpen = $state(false);
@@ -32,33 +250,9 @@
 		action: () => {}
 	});
 
+	// Protection only matters for machines the autoscaler could still destroy.
 	function isLiveInstance(i: AutoscaleInstance): boolean {
-		return i.status !== 'terminated';
-	}
-
-	// A "running" machine without a worker yet is still booting (image pull, dependencies).
-	function displayStatus(i: AutoscaleInstance): string {
-		return i.status === 'running' && !i.worker_id ? 'booting' : i.status;
-	}
-
-	function statusBadgeClass(status: string): string {
-		switch (status) {
-			case 'running':
-				return 'badge preset-filled-success-500 text-xs';
-			case 'provisioning':
-			case 'booting':
-				return 'badge preset-filled-secondary-500 text-xs';
-			case 'draining':
-				return 'badge preset-filled-warning-500 text-xs';
-			case 'destroying':
-				return 'badge preset-filled-warning-600 text-xs';
-			case 'failed':
-				return 'badge preset-filled-error-500 text-xs';
-			case 'terminated':
-				return 'badge preset-filled-surface-500 text-xs';
-			default:
-				return 'badge preset-filled-surface-500 text-xs';
-		}
+		return i.status === 'provisioning' || i.status === 'running';
 	}
 
 	function formatCost(value: number): string {
@@ -66,13 +260,7 @@
 	}
 
 	async function loadData() {
-		await autoscaleStore.fetch();
-	}
-
-	async function handleRefresh() {
-		refreshing = true;
-		await loadData();
-		setTimeout(() => { refreshing = false; }, 500);
+		await Promise.all([autoscaleStore.fetch(), loadQueueConfigs()]);
 	}
 
 	onMount(async () => {
@@ -170,221 +358,79 @@
 	<title>Autoscaling - runqy Monitor</title>
 </svelte:head>
 
-<div class="p-4 md:p-6 space-y-8">
-	<!-- Header -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold">Autoscaling</h1>
-			<p class="text-surface-500">
-				{$autoscaleStore.instances.length} instance{$autoscaleStore.instances.length !== 1 ? 's' : ''}
-				{#if $autoscaleStore.lastUpdated}
-					&middot; Updated {formatRelativeTime($autoscaleStore.lastUpdated)}
-				{/if}
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}"
-				onclick={handleRefresh}
-			>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-					/>
-				</svg>
-				Refresh
-			</button>
-		</div>
-	</div>
+<div class="rq-page space-y-4 md:space-y-6">
+	<PageHeader
+		title="Autoscaling"
+		subtitle="{counts.active} active instance{counts.active !== 1 ? 's' : ''}"
+		onrefresh={loadData}
+	/>
 
-	<!-- Error State -->
 	{#if $autoscaleStore.error}
-		<div class="card p-4 preset-outlined-error-500">
-			<p class="text-error-500">{$autoscaleStore.error}</p>
-		</div>
+		<Callout>
+			{$autoscaleStore.error}
+		</Callout>
 	{/if}
 
-	<!-- Live Status Section -->
-	<section class="space-y-4">
-		<div class="flex items-center justify-between">
-			<h2 class="text-xl font-semibold">Live Instances</h2>
-			<div class="text-sm text-surface-500">
-				Total Cost: <span class="font-semibold text-surface-700 dark:text-surface-300">{formatCost($autoscaleStore.totalCost)}</span>
-			</div>
-		</div>
-
-		{#if $autoscaleStore.instances.length === 0}
-			<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-				<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
-				</svg>
-				<p class="text-surface-500">No active instances</p>
-				<p class="text-sm text-surface-400 mt-1">
-					Instances will appear here when autoscaling provisions workers.
-				</p>
-			</div>
-		{:else}
-			<div class="table-container">
-				<table class="table table-hover">
-					<thead>
-						<tr>
-							<th>Instance ID</th>
-							<th>Queue</th>
-							<th>Provider</th>
-							<th>Status</th>
-							<th>Worker</th>
-							<th>Protected</th>
-							<th>Cost</th>
-							<th>Created</th>
-							<th>Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each $autoscaleStore.instances as instance (instance.instance_id)}
-							<tr>
-								<td class="font-mono text-sm">{instance.instance_id}</td>
-								<td>{instance.queue}</td>
-								<td>
-									{instance.provider}
-									{#if instance.gpu}
-										<div class="text-xs text-surface-400">{instance.gpu}</div>
-									{/if}
-								</td>
-								<td>
-									<span class={statusBadgeClass(displayStatus(instance))}>{displayStatus(instance)}</span>
-								</td>
-								<td class="font-mono text-sm">
-									{#if instance.worker_id}
-										{instance.worker_id}
-									{:else}
-										<span class="text-surface-400">-</span>
-									{/if}
-								</td>
-								<td>
-									{#if instance.protected}
-										<span class="badge preset-filled-warning-500 text-xs">Protected</span>
-									{:else}
-										<span class="badge preset-outlined-surface-500 text-xs">No</span>
-									{/if}
-								</td>
-								<td class="font-mono text-sm">
-									{formatCost(instance.cost_accumulated)}
-									<span class="text-xs text-surface-400">({formatCost(instance.price_per_hour)}/hr)</span>
-								</td>
-								<td class="text-sm text-surface-500">{formatRelativeTime(instance.created_at)}</td>
-								<td>
-									{#if isLiveInstance(instance)}
-										<button
-											type="button"
-											class="btn btn-sm {instance.protected ? 'preset-outlined-surface-500' : 'preset-outlined-warning-500'}"
-											onclick={() => handleToggleProtect(instance)}
-											title={instance.protected ? 'Unprotect instance' : 'Protect instance'}
-										>
-											{instance.protected ? 'Unprotect' : 'Protect'}
-										</button>
-									{:else}
-										<span class="text-xs text-surface-400">-</span>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		{/if}
-	</section>
-
-	<!-- Providers Section -->
-	<section class="space-y-4">
-		<div class="flex items-center justify-between">
-			<h2 class="text-xl font-semibold">Providers</h2>
+	<!-- Providers -->
+	<Panel title="Providers" flush>
+		{#snippet actions()}
 			{#if !$autoscaleStore.featureDisabled}
-				<button type="button" class="rq-btn-primary" onclick={openCreateProvider}>
-					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-					</svg>
-					Add Provider
-				</button>
+				<Button variant="primary" size="sm" icon={Plus} onclick={openCreateProvider}>Add provider</Button>
 			{/if}
-		</div>
+		{/snippet}
 
 		{#if $autoscaleStore.featureDisabled}
-			<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-				<svg class="w-16 h-16 mx-auto text-warning-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-				</svg>
-				<h3 class="text-xl font-semibold mb-2">Provider Management Disabled</h3>
-				<p class="text-surface-500 mb-4">
-					Autoscaling provider management is not configured on this server.
-				</p>
-				<p class="text-sm text-surface-400">
-					To enable it, set the <code class="bg-surface-200 dark:bg-surface-700 px-2 py-1 rounded">RUNQY_VAULT_MASTER_KEY</code> environment variable on the server.
-				</p>
-			</div>
+			<EmptyState
+				icon={TriangleAlert}
+				title="Provider management disabled"
+				description="Autoscaling provider management is not configured on this server."
+			>
+				{#snippet action()}
+					<p class="text-ui text-fg-subtle">
+						To enable it, set the <code class="font-mono text-fg">RUNQY_VAULT_MASTER_KEY</code> environment variable on the server.
+					</p>
+				{/snippet}
+			</EmptyState>
 		{:else if $autoscaleStore.providers.length === 0}
-			<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-				<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-				</svg>
-				<p class="text-surface-500 mb-4">No providers configured</p>
-				<button type="button" class="btn preset-filled-primary-500" onclick={openCreateProvider}>
-					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-					</svg>
-					Add your first provider
-				</button>
-			</div>
+			<EmptyState icon={Cloud} title="No providers configured" compact>
+				{#snippet action()}
+					<Button variant="secondary" size="sm" icon={Plus} onclick={openCreateProvider}>Add your first provider</Button>
+				{/snippet}
+			</EmptyState>
 		{:else}
 			<div class="table-container">
-				<table class="table table-hover">
+				<table class="rq-table">
 					<thead>
 						<tr>
 							<th>Name</th>
 							<th>Type</th>
 							<th>Status</th>
 							<th>Updated</th>
-							<th>Actions</th>
+							<th class="text-right">Actions</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each $autoscaleStore.providers as provider (provider.name)}
 							<tr>
-								<td class="font-mono font-medium">{provider.name}</td>
+								<td class="font-medium text-fg">{provider.name}</td>
 								<td>{provider.provider_type}</td>
 								<td>
 									{#if provider.enabled}
-										<span class="badge preset-filled-success-500 text-xs">Enabled</span>
+										<span class="text-fg-subtle">Enabled</span>
 									{:else}
-										<span class="badge preset-outlined-surface-500 text-xs">Disabled</span>
+										<Badge tone="outline">Disabled</Badge>
 									{/if}
 								</td>
-								<td class="text-sm text-surface-500">{formatRelativeTime(provider.updated_at)}</td>
+								<td class="text-fg-subtle whitespace-nowrap">{formatRelativeTime(provider.updated_at)}</td>
 								<td>
-									<div class="flex items-center gap-1">
-										<button
-											type="button"
-											class="btn btn-sm preset-outlined-primary-500"
-											onclick={() => openEditProvider(provider)}
-											title="Edit provider"
-										>
-											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-											</svg>
-										</button>
-										<button
-											type="button"
-											class="btn btn-sm preset-outlined-error-500"
+									<div class="flex items-center justify-end gap-1">
+										<IconButton icon={Pencil} label="Edit provider" onclick={() => openEditProvider(provider)} />
+										<IconButton
+											icon={Trash2}
+											label="Delete provider"
+											danger
 											onclick={() => confirmDeleteProvider(provider.name)}
-											title="Delete provider"
-										>
-											<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-												<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-											</svg>
-										</button>
+										/>
 									</div>
 								</td>
 							</tr>
@@ -393,7 +439,335 @@
 				</table>
 			</div>
 		{/if}
-	</section>
+	</Panel>
+
+	<!-- Queue autoscale configs -->
+	<Panel title="Queues" flush>
+		{#snippet actions()}
+			<MoreLink href="/queues" label="All queues" />
+		{/snippet}
+
+		{#if queueRows.length === 0}
+			<EmptyState
+				icon={Layers}
+				title="No queue has an autoscale configuration"
+				description="Add an autoscale block to a queue (YAML or the queue's config editor)."
+				compact
+			/>
+		{:else}
+			<div class="table-container">
+				<table class="rq-table">
+					<thead>
+						<tr>
+							<th>Queue</th>
+							<th>Status</th>
+							<th>Provider</th>
+							<th>Workers</th>
+							<th>Scale up</th>
+							<th>Scale down</th>
+							<th>Instance</th>
+							<th class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each queueRows as row (row.parent)}
+							{@const asc = row.autoscale}
+							{@const prov = providerFor(asc.provider)}
+							<tr>
+								<td class="font-medium">
+									<a
+										href="{base}/queues/{encodeURIComponent(row.configName)}"
+										class="text-primary-400 hover:text-primary-300">{row.parent}</a
+									>
+								</td>
+								<td>
+									{#if asc.enabled}
+										<span class="text-fg-subtle">Enabled</span>
+									{:else}
+										<Badge tone="outline">Disabled</Badge>
+									{/if}
+									{#each pausesFor(row.parent) as p (p.kind)}
+										<div
+											class="mt-1.5"
+											title="{p.failures} failure(s) in a row: {p.cause}. Provisioning resumes automatically at that time."
+										>
+											<Badge tone="warning" class="whitespace-nowrap">paused until {formatUntil(p.until)}</Badge>
+											<div class="mt-0.5 text-xs text-fg-subtle">{p.failures}× {p.cause}</div>
+										</div>
+									{/each}
+								</td>
+								<td>
+									<div class="font-medium text-fg">{asc.provider || '-'}</div>
+									{#if !$autoscaleStore.featureDisabled}
+										{#if !prov}
+											<Badge tone="danger" class="mt-1" title="No provider with this name is registered">unknown provider</Badge>
+										{:else}
+											<div class="mt-1 flex flex-wrap items-center gap-1">
+												<span class="text-xs text-fg-subtle">{prov.provider_type}</span>
+												{#if prov.provider_type === 'mock'}
+													<Badge tone="warning" title="The mock provider rents no machine: no worker will ever boot">mock: boots nothing</Badge>
+												{/if}
+												{#if !prov.enabled}
+													<Badge tone="warning">provider disabled</Badge>
+												{/if}
+											</div>
+										{/if}
+									{/if}
+								</td>
+								<td class="whitespace-nowrap">
+									<span class="font-semibold tabular-nums {countClass(liveCount(row.parent))}">{liveCount(row.parent)}</span>
+									<span class="text-fg-subtle">live · {asc.min_workers}–{asc.max_workers}</span>
+									{#if asc.boot_timeout}
+										<div class="text-xs text-fg-subtle">boot timeout {asc.boot_timeout}</div>
+									{/if}
+								</td>
+								<td>
+									{#each asc.scale_up || [] as t, idx (idx)}
+										<div>{describeTrigger(t, 'up')}</div>
+									{:else}
+										<span class="text-fg-faint">-</span>
+									{/each}
+								</td>
+								<td>
+									{#each asc.scale_down || [] as t, idx (idx)}
+										<div>{describeTrigger(t, 'down')}</div>
+									{:else}
+										<span class="text-fg-faint">-</span>
+									{/each}
+								</td>
+								<td>
+									{#each describeInstance(asc) as part, idx (idx)}
+										<div class={idx === 0 ? '' : 'text-xs text-fg-subtle'}>{part}</div>
+									{:else}
+										<span class="text-fg-subtle">provider defaults</span>
+									{/each}
+								</td>
+								<td>
+									<div class="flex justify-end">
+										<IconButton
+											icon={Pencil}
+											label="Edit queue config"
+											onclick={() => openEditQueueConfig(row.configName)}
+										/>
+									</div>
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</Panel>
+
+	<!-- Instances -->
+	<Panel title="Instances" flush>
+		{#snippet actions()}
+			<Segmented
+				name="instanceFilter"
+				label="Instance filter"
+				items={[
+					{ value: 'active', label: 'Active', count: counts.active },
+					{ value: 'failed', label: 'Failed', count: counts.failed },
+					{ value: 'terminated', label: 'Terminated', count: counts.terminated },
+					{ value: 'all', label: 'All', count: counts.all }
+				]}
+				value={instanceFilter}
+				onchange={(v) => setFilter(v as InstanceFilter)}
+			/>
+			<span class="text-ui text-fg-subtle whitespace-nowrap">
+				Total cost <span class="font-medium tabular-nums {countClass($autoscaleStore.totalCost ?? 0)}">{formatCost($autoscaleStore.totalCost)}</span>
+			</span>
+		{/snippet}
+
+		{#if visibleInstances.length === 0}
+			<EmptyState
+				icon={Server}
+				title={instanceFilter === 'active'
+					? 'No active instances'
+					: `No ${instanceFilter === 'all' ? '' : instanceFilter + ' '}instances`}
+				description={instanceFilter === 'active'
+					? 'Instances will appear here when autoscaling provisions workers.'
+					: undefined}
+				compact
+			/>
+		{:else}
+			<div class="table-container">
+				<table class="rq-table">
+					<thead>
+						<tr>
+							<th>Instance ID</th>
+							<th>Queue</th>
+							<th>Provider</th>
+							<th>Status</th>
+							<th>Worker</th>
+							<th>Protected</th>
+							<th class="text-right">Cost</th>
+							<th>Created</th>
+							<th class="text-right">Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each visibleInstances as instance (instance.instance_id)}
+							{@const reason = instanceReason(instance)}
+							{@const isOpen = expanded.has(instance.instance_id)}
+							{@const ls = logsById[instance.instance_id]}
+							<tr
+								class="cursor-pointer"
+								onclick={() => toggleExpanded(instance.instance_id)}
+								title="Show details"
+								aria-expanded={isOpen}
+							>
+								<td class="font-mono whitespace-nowrap">
+									<span class="inline-flex items-center gap-1.5">
+										{#if isOpen}
+											<ChevronDown size={14} strokeWidth={1.75} class="text-fg-subtle" />
+										{:else}
+											<ChevronRight size={14} strokeWidth={1.75} class="text-fg-subtle" />
+										{/if}
+										<span title={instance.instance_id}>{shortInstanceId(instance.instance_id)}</span>
+									</span>
+								</td>
+								<td class="whitespace-nowrap">{instance.queue}</td>
+								<td class="whitespace-nowrap">
+									{instance.provider}
+									{#if instance.gpu}
+										<div class="text-xs text-fg-subtle">{instance.gpu}</div>
+									{/if}
+								</td>
+								<td>
+									<Badge status={instanceStatus(instance.status, instance.worker_id)} />
+									{#if reason && !isOpen}
+										<div class="mt-0.5 text-xs text-fg-subtle truncate max-w-xs" title={reason}>{reason}</div>
+									{/if}
+								</td>
+								<td class="font-mono">
+									{#if instance.worker_id}
+										<a
+											href="{base}/workers/{encodeURIComponent(instance.worker_id)}"
+											class="text-primary-400 hover:text-primary-300"
+											onclick={(e) => e.stopPropagation()}>{instance.worker_id}</a
+										>
+									{:else}
+										<span class="text-fg-faint">-</span>
+									{/if}
+								</td>
+								<td>
+									{#if instance.protected}
+										<Badge tone="warning">Protected</Badge>
+									{:else}
+										<span class="text-fg-faint">-</span>
+									{/if}
+								</td>
+								<td class="text-right tabular-nums whitespace-nowrap">
+									<span class={countClass(instance.cost_accumulated ?? 0)}>{formatCost(instance.cost_accumulated)}</span>
+									<span class="text-xs text-fg-subtle">({formatCost(instance.price_per_hour)}/hr)</span>
+								</td>
+								<td class="text-fg-subtle whitespace-nowrap">{formatRelativeTime(instance.created_at)}</td>
+								<td>
+									<div class="flex justify-end">
+										{#if isLiveInstance(instance)}
+											<Button
+												size="sm"
+												variant="secondary"
+												icon={instance.protected ? ShieldOff : Shield}
+												title={instance.protected ? 'Unprotect instance' : 'Protect instance'}
+												onclick={(e) => {
+													e.stopPropagation();
+													handleToggleProtect(instance);
+												}}
+											>
+												{instance.protected ? 'Unprotect' : 'Protect'}
+											</Button>
+										{:else}
+											<span class="text-fg-faint">-</span>
+										{/if}
+									</div>
+								</td>
+							</tr>
+							{#if isOpen}
+								{#snippet reasonValue()}
+									<span class="font-mono whitespace-pre-wrap break-words">{reason || '-'}</span>
+								{/snippet}
+								{#snippet workerValue()}
+									<a
+										href="{base}/workers/{encodeURIComponent(instance.worker_id ?? '')}"
+										class="font-mono text-primary-400 hover:text-primary-300">{instance.worker_id}</a
+									>
+									<span class="text-fg-subtle">(live process logs on the worker page)</span>
+								{/snippet}
+								<tr>
+									<td colspan="9" class="bg-canvas">
+										<div class="space-y-4 py-2">
+											<KeyValue
+												columns={3}
+												items={[
+													{ label: 'Instance ID', value: instance.instance_id, mono: true },
+													{
+														label: 'Provider instance',
+														value: instance.provider_instance_id || '- (no machine rented)',
+														mono: true
+													},
+													{ label: instance.error ? 'Provider error' : 'Reason', render: reasonValue },
+													{ label: 'Created', value: formatDateTime(instance.created_at) },
+													{ label: 'Last update', value: formatDateTime(instance.updated_at) },
+													...(instance.last_job_at
+														? [{ label: 'Last task', value: formatDateTime(instance.last_job_at) }]
+														: []),
+													...(instance.worker_id ? [{ label: 'Worker', render: workerValue }] : [])
+												]}
+											/>
+											{#if instance.provider_instance_id}
+												<div class="space-y-2 min-w-0">
+													<div class="flex flex-wrap items-center gap-3">
+														<span class="text-xs font-medium text-fg-subtle">Machine logs</span>
+														<Button
+															size="sm"
+															variant="secondary"
+															icon={ScrollText}
+															loading={ls?.loading}
+															onclick={() => loadLogs(instance)}
+														>
+															{#if ls?.loading}
+																Fetching…
+															{:else if isEnded(instance)}
+																{ls?.data ? 'Reload saved logs' : 'Show saved logs'}
+															{:else}
+																{ls?.data ? 'Refresh' : 'Fetch live logs'}
+															{/if}
+														</Button>
+													</div>
+													{#if ls?.error}
+														<p class="text-ui text-error-300">{ls.error}</p>
+													{:else if ls?.data}
+														{#if ls.data.logs}
+															<p class="text-xs text-fg-subtle">
+																{ls.data.source === 'live' ? 'Fetched from the provider' : 'Saved when the instance was destroyed'}
+																{#if ls.data.fetched_at}· {formatDateTime(ls.data.fetched_at)}{/if}
+															</p>
+															<pre
+																class="bg-canvas border border-line-subtle rounded-md p-3 text-xs font-mono whitespace-pre-wrap break-all max-h-96 overflow-auto text-fg-muted">{ls.data.logs}</pre>
+														{:else if ls.data.error}
+															<p class="text-ui text-warning-300">Logs could not be captured before teardown: {ls.data.error}</p>
+														{:else}
+															<p class="text-ui text-fg-subtle">
+																{ls.data.source === 'live'
+																	? 'The machine has produced no output yet.'
+																	: 'No logs were saved for this instance (they are captured only for instances that fail after a machine was rented).'}
+															</p>
+														{/if}
+													{/if}
+												</div>
+											{/if}
+										</div>
+									</td>
+								</tr>
+							{/if}
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</Panel>
 </div>
 
 <ProviderModal
@@ -403,6 +777,14 @@
 	provider={selectedProvider}
 	{providerTypes}
 	onsave={handleSaveProvider}
+/>
+
+<QueueConfigModal
+	bind:open={queueConfigModalOpen}
+	loading={queueConfigModalLoading}
+	mode="edit"
+	config={selectedQueueConfig}
+	onsave={handleSaveQueueConfig}
 />
 
 <ConfirmDialog

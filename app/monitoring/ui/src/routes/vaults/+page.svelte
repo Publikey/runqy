@@ -9,10 +9,11 @@
 	import VaultCard from '$lib/components/VaultCard.svelte';
 	import CreateVaultModal from '$lib/components/CreateVaultModal.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { KeyRound, Plus, Search, TriangleAlert } from '@lucide/svelte';
+	import { Callout, Button, EmptyState, PageHeader, Shimmer } from '$lib/components/ui';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let searchQuery = $state('');
-	let refreshing = $state(false);
 	let createModalOpen = $state(false);
 	let createLoading = $state(false);
 	let confirmDialog = $state({
@@ -35,12 +36,6 @@
 
 	async function loadData() {
 		await vaultsStore.fetch();
-	}
-
-	async function handleRefresh() {
-		refreshing = true;
-		await loadData();
-		setTimeout(() => { refreshing = false; }, 500);
 	}
 
 	onMount(() => {
@@ -99,130 +94,80 @@
 	<title>Vaults - runqy Monitor</title>
 </svelte:head>
 
-<div class="p-4 md:p-6 space-y-6">
-	<!-- Header -->
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-		<div>
-			<h1 class="text-2xl font-bold">Vaults</h1>
-			<p class="text-surface-500">
-				{filteredVaults.length} vault{filteredVaults.length !== 1 ? 's' : ''}
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				class="rq-btn-ghost {refreshing ? 'refresh-spinning' : ''}"
-				onclick={handleRefresh}
-			>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-					/>
-				</svg>
-				Refresh
-			</button>
+<div class="rq-page space-y-4 md:space-y-6">
+	<PageHeader
+		title="Vaults"
+		subtitle="{filteredVaults.length} vault{filteredVaults.length !== 1 ? 's' : ''}"
+		onrefresh={loadData}
+	>
+		{#snippet actions()}
 			{#if !$vaultsStore.featureDisabled}
-				<button
-					type="button"
-					class="rq-btn-primary"
-					onclick={() => createModalOpen = true}
-				>
-					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-					</svg>
-					Create Vault
-				</button>
+				<Button variant="primary" icon={Plus} onclick={() => (createModalOpen = true)}>Create vault</Button>
 			{/if}
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
 
-	<!-- Feature Disabled State -->
 	{#if $vaultsStore.featureDisabled}
-		<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-			<svg class="w-16 h-16 mx-auto text-warning-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-			</svg>
-			<h3 class="text-xl font-semibold mb-2">Vaults Feature Disabled</h3>
-			<p class="text-surface-500 mb-4">
-				The vaults feature is not configured on this server.
-			</p>
-			<p class="text-sm text-surface-400">
-				To enable vaults, set the <code class="bg-surface-200 dark:bg-surface-700 px-2 py-1 rounded">RUNQY_VAULT_MASTER_KEY</code> environment variable on the server.
-			</p>
+		<div class="rq-card">
+			<EmptyState
+				icon={TriangleAlert}
+				title="Vaults feature disabled"
+				description="The vaults feature is not configured on this server."
+			>
+				{#snippet action()}
+					<p class="text-ui text-fg-subtle">
+						To enable vaults, set the <code class="font-mono text-fg">RUNQY_VAULT_MASTER_KEY</code> environment variable on the server.
+					</p>
+				{/snippet}
+			</EmptyState>
 		</div>
 	{:else}
 		<!-- Search -->
-		<div class="flex flex-wrap items-center gap-4">
-			<div class="relative flex-1 min-w-[200px] max-w-md">
-				<svg
-					class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-surface-500"
-					fill="none"
-					stroke="currentColor"
-					viewBox="0 0 24 24"
-				>
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-					/>
-				</svg>
-				<input
-					type="text"
-					value={searchQuery}
-					oninput={handleSearchInput}
-					placeholder="Search vaults..."
-					class="input pl-10 pr-4 py-2 w-full"
-				/>
-			</div>
+		<div class="relative w-full max-w-md">
+			<Search
+				size={16}
+				strokeWidth={1.75}
+				class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+			/>
+			<input
+				type="text"
+				value={searchQuery}
+				oninput={handleSearchInput}
+				placeholder="Search vaults..."
+				aria-label="Search vaults"
+				class="input pl-9 w-full"
+			/>
 		</div>
 
-		<!-- Error State -->
 		{#if $vaultsStore.error && !$vaultsStore.featureDisabled}
-			<div class="card p-4 preset-outlined-error-500">
-				<p class="text-error-500">Failed to load vaults: {$vaultsStore.error}</p>
-			</div>
+			<Callout>
+				Failed to load vaults: {$vaultsStore.error}
+			</Callout>
 		{/if}
 
-		<!-- Loading State -->
 		{#if $vaultsStore.loading && filteredVaults.length === 0}
 			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 				{#each [1, 2, 3, 4, 5, 6] as i (i)}
-					<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-4">
-						<div class="animate-pulse space-y-3">
-							<div class="h-6 bg-surface-300 dark:bg-surface-600 rounded w-1/2"></div>
-							<div class="h-4 bg-surface-300 dark:bg-surface-600 rounded w-3/4"></div>
-							<div class="h-4 bg-surface-300 dark:bg-surface-600 rounded w-1/4"></div>
-						</div>
+					<div class="rq-card p-4 space-y-3">
+						<Shimmer class="h-5 w-1/2" />
+						<Shimmer class="h-4 w-3/4" />
+						<Shimmer class="h-4 w-1/4" />
 					</div>
 				{/each}
 			</div>
 		{:else if filteredVaults.length === 0}
-			<div class="card preset-outlined-surface-200-800 bg-surface-50-950 p-8 text-center">
-				<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
-				</svg>
-				<p class="text-surface-500 mb-4">
-					{searchQuery ? 'No vaults match your search' : 'No vaults found'}
-				</p>
-				{#if !searchQuery}
-					<button
-						type="button"
-						class="btn preset-filled-primary-500"
-						onclick={() => createModalOpen = true}
-					>
-						<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
-						</svg>
-						Create your first vault
-					</button>
-				{/if}
+			<div class="rq-card">
+				<EmptyState icon={KeyRound} title={searchQuery ? 'No vaults match your search' : 'No vaults found'}>
+					{#snippet action()}
+						{#if !searchQuery}
+							<Button variant="secondary" icon={Plus} onclick={() => (createModalOpen = true)}>
+								Create your first vault
+							</Button>
+						{/if}
+					{/snippet}
+				</EmptyState>
 			</div>
 		{:else}
-			<!-- Vault Grid -->
 			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 				{#each filteredVaults as vault (vault.name)}
 					<VaultCard

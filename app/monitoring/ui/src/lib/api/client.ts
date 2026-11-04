@@ -1,5 +1,6 @@
 import { base } from '$app/paths';
 import { browser } from '$app/environment';
+import { markReachable, markUnreachable } from '$lib/stores/live';
 import type {
 	Queue,
 	QueueInfo,
@@ -21,10 +22,14 @@ import type {
 	PlaygroundEnqueueResponse,
 	AutoscaleStatus,
 	AutoscaleProvider,
+	AutoscaleInstanceLogs,
 	AlertsOverview,
 	AlertSettings,
 	ControlRequest,
-	ControlResult
+	ControlResult,
+	TaskDetail,
+	AllTasksResponse,
+	ListableTaskState
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -38,14 +43,24 @@ export class AuthError extends Error {
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-	const response = await fetch(url, {
-		...options,
-		credentials: 'include',
-		headers: {
-			'Content-Type': 'application/json',
-			...options?.headers
-		}
-	});
+	let response: Response;
+	try {
+		response = await fetch(url, {
+			...options,
+			credentials: 'include',
+			headers: {
+				'Content-Type': 'application/json',
+				...options?.headers
+			}
+		});
+	} catch (e) {
+		markUnreachable(); // network error: the server is down or unreachable
+		throw e;
+	}
+	// Any answer from runqy means it is reachable (a 503 "feature disabled" included);
+	// 502/504 come from a proxy in front of a server that is down.
+	if (response.status === 502 || response.status === 504) markUnreachable();
+	else markReachable();
 
 	// Handle 401 Unauthorized - redirect to login
 	if (response.status === 401) {
@@ -189,7 +204,7 @@ export async function archiveAllTasks(qname: string, state: TaskState): Promise<
 export async function deleteAllTasks(qname: string, state: TaskState): Promise<{ deleted_count: number }> {
 	return fetchJson(
 		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks:delete_all`,
-		{ method: 'POST' }
+		{ method: 'DELETE' } // the routes are registered as DELETE (POST got a 405)
 	);
 }
 
@@ -420,6 +435,10 @@ export async function unprotectInstance(id: string): Promise<void> {
 	});
 }
 
+export async function getAutoscaleInstanceLogs(id: string): Promise<AutoscaleInstanceLogs> {
+	return fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/logs`);
+}
+
 export async function getAutoscaleProviderTypes(): Promise<{ types: string[] }> {
 	return fetchJson(`${BASE_URL}/autoscale/provider-types`);
 }
@@ -502,4 +521,38 @@ export async function sendTestAlert(settings?: AlertSettings): Promise<{ message
 // last_command once its next heartbeat lands.
 export async function sendControl(req: ControlRequest): Promise<ControlResult> {
 	return fetchJson(`${BASE_URL}/control`, { method: 'POST', body: JSON.stringify(req) });
+}
+
+// Cross-queue task lookup: resolves the task's queue on the server (reverse lookup, then a
+// scan of the queues). Throws TaskNotFoundError on 404 (deleted or expired after its TTL).
+export class TaskNotFoundError extends Error {
+	constructor(id: string) {
+		super(`Task ${id} not found`);
+		this.name = 'TaskNotFoundError';
+	}
+}
+
+export async function getTaskAnyQueue(taskId: string): Promise<TaskDetail> {
+	try {
+		return await fetchJson<TaskDetail>(`${BASE_URL}/tasks/${encodeURIComponent(taskId)}`);
+	} catch (e) {
+		if (e instanceof Error && e.message.includes('task not found')) throw new TaskNotFoundError(taskId);
+		throw e;
+	}
+}
+
+// Tasks of one state across all queues (or one exact queue), merged and paginated server-side.
+export async function listAllTasks(opts: {
+	state: ListableTaskState;
+	queue?: string;
+	page?: number;
+	size?: number;
+}): Promise<AllTasksResponse> {
+	const params = new URLSearchParams({
+		state: opts.state,
+		page: String(opts.page ?? 1),
+		size: String(opts.size ?? 20)
+	});
+	if (opts.queue) params.set('queue', opts.queue);
+	return fetchJson(`${BASE_URL}/tasks?${params}`);
 }

@@ -7,7 +7,11 @@
 	import '../app.css';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
+	import { Logo, Spinner, LiveIndicator } from '$lib/components/ui';
+	import { Menu, Search } from '@lucide/svelte';
 	import { authStore } from '$lib/stores/auth';
+	import CommandPalette, { paletteOpen } from '$lib/components/CommandPalette.svelte';
+	import { requestRefresh } from '$lib/stores/live';
 
 	let { children } = $props();
 
@@ -19,8 +23,70 @@
 		mobileNavOpen = false;
 	});
 
+	// Keyboard shortcuts: Ctrl/⌘+K palette, "g" then a letter to navigate, "/" search, "r" refresh.
+	const goKeys: Record<string, string> = { d: '/', q: '/queues', t: '/tasks', w: '/workers', a: '/autoscaling' };
+	let goPending = 0;
+
+	function isTyping(t: EventTarget | null): boolean {
+		if (!(t instanceof HTMLElement)) return false;
+		return t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName);
+	}
+
+	function focusPageSearch(): boolean {
+		const inputs = document.querySelectorAll<HTMLInputElement>(
+			'main input[type="text"], main input[type="search"], main input:not([type])'
+		);
+		// Prefer a search / filter field over other text inputs (e.g. "Go to task ID").
+		const ordered = [...inputs].sort(
+			(a, b) => Number(/^(search|filter)/i.test(b.placeholder)) - Number(/^(search|filter)/i.test(a.placeholder))
+		);
+		for (const el of ordered) {
+			if (el.offsetParent !== null && !el.disabled) {
+				el.focus();
+				el.select();
+				return true;
+			}
+		}
+		return false;
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') mobileNavOpen = false;
+		if (!showSidebar) return;
+		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+			e.preventDefault();
+			paletteOpen.update((o) => !o);
+			return;
+		}
+		if ($paletteOpen || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+		if (document.querySelector('[role="dialog"]:not([hidden]), [role="alertdialog"]:not([hidden])')) return;
+		const key = e.key.toLowerCase();
+		if (Date.now() - goPending < 1200 && goKeys[key]) {
+			e.preventDefault();
+			goPending = 0;
+			goto(`${base}${goKeys[key]}`);
+			return;
+		}
+		goPending = 0;
+		if (key === 'g') goPending = Date.now();
+		else if (e.key === '/') {
+			if (focusPageSearch()) e.preventDefault();
+		} else if (key === 'r' && !e.shiftKey) requestRefresh();
+	}
+
+	// Native tooltip with the full text on any truncated (ellipsis) element that has no title.
+	function handleMouseover(e: MouseEvent) {
+		const el = (e.target as Element | null)?.closest?.('.truncate');
+		if (!(el instanceof HTMLElement)) return;
+		const auto = el.dataset.rqAutoTitle === '1';
+		if (el.hasAttribute('title') && !auto) return;
+		if (el.scrollWidth > el.clientWidth) {
+			el.title = (el.textContent ?? '').trim();
+			el.dataset.rqAutoTitle = '1';
+		} else if (auto) {
+			el.removeAttribute('title');
+			delete el.dataset.rqAutoTitle;
+		}
 	}
 
 	// Public routes that don't require authentication
@@ -74,44 +140,37 @@
 </script>
 
 {#if showLoading}
-	<div class="min-h-screen flex items-center justify-center bg-[#0a0a0f]">
-		<div class="text-center">
-			<div class="animate-spin mb-4">
-				<svg class="w-8 h-8 mx-auto text-primary-500" fill="none" viewBox="0 0 24 24">
-					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-					<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-				</svg>
-			</div>
-			<p class="text-surface-500">Loading...</p>
-		</div>
+	<div class="min-h-screen flex flex-col items-center justify-center gap-5 bg-canvas">
+		<Logo size={36} />
+		<Spinner size={18} class="text-fg-subtle" />
 	</div>
 {:else if showSidebar}
 	<div class="flex flex-col md:flex-row h-screen overflow-hidden">
 		<!-- Mobile topbar -->
 		<header
-			class="md:hidden shrink-0 flex items-center gap-3 px-4 py-2.5 bg-surface-800"
-			style="border-bottom: 1px solid var(--runqy-border-subtle); padding-top: calc(0.625rem + env(safe-area-inset-top));"
+			class="md:hidden shrink-0 flex items-center gap-2 h-12 px-2 bg-panel border-b border-line-subtle"
+			style="padding-top: env(safe-area-inset-top); box-sizing: content-box;"
 		>
 			<button
 				type="button"
-				class="rq-btn-ghost !px-2.5"
+				class="rq-btn rq-btn-icon rq-btn-v-ghost !w-11 !h-11"
 				aria-label="Open navigation menu"
 				onclick={() => (mobileNavOpen = true)}
 			>
-				<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-				</svg>
+				<Menu size={18} strokeWidth={1.75} />
 			</button>
-			<svg viewBox="0 0 100 100" class="w-6 h-6">
-				<line x1="32" y1="50" x2="72" y2="22" stroke="#64748B" stroke-width="5" stroke-linecap="round" />
-				<line x1="32" y1="50" x2="78" y2="50" stroke="#64748B" stroke-width="5" stroke-linecap="round" />
-				<line x1="32" y1="50" x2="72" y2="78" stroke="#64748B" stroke-width="5" stroke-linecap="round" />
-				<circle cx="32" cy="50" r="16" fill="#3B82F6" />
-				<circle cx="72" cy="22" r="11" fill="#E2E8F0" />
-				<circle cx="78" cy="50" r="11" fill="#E2E8F0" />
-				<circle cx="72" cy="78" r="11" fill="#E2E8F0" />
-			</svg>
-			<span class="font-bold">runqy <span class="text-[#3DCFBC] font-normal">Monitor</span></span>
+			<a href="{base}/" aria-label="runqy dashboard"><Logo size={20} wordmark /></a>
+			<div class="ml-auto flex items-center gap-1 pr-1">
+				<button
+					type="button"
+					class="rq-btn rq-btn-icon rq-btn-v-ghost !w-11 !h-11"
+					aria-label="Search"
+					onclick={() => paletteOpen.set(true)}
+				>
+					<Search size={18} strokeWidth={1.75} />
+				</button>
+				<LiveIndicator compact />
+			</div>
 		</header>
 
 		<!-- Mobile drawer backdrop -->
@@ -119,21 +178,24 @@
 			<!-- svelte-ignore a11y_click_events_have_key_events -->
 			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
-				class="fixed inset-0 z-30 bg-surface-950/60 md:hidden"
+				class="rq-dialog-backdrop fixed inset-0 z-30 md:hidden"
+				data-state="open"
 				onclick={() => (mobileNavOpen = false)}
 			></div>
 		{/if}
 
 		<Sidebar mobileOpen={mobileNavOpen} />
 
-		<main class="main-content flex-1 overflow-y-auto">
+		<main class="main-content flex-1 min-w-0 overflow-y-auto">
 			{@render children()}
 		</main>
 	</div>
+	<CommandPalette />
 {:else}
 	{@render children()}
 {/if}
 
 <svelte:window onkeydown={handleKeydown} />
+<svelte:document onmouseover={handleMouseover} />
 
 <Toast />

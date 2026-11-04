@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { Button, Modal } from '$lib/components/ui';
+
 	interface Props {
 		open?: boolean;
 		title?: string;
@@ -21,45 +23,26 @@
 		oncancel
 	}: Props = $props();
 
+	// Set when the dialog closes through the confirm button, so onclose does not also
+	// report a cancel.
+	let confirmed = false;
+
 	function handleConfirm() {
+		confirmed = true;
 		onconfirm?.();
 		open = false;
 	}
 
-	function handleCancel() {
-		oncancel?.();
-		open = false;
-	}
-
-	function handleBackdropClick(e: MouseEvent) {
-		if (e.target === e.currentTarget) {
-			handleCancel();
-		}
+	function handleClose() {
+		if (!confirmed) oncancel?.();
+		confirmed = false;
 	}
 </script>
 
-{#if open}
-	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div
-		class="fixed inset-0 z-50 bg-surface-950/70 backdrop-blur-sm flex justify-center items-center p-4"
-		onclick={handleBackdropClick}
-	>
-		<div class="card preset-outlined-surface-200-800 bg-surface-100-900 ring-1 ring-surface-300 dark:ring-surface-600 w-full max-w-md p-6 space-y-4 shadow-xl">
-			<h2 class="h4">{title}</h2>
-			<p class="text-surface-600-400">{message}</p>
-			<footer class="flex justify-end gap-2 pt-2">
-				<button type="button" class="btn preset-tonal" onclick={handleCancel}>
-					{cancelText}
-				</button>
-				<button
-					type="button"
-					class="btn {variant === 'danger' ? 'preset-filled-error-500' : 'preset-filled'}"
-					onclick={handleConfirm}
-				>
-					{confirmText}
-				</button>
-			</footer>
-		</div>
-	</div>
-{/if}
+<Modal bind:open {title} size="sm" role="alertdialog" onclose={handleClose}>
+	<p class="text-sm text-fg-muted">{message}</p>
+	{#snippet footer()}
+		<Button variant="ghost" onclick={() => (open = false)}>{cancelText}</Button>
+		<Button variant={variant === 'danger' ? 'danger' : 'primary'} onclick={handleConfirm}>{confirmText}</Button>
+	{/snippet}
+</Modal>

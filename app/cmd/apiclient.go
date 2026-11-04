@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/control"
 	queueworker "github.com/Publikey/runqy/queues"
 )
@@ -547,6 +549,8 @@ type AutoscaleInstanceAPI struct {
 	PricePerHour    float64 `json:"price_per_hour"`
 	CostAccumulated float64 `json:"cost_accumulated"`
 	GPU             string  `json:"gpu,omitempty"`
+	Reason          string  `json:"reason,omitempty"`
+	Error           string  `json:"error,omitempty"`
 }
 
 // AutoscaleStatusResponseAPI is the response for GET /api/autoscale/status.
@@ -554,6 +558,7 @@ type AutoscaleStatusResponseAPI struct {
 	Instances []AutoscaleInstanceAPI `json:"instances"`
 	Count     int                    `json:"count"`
 	TotalCost float64                `json:"total_cost"`
+	Pauses    []autoscale.Pause      `json:"pauses"`
 }
 
 // AutoscaleProviderAPI represents a provider config from the API (config masked).
@@ -581,6 +586,19 @@ func (c *APIClient) AutoscaleStatusAPI() (*AutoscaleStatusResponseAPI, error) {
 		return nil, err
 	}
 	var resp AutoscaleStatusResponseAPI
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &resp, nil
+}
+
+// InstanceLogsAPI fetches an autoscaler instance's logs (live or saved).
+func (c *APIClient) InstanceLogsAPI(instanceID string) (*autoscale.InstanceLogs, error) {
+	data, err := c.GET("/api/autoscale/instances/" + url.PathEscape(instanceID) + "/logs")
+	if err != nil {
+		return nil, err
+	}
+	var resp autoscale.InstanceLogs
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}

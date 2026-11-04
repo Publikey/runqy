@@ -1,9 +1,8 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import type { Task, TaskState, QueueConfigDetail } from '$lib/api/types';
+	import type { Snippet } from 'svelte';
+	import type { Task, TaskState, QueueConfigDetail, AutoscaleConfig } from '$lib/api/types';
 	import {
 		getQueueInfo,
 		getQueueConfig,
@@ -23,9 +22,18 @@
 		batchRunTasks
 	} from '$lib/api/client';
 	import { settings } from '$lib/stores/settings';
-	import { formatNumber, formatBytes, formatDuration, formatDateTime } from '$lib/utils/format';
+	import { formatNumber, formatBytes, formatDateTime, formatRelativeTime } from '$lib/utils/format';
+	import { base } from '$app/paths';
+	import { workersStore } from '$lib/stores/workers';
+	import { parseWorkerQueues } from '$lib/utils/workerQueues';
+	import { parseQueueName } from '$lib/utils/queueGrouping';
 	import TaskTable from '$lib/components/TaskTable.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { Callout, PageHeader, Panel, Button, Badge, KeyValue, Tabs, MoreLink } from '$lib/components/ui';
+	import { queueStatus, workerState, workerStatus, instanceStatus, countClass } from '$lib/utils/status';
+	import { autoscaleStore } from '$lib/stores/autoscale';
+	import { describeInstance, describeTrigger, formatUntil, isActiveInstance } from '$lib/utils/autoscale';
+	import { Play, Pause, Archive, Trash2, ChevronLeft, ChevronRight, TriangleAlert } from '@lucide/svelte';
 
 	let qname = $derived(decodeURIComponent($page.params.qname ?? ''));
 
@@ -39,6 +47,9 @@
 	];
 
 	let activeTab = $state<TabState>('active');
+	let tabItems = $derived(
+		tabs.map((t) => ({ value: t.state, label: t.label, count: taskCounts[t.state] }))
+	);
 	let queueInfo = $state<Awaited<ReturnType<typeof getQueueInfo>> | null>(null);
 	let queueConfig = $state<QueueConfigDetail | null>(null);
 	let configOpen = $state(false);
@@ -65,6 +76,16 @@
 		message: '',
 		action: () => {}
 	});
+
+	let headerMeta = $derived(
+		queueInfo
+			? [
+					`Latency ${queueInfo.display_latency}`,
+					`Memory ${formatBytes(queueInfo.memory_usage_bytes)}`,
+					...(queueInfo.groups > 0 ? [`Groups ${queueInfo.groups}`] : [])
+				].join(' · ')
+			: undefined
+	);
 
 	let canBulkRun = $derived(activeTab === 'retry' || activeTab === 'archived');
 	let canBulkArchive = $derived(activeTab === 'pending' || activeTab === 'retry');
@@ -111,9 +132,42 @@
 	}
 
 	async function loadData() {
-		await loadQueueInfo();
+		await Promise.all([loadQueueInfo(), workersStore.fetch(), queueAutoscale ? autoscaleStore.fetch() : null]);
 		updateCountsFromQueueInfo();
 	}
+
+	// Autoscaling of the parent queue (config lives in the shared deployment).
+	let queueAutoscale = $derived(queueConfig?.deployment?.autoscale ?? null);
+	let parentQueue = $derived(parseQueueName(qname).parent);
+	let autoscaleProvider = $derived(
+		queueAutoscale ? $autoscaleStore.providers.find((p) => p.name === queueAutoscale.provider) : undefined
+	);
+	let autoscalePauses = $derived($autoscaleStore.pauses.filter((p) => p.queue === parentQueue));
+	let autoscaleInstances = $derived(
+		$autoscaleStore.instances.filter((i) => i.queue === parentQueue && isActiveInstance(i))
+	);
+
+	// Workers listening on this sub-queue, with what they are doing on it.
+	let queueWorkers = $derived.by(() => {
+		const parent = parseQueueName(qname).parent;
+		return $workersStore.workers
+			.map((w) => {
+				const entry = parseWorkerQueues(w.queues).find((q) => q.name === qname);
+				if (!entry) return null;
+				const server = $workersStore.servers.find((s) => s.id === w.worker_id);
+				const running = (server?.active_workers ?? []).filter((a) => a.queue === qname).length;
+				return {
+					worker: w,
+					priority: entry.priority,
+					running,
+					held: (w.held ?? []).includes(parent),
+					state: workerState(w, $workersStore.servers),
+					status: workerStatus(workerState(w, $workersStore.servers))
+				};
+			})
+			.filter((x) => x !== null)
+			.sort((a, b) => a.worker.worker_id.localeCompare(b.worker.worker_id));
+	});
 
 	async function pollData() {
 		await loadData();
@@ -129,6 +183,7 @@
 	async function loadQueueConfig() {
 		try {
 			queueConfig = await getQueueConfig(qname);
+			if (queueConfig?.deployment?.autoscale) autoscaleStore.fetch();
 		} catch {
 			// No config for this queue (e.g. created directly in Redis) — hide the panel.
 			queueConfig = null;
@@ -314,305 +369,286 @@
 	<title>{qname} - Queues - runqy</title>
 </svelte:head>
 
-<div class="p-4 md:p-6 space-y-6">
-	<!-- Breadcrumb -->
-	<nav class="flex items-center gap-2 text-sm">
-		<a href="{base}/queues" class="text-surface-500 hover:text-primary-500">Queues</a>
-		<span class="text-surface-400">/</span>
-		<span class="font-medium">{qname}</span>
-	</nav>
-
-	<!-- Header -->
-	<div class="flex flex-wrap items-start justify-between gap-y-3">
-		<div>
-			<div class="flex items-center gap-3">
-				<h1 class="text-2xl font-bold">{qname}</h1>
-				{#if queueInfo}
-					{#if queueInfo.paused}
-						<span class="badge preset-filled-warning-500">Paused</span>
-					{:else}
-						<span class="badge preset-filled-success-500">Running</span>
-					{/if}
-				{/if}
-			</div>
+<div class="rq-page space-y-4 md:space-y-6">
+	<PageHeader
+		title={qname}
+		breadcrumbs={[{ label: 'Queues', href: '/queues' }, { label: qname }]}
+		subtitle={headerMeta}
+		onrefresh={loadData}
+	>
+		{#snippet titleExtra()}
 			{#if queueInfo}
-				<div class="mt-2 flex items-center gap-4 text-sm text-surface-500">
-					<span>Latency: {queueInfo.display_latency}</span>
-					<span>Memory: {formatBytes(queueInfo.memory_usage_bytes)}</span>
-					{#if queueInfo.groups > 0}
-						<span>Groups: {queueInfo.groups}</span>
-					{/if}
-				</div>
+				<Badge status={queueStatus(queueInfo.paused)} />
 			{/if}
-		</div>
-
-		<div class="flex items-center gap-2">
+		{/snippet}
+		{#snippet actions()}
 			{#if queueInfo?.paused}
-				<button type="button" class="rq-btn-primary" onclick={handleResume}>
-					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-						/>
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-						/>
-					</svg>
-					Resume
-				</button>
+				<Button variant="secondary" icon={Play} onclick={handleResume}>Resume</Button>
 			{:else}
-				<button type="button" class="btn preset-filled-warning-500" onclick={handlePause}>
-					<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z"
-						/>
-					</svg>
-					Pause
-				</button>
+				<Button variant="secondary" icon={Pause} onclick={handlePause}>Pause</Button>
 			{/if}
-			<button type="button" class="btn preset-outlined-surface-500" onclick={loadData}>
-				<svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-					/>
-				</svg>
-				Refresh
-			</button>
-		</div>
-	</div>
+		{/snippet}
+	</PageHeader>
+
+	<!-- Workers serving this sub-queue -->
+	<Panel title="Workers" flush>
+		{#snippet titleExtra()}
+			<Badge tone="outline">{queueWorkers.length}</Badge>
+		{/snippet}
+		{#if queueWorkers.length === 0}
+			<div class="flex items-start gap-2.5 px-4 md:px-5 py-3 text-ui text-warning-200">
+				<TriangleAlert size={16} strokeWidth={1.75} class="mt-0.5 shrink-0 text-warning-300" />
+				<span>No worker listens on this queue: its tasks stay pending until one starts.</span>
+			</div>
+		{:else}
+			<ul class="divide-y divide-line-subtle">
+				{#each queueWorkers as qw (qw.worker.worker_id)}
+					<li>
+						<a
+							href="{base}/workers/{encodeURIComponent(qw.worker.worker_id)}"
+							class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 md:px-5 py-2.5 hover:bg-hover transition-colors"
+						>
+							<span class="font-mono text-ui text-fg truncate min-w-0 flex-1 basis-40">{qw.worker.worker_id}</span>
+							<span class="flex flex-wrap items-center gap-2">
+								{#if qw.state === 'idle'}
+									<span class="text-xs text-fg-subtle">{qw.status.label}</span>
+								{:else}
+									<Badge status={qw.status} />
+								{/if}
+								{#if qw.held}<Badge tone="warning" title="Not taking new tasks from this queue (drain or code update)">Held</Badge>{/if}
+							</span>
+							<span class="text-xs text-fg-subtle tabular-nums" title="Tasks of this queue running on the worker / worker concurrency">
+								<span class={countClass(qw.running)}>{qw.running}</span>/{qw.worker.concurrency} running
+							</span>
+							<span class="font-mono text-xs text-fg-subtle tabular-nums">p:{qw.priority}</span>
+							<span class="text-xs text-fg-subtle">Heartbeat {formatRelativeTime(new Date(qw.worker.last_beat * 1000))}</span>
+						</a>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</Panel>
+
+	<!-- Autoscaling of the parent queue -->
+	{#if queueAutoscale}
+		{@const asc = queueAutoscale}
+		<Panel title="Autoscaling" flush>
+			{#snippet titleExtra()}
+				{#if asc.enabled}
+					<span class="text-xs text-fg-subtle">Enabled</span>
+				{:else}
+					<Badge tone="outline">Disabled</Badge>
+				{/if}
+			{/snippet}
+			{#snippet actions()}
+				<MoreLink href="/autoscaling" label="Autoscaling" />
+			{/snippet}
+			<ul class="divide-y divide-line-subtle">
+				{#each autoscalePauses as p (p.kind)}
+					<li class="flex items-start gap-2.5 px-4 md:px-5 py-2.5 text-ui text-warning-200">
+						<TriangleAlert size={16} strokeWidth={1.75} class="mt-0.5 shrink-0 text-warning-300" />
+						<span>Provisioning paused until {formatUntil(p.until)}: {p.failures}× {p.cause}.</span>
+					</li>
+				{/each}
+				{@render ascRow('Provider', provider, asc)}
+				{@render ascRow('Workers', workersRange, asc)}
+				{@render ascRow('Scale up', scaleUp, asc)}
+				{@render ascRow('Scale down', scaleDown, asc)}
+				{@render ascRow('Instance', instanceSpec, asc)}
+				{#if autoscaleInstances.length > 0}
+					{@render ascRow('Instances', liveInstances, asc)}
+				{/if}
+			</ul>
+
+		</Panel>
+	{/if}
 
 	<!-- Queue Configuration (read-only, collapsible) -->
 	{#if queueConfig}
-		<div>
-			<button type="button" class="rq-btn-ghost" onclick={() => (configOpen = !configOpen)}>
-				<svg
-					class="w-4 h-4 transition-transform duration-150 {configOpen ? 'rotate-90' : ''}"
-					fill="none"
-					stroke="currentColor"
-					viewBox="0 0 24 24"
-				>
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-				</svg>
-				Configuration
-				{#if queueConfig.deployment?.mode}
-					<span class="badge preset-outlined-surface-500 text-xs">{queueConfig.deployment.mode}</span>
+		{@const cfg = queueConfig}
+		<Panel
+			title="Configuration"
+			flush={!configOpen}
+			class="overflow-hidden"
+			bodyClass={configOpen ? 'space-y-6' : '-mt-px'}
+		>
+			{#snippet titleExtra()}
+				{#if cfg.deployment?.mode}
+					<Badge tone="outline">{cfg.deployment.mode}</Badge>
 				{/if}
-				<span class="text-xs text-surface-500">Priority {queueConfig.priority}</span>
-			</button>
+				<span class="text-xs text-fg-subtle tabular-nums">Priority {cfg.priority}</span>
+			{/snippet}
+			{#snippet actions()}
+				<Button variant="ghost" size="sm" onclick={() => (configOpen = !configOpen)} aria-expanded={configOpen}>
+					<ChevronRight
+						size={14}
+						strokeWidth={1.75}
+						class="transition-transform duration-150 {configOpen ? 'rotate-90' : ''}"
+					/>
+					{configOpen ? 'Hide details' : 'Show details'}
+				</Button>
+			{/snippet}
+
 			{#if configOpen}
-				<div class="rq-card p-6 mt-3 space-y-4">
-					{#if queueConfig.deployment}
-						{@const d = queueConfig.deployment}
-						<div>
-							<h4 class="rq-section-title mb-2">Deployment</h4>
-							<div class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
-								<div>
-									<div class="text-xs text-surface-400">Git URL</div>
-									<div class="text-sm font-mono break-all">{d.git_url || '—'}</div>
-								</div>
-								<div>
-									<div class="text-xs text-surface-400">Branch</div>
-									<div class="text-sm font-mono">{d.branch || '—'}</div>
-								</div>
-								{#if d.code_path}
-									<div>
-										<div class="text-xs text-surface-400">Code path</div>
-										<div class="text-sm font-mono">{d.code_path}</div>
-									</div>
-								{/if}
-								<div>
-									<div class="text-xs text-surface-400">Startup command</div>
-									<div class="text-sm font-mono break-all">{d.startup_cmd || '—'}</div>
-								</div>
-								<div>
-									<div class="text-xs text-surface-400">Startup timeout</div>
-									<div class="text-sm">{d.startup_timeout_secs}s</div>
-								</div>
-								<div>
-									<div class="text-xs text-surface-400">Redis storage</div>
-									<div class="text-sm">
-										{#if d.redis_storage}
-											<span class="badge preset-filled-success-500 text-xs">Enabled</span>
-										{:else}
-											<span class="text-surface-500">Disabled</span>
-										{/if}
-									</div>
-								</div>
-								{#if d.git_token}
-									<div>
-										<div class="text-xs text-surface-400">Git token</div>
-										<div class="text-sm font-mono break-all">{d.git_token}</div>
-									</div>
-								{/if}
-								<div>
-									<div class="text-xs text-surface-400">Vaults</div>
-									<div class="text-sm">
-										{#if d.vaults?.length}
-											<div class="flex items-center gap-1 flex-wrap">
-												{#each d.vaults as vault (vault)}
-													<span class="badge preset-outlined-primary-500 text-xs">{vault}</span>
-												{/each}
-											</div>
-										{:else}
-											<span class="text-surface-500">None</span>
-										{/if}
-									</div>
-								</div>
-							</div>
-						</div>
-						<div>
-							<h4 class="rq-section-title mb-2">Task Lifecycle Limits</h4>
-							<div class="grid grid-cols-2 md:grid-cols-5 gap-x-8 gap-y-2">
-								{#each [
-									{ label: 'Max retry', value: d.limits?.max_retry },
-									{ label: 'TTL completed', value: d.limits?.ttl_completed },
-									{ label: 'TTL archived', value: d.limits?.ttl_archived },
-									{ label: 'Pending timeout', value: d.limits?.pending_timeout },
-									{ label: 'Active timeout', value: d.limits?.active_timeout }
-								] as limit (limit.label)}
-									<div>
-										<div class="text-xs text-surface-400">{limit.label}</div>
-										<div class="text-sm font-mono">
-											{#if limit.value !== undefined && limit.value !== ''}
-												{limit.value}
-											{:else}
-												<span class="text-surface-500 font-sans">server default</span>
-											{/if}
-										</div>
-									</div>
+				{#if cfg.deployment}
+					{@const d = cfg.deployment}
+					{#snippet redisValue()}
+						{#if d.redis_storage}
+							<span class="text-fg">Enabled</span>
+						{:else}
+							<span class="text-fg-subtle">Disabled</span>
+						{/if}
+					{/snippet}
+					{#snippet vaultsValue()}
+						{#if d.vaults?.length}
+							<div class="flex items-center gap-1 flex-wrap">
+								{#each d.vaults as vault (vault)}
+									<Badge tone="outline" class="font-mono">{vault}</Badge>
 								{/each}
 							</div>
-						</div>
-					{:else}
-						<p class="text-sm text-surface-500">No deployment configured.</p>
-					{/if}
-					<div class="flex items-center gap-6 pt-2 border-t border-surface-700 text-xs text-surface-500">
-						<span>Created {formatDateTime(new Date(queueConfig.created_at * 1000))}</span>
-						<span>Updated {formatDateTime(new Date(queueConfig.updated_at * 1000))}</span>
+						{:else}
+							<span class="text-fg-subtle">None</span>
+						{/if}
+					{/snippet}
+					<div class="space-y-3">
+						<h3 class="text-sm font-semibold text-fg">Deployment</h3>
+						<KeyValue
+							items={[
+								{ label: 'Git URL', value: d.git_url || '—', mono: true },
+								{ label: 'Branch', value: d.branch || '—', mono: true },
+								...(d.code_path ? [{ label: 'Code path', value: d.code_path, mono: true }] : []),
+								{ label: 'Startup command', value: d.startup_cmd || '—', mono: true },
+								{ label: 'Startup timeout', value: `${d.startup_timeout_secs}s` },
+								{ label: 'Redis storage', render: redisValue },
+								...(d.git_token ? [{ label: 'Git token', value: d.git_token, mono: true }] : []),
+								{ label: 'Vaults', render: vaultsValue }
+							]}
+						/>
 					</div>
+					<div class="space-y-3 border-t border-line-subtle pt-5">
+						<h3 class="text-sm font-semibold text-fg">Task lifecycle limits</h3>
+						<KeyValue
+							columns={3}
+							items={[
+								{ label: 'Max retry', value: d.limits?.max_retry },
+								{ label: 'TTL completed', value: d.limits?.ttl_completed },
+								{ label: 'TTL archived', value: d.limits?.ttl_archived },
+								{ label: 'Pending timeout', value: d.limits?.pending_timeout },
+								{ label: 'Active timeout', value: d.limits?.active_timeout }
+							].map((l) =>
+								l.value !== undefined && l.value !== ''
+									? { label: l.label, value: l.value, mono: true }
+									: { label: l.label, value: 'server default' }
+							)}
+						/>
+					</div>
+				{:else}
+					<p class="text-ui text-fg-subtle">No deployment configured.</p>
+				{/if}
+				<div class="flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-line-subtle pt-4 text-xs text-fg-subtle">
+					<span>Created {formatDateTime(new Date(cfg.created_at * 1000))}</span>
+					<span>Updated {formatDateTime(new Date(cfg.updated_at * 1000))}</span>
 				</div>
 			{/if}
-		</div>
+		</Panel>
 	{/if}
 
-	<!-- Tabs -->
-	<div class="flex items-center gap-1 border-b border-surface-300 dark:border-surface-600 overflow-x-auto scrollbar-thin">
-		{#each tabs as tab}
-			<button
-				type="button"
-				class="shrink-0 whitespace-nowrap px-4 py-2 font-medium text-sm border-b-2 transition-colors {activeTab === tab.state
-					? 'border-primary-500 text-primary-500'
-					: 'border-transparent text-surface-500 hover:text-surface-900 dark:hover:text-surface-100'}"
-				onclick={() => (activeTab = tab.state)}
-			>
-				{tab.label}
-				<span
-					class="ml-2 px-2 py-0.5 rounded-full text-xs {activeTab === tab.state
-						? 'bg-primary-500 text-white'
-						: 'bg-surface-200 dark:bg-surface-700'}"
-				>
-					{formatNumber(taskCounts[tab.state])}
-				</span>
-			</button>
-		{/each}
+	<div class="space-y-4">
+		<Tabs items={tabItems} bind:value={activeTab} />
+
+		<!-- Error State -->
+		{#if error}
+			<Callout>
+				{error}
+			</Callout>
+		{/if}
+
+		<Panel flush class="overflow-hidden" footer={totalPages > 1 ? pager : undefined}>
+			<!-- Bulk Actions -->
+			{#if selectedIds.size > 0 || taskCounts[activeTab] > 0}
+				<div class="flex flex-wrap items-center gap-2 px-4 md:px-5 py-2.5 border-b border-line-subtle bg-raised">
+					{#if selectedIds.size > 0}
+						<span class="text-ui text-fg-muted tabular-nums">{selectedIds.size} selected</span>
+						<div class="h-4 w-px bg-line" aria-hidden="true"></div>
+					{/if}
+
+					{#if canBulkRun}
+						<Button
+							size="sm"
+							variant="secondary"
+							icon={Play}
+							onclick={selectedIds.size > 0 ? handleBulkRun : handleRunAll}
+						>
+							{selectedIds.size > 0 ? 'Run Selected' : 'Run All'}
+						</Button>
+					{/if}
+
+					{#if canBulkArchive}
+						<Button
+							size="sm"
+							variant="ghost"
+							icon={Archive}
+							onclick={selectedIds.size > 0 ? handleBulkArchive : handleArchiveAll}
+						>
+							{selectedIds.size > 0 ? 'Archive Selected' : 'Archive All'}
+						</Button>
+					{/if}
+
+					{#if canBulkDelete}
+						<Button
+							size="sm"
+							variant="ghost"
+							icon={Trash2}
+							class="rq-btn-danger-hover"
+							onclick={selectedIds.size > 0 ? handleBulkDelete : handleDeleteAll}
+						>
+							{selectedIds.size > 0 ? 'Delete Selected' : 'Delete All'}
+						</Button>
+					{/if}
+				</div>
+			{/if}
+
+			<TaskTable
+				{tasks}
+				taskState={activeTab}
+				{loading}
+				{selectedIds}
+				onselect={handleSelect}
+				onselectall={handleSelectAll}
+				onaction={handleTaskAction}
+			/>
+
+		</Panel>
 	</div>
+</div>
 
-	<!-- Bulk Actions -->
-	{#if selectedIds.size > 0 || taskCounts[activeTab] > 0}
-		<div class="flex items-center gap-3 p-3 rounded-lg bg-surface-100 dark:bg-surface-800">
-			{#if selectedIds.size > 0}
-				<span class="text-sm text-surface-500">{selectedIds.size} selected</span>
-				<div class="h-4 w-px bg-surface-300 dark:bg-surface-600"></div>
-			{/if}
-
-			{#if canBulkRun}
-				<button
-					type="button"
-					class="btn btn-sm preset-outlined-success-500"
-					onclick={selectedIds.size > 0 ? handleBulkRun : handleRunAll}
-				>
-					{selectedIds.size > 0 ? 'Run Selected' : 'Run All'}
-				</button>
-			{/if}
-
-			{#if canBulkArchive}
-				<button
-					type="button"
-					class="btn btn-sm preset-outlined-surface-500"
-					onclick={selectedIds.size > 0 ? handleBulkArchive : handleArchiveAll}
-				>
-					{selectedIds.size > 0 ? 'Archive Selected' : 'Archive All'}
-				</button>
-			{/if}
-
-			{#if canBulkDelete}
-				<button
-					type="button"
-					class="btn btn-sm preset-outlined-error-500"
-					onclick={selectedIds.size > 0 ? handleBulkDelete : handleDeleteAll}
-				>
-					{selectedIds.size > 0 ? 'Delete Selected' : 'Delete All'}
-				</button>
-			{/if}
-		</div>
-	{/if}
-
-	<!-- Error State -->
-	{#if error}
-		<div class="card preset-outlined-error-500 p-4">
-			<p class="text-error-500">{error}</p>
-		</div>
-	{/if}
-
-	<!-- Task Table -->
-	<TaskTable
-		{tasks}
-		taskState={activeTab}
-		{loading}
-		{selectedIds}
-		onselect={handleSelect}
-		onselectall={handleSelectAll}
-		onaction={handleTaskAction}
-	/>
-
-	<!-- Pagination -->
-	{#if totalPages > 1}
-		<div class="flex items-center justify-between">
-			<span class="text-sm text-surface-400">
-				Page {currentPage} of {totalPages} &middot; {taskCounts[activeTab]} tasks
+{#snippet pager()}
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<span class="text-ui text-fg-subtle tabular-nums">
+				Page {currentPage} of {totalPages} &middot; {formatNumber(taskCounts[activeTab])} tasks
 			</span>
 			<div class="flex items-center gap-2">
-				<button
-					type="button"
-					class="rq-btn-ghost"
+				<Button
+					variant="ghost"
+					size="sm"
+					icon={ChevronLeft}
 					disabled={currentPage <= 1}
 					onclick={() => goToPage(currentPage - 1)}
 				>
-					&larr; Previous
-				</button>
-				<button
-					type="button"
-					class="rq-btn-ghost"
+					Previous
+				</Button>
+				<Button
+					variant="ghost"
+					size="sm"
 					disabled={currentPage >= totalPages}
 					onclick={() => goToPage(currentPage + 1)}
 				>
-					Next &rarr;
-				</button>
+					Next
+					<ChevronRight size={14} strokeWidth={1.75} />
+				</Button>
 			</div>
 		</div>
-	{/if}
-</div>
+{/snippet}
 
 <ConfirmDialog
 	bind:open={confirmDialog.open}
@@ -622,3 +658,47 @@
 	confirmText="Delete"
 	onconfirm={confirmDialog.action}
 />
+
+{#snippet ascRow(label: string, value: Snippet<[AutoscaleConfig]>, asc: AutoscaleConfig)}
+	<li class="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 md:px-5 py-2.5 text-ui">
+		<span class="w-24 shrink-0 text-fg-subtle">{label}</span>
+		<span class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 text-fg-muted">{@render value(asc)}</span>
+	</li>
+{/snippet}
+
+	{#snippet provider(asc: AutoscaleConfig)}
+		<span class="font-medium text-fg">{asc.provider || '—'}</span>
+		{#if !$autoscaleStore.featureDisabled}
+			{#if !autoscaleProvider}
+				<Badge tone="danger" title="No provider with this name is registered">unknown provider</Badge>
+			{:else}
+				<span class="text-fg-subtle">{autoscaleProvider.provider_type}</span>
+				{#if autoscaleProvider.provider_type === 'mock'}
+					<Badge tone="warning" title="The mock provider rents no machine: no worker will ever boot">mock: boots nothing</Badge>
+				{/if}
+				{#if !autoscaleProvider.enabled}<Badge tone="warning">provider disabled</Badge>{/if}
+			{/if}
+		{/if}
+	{/snippet}
+	{#snippet workersRange(asc: AutoscaleConfig)}
+		<span><span class="text-fg">{autoscaleInstances.length}</span> live · {asc.min_workers}–{asc.max_workers}</span>
+		{#if asc.boot_timeout}<span class="text-fg-subtle">boot timeout {asc.boot_timeout}</span>{/if}
+	{/snippet}
+	{#snippet scaleUp(asc: AutoscaleConfig)}
+		{#each asc.scale_up ?? [] as t, i (i)}<span>{describeTrigger(t, 'up')}</span>{:else}<span class="text-fg-faint">—</span>{/each}
+	{/snippet}
+	{#snippet scaleDown(asc: AutoscaleConfig)}
+		{#each asc.scale_down ?? [] as t, i (i)}<span>{describeTrigger(t, 'down')}</span>{:else}<span class="text-fg-faint">—</span>{/each}
+	{/snippet}
+	{#snippet instanceSpec(asc: AutoscaleConfig)}
+		{#each describeInstance(asc) as part, i (i)}<span class={i === 0 ? 'text-fg' : ''}>{part}</span>{:else}<span class="text-fg-subtle">provider defaults</span>{/each}
+	{/snippet}
+	{#snippet liveInstances(asc: AutoscaleConfig)}
+		{#each autoscaleInstances as inst (inst.instance_id)}
+			<span class="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+				<span class="font-mono text-fg whitespace-nowrap" title={inst.instance_id}>{inst.instance_id.slice(0, 11)}…</span>
+				<Badge status={instanceStatus(inst.status, inst.worker_id)} />
+				{#if inst.gpu}<span class="text-fg-subtle whitespace-nowrap">{inst.gpu}</span>{/if}
+			</span>
+		{/each}
+	{/snippet}

@@ -1,102 +1,265 @@
 @import 'tailwindcss';
-@import '@skeletonlabs/skeleton/themes/cerberus';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
 @import '@skeletonlabs/skeleton';
+@import '@skeletonlabs/skeleton-svelte';
+@import './lib/theme/runqy.css';
 
-/* Key the `dark:` variant (and Skeleton's @variant dark blocks, e.g. color-scheme for
-   light-dark() pairings) to the .dark class instead of the OS preference. The class is
-   hardcoded on <html> in app.html — the dashboard is dark-only. */
+/* Key the `dark:` variant (and Skeleton's light-dark pairings) to the .dark class that is
+   hardcoded on <html> in app.html: the dashboard is dark-only. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Fonts loaded in app.html (Google Fonts) — referenced by Tailwind utilities and theme tokens. */
+/* =====================================================================================
+   Design tokens
+   -------------------------------------------------------------------------------------
+   Use the semantic utilities in new code: bg-canvas / bg-panel / bg-raised / bg-overlay,
+   border-line-subtle / border-line / border-line-strong, text-fg / text-fg-muted /
+   text-fg-subtle / text-fg-faint. Colour = meaning: primary is the only interactive hue;
+   success / warning / error are reserved for data status.
+   ===================================================================================== */
 @theme {
-	--font-sans: 'Inter', system-ui, sans-serif;
-	--font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', monospace;
+	--font-sans: 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+	--font-mono: 'Geist Mono Variable', ui-monospace, 'Cascadia Mono', monospace;
+
+	/* Type scale: 11 / 12 / 13 / 14 (base) / 16 / 20 / 24 */
+	--text-2xs: 0.6875rem;
+	--text-2xs--line-height: 1rem;
+	--text-ui: 0.8125rem;
+	--text-ui--line-height: 1.25rem;
+
+	/* Surfaces, from back to front */
+	--color-canvas: #09090b;
+	--color-panel: #0f0f12;
+	--color-raised: #16161a;
+	--color-overlay: #1c1c21;
+	--color-hover: rgb(255 255 255 / 0.04);
+	--color-pressed: rgb(255 255 255 / 0.07);
+
+	/* Borders */
+	--color-line-subtle: rgb(255 255 255 / 0.06);
+	--color-line: rgb(255 255 255 / 0.09);
+	--color-line-strong: rgb(255 255 255 / 0.15);
+
+	/* Text */
+	--color-fg: #ededef;
+	--color-fg-muted: #a1a1aa;
+	--color-fg-subtle: #71717a;
+	--color-fg-faint: #52525b;
+
+	--ease-out-soft: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+	--animate-fade-in: rq-fade-in 180ms var(--ease-out-soft) both;
+	--animate-shimmer: rq-shimmer 1.4s ease-in-out infinite;
 }
 
-/* ============================================
-   Runqy Brand Tokens
-   ============================================ */
 :root {
-	--runqy-primary: #3B82F6;
-	--runqy-accent: #3DCFBC;
-	--runqy-bg-dark: #0a0a0f;
-	--runqy-border-subtle: rgba(255,255,255,0.09);
-	--runqy-border-default: rgba(255,255,255,0.12);
-
-	/* Skeleton (Cerberus) theme overrides */
-	--base-font-family: var(--font-sans);
-	--heading-font-family: var(--font-sans);
-	--text-scaling: 1;
-	--radius-base: 0.375rem;
-	--radius-container: 0.75rem;
+	--dur-fast: 120ms;
+	--dur-base: 180ms;
+	--dur-slow: 240ms;
+	--shadow-overlay: 0 0 0 1px rgb(255 255 255 / 0.06), 0 4px 12px rgb(0 0 0 / 0.35),
+		0 20px 48px -12px rgb(0 0 0 / 0.7);
 }
 
-/* ============================================
-   Dark Theme Surface Overrides
-   ============================================
-   Page background stays near-black (#0a0a0f); cards sit on surface-800,
-   lifted well above it. 400/500 are text grays — 400 = secondary text
-   (labels, subtitles), 500 = muted text (hints, timestamps) only. */
-.dark {
-	--color-surface-900: #0a0a0f;
-	--color-surface-800: #15151d;
-	--color-surface-700: #1d1d27;
-	--color-surface-500: #7e7e8f;
-	--color-surface-400: #a5a5b5;
-}
-
-body {
-	font-variant-numeric: tabular-nums;
-}
-
-/* ============================================
-   Layout
-   ============================================ */
-.main-content {
-	background: var(--runqy-bg-dark);
-}
-
-.rq-page {
-	padding: 1rem;
-	max-width: 1440px;
-	margin: 0 auto;
-}
-
-@media (min-width: 768px) {
-	.rq-page {
-		padding: 2rem 2.5rem;
+@keyframes rq-fade-in {
+	from {
+		opacity: 0;
+		transform: translateY(2px);
+	}
+	to {
+		opacity: 1;
+		transform: none;
 	}
 }
 
-.rq-page-header {
-	padding-bottom: 1.5rem;
-	border-bottom: 1px solid var(--runqy-border-subtle);
-	margin-bottom: 2rem;
-}
-
-.rq-page-title {
-	font-size: 1.25rem;
-	font-weight: 700;
-	letter-spacing: -0.01em;
-}
-
-@media (min-width: 768px) {
-	.rq-page-title {
-		font-size: 1.5rem;
+@keyframes rq-shimmer {
+	0% {
+		background-position: 100% 0;
+	}
+	100% {
+		background-position: 0 0;
 	}
 }
 
-/* Card headings (text-lg utilities on h2/h3/h4) are oversized on phones —
-   this unlayered rule wins over Tailwind's layered utilities. */
+@keyframes rq-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* =====================================================================================
+   Base
+   ===================================================================================== */
+@layer base {
+	html {
+		background: var(--color-canvas);
+		color-scheme: dark;
+	}
+
+	body {
+		background: var(--color-canvas);
+		color: var(--color-fg);
+		font-family: var(--font-sans);
+		font-size: 0.875rem;
+		line-height: 1.5;
+		font-variant-numeric: tabular-nums;
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+		text-rendering: optimizeLegibility;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4 {
+		letter-spacing: -0.01em;
+	}
+
+	code,
+	kbd,
+	pre,
+	samp {
+		font-family: var(--font-mono);
+		font-size: 0.92em;
+	}
+
+	::selection {
+		background: rgb(76 130 247 / 0.35);
+		color: #fff;
+	}
+
+	/* Keyboard focus only: mouse clicks stay clean. */
+	:focus-visible {
+		outline: 2px solid var(--color-primary-500);
+		outline-offset: 2px;
+	}
+
+	* {
+		scrollbar-width: thin;
+		scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+	}
+
+	::-webkit-scrollbar {
+		width: 8px;
+		height: 8px;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background: rgb(255 255 255 / 0.12);
+		border-radius: 9999px;
+		border: 2px solid transparent;
+		background-clip: content-box;
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}
+
+/* =====================================================================================
+   Form controls (Skeleton utilities, re-tuned). Unlayered so they win over Skeleton's
+   utility layer; they only touch visuals, never layout, so page utilities still apply.
+   ===================================================================================== */
+.input,
+.select,
+.textarea {
+	background-color: var(--color-raised);
+	--tw-ring-color: var(--color-line-strong);
+	color: var(--color-fg);
+	font-size: 0.875rem;
+	transition:
+		box-shadow var(--dur-fast) ease,
+		background-color var(--dur-fast) ease;
+}
+
+.input,
+.select {
+	min-height: 2rem;
+}
+
+.input:hover,
+.select:hover,
+.textarea:hover {
+	--tw-ring-color: rgb(255 255 255 / 0.22);
+}
+
+.input:focus,
+.select:focus,
+.textarea:focus,
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+	--tw-ring-color: var(--color-primary-500);
+	outline: none;
+}
+
+/* Custom chevron: Skeleton keeps the native arrow, which forbids inline padding. */
+select.select:not([multiple]):not([size]) {
+	appearance: none;
+	padding-left: 0.625rem;
+	padding-right: 2rem;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 0.625rem center;
+	background-size: 0.875rem;
+	cursor: pointer;
+}
+
+select.select option {
+	background: var(--color-raised);
+	color: var(--color-fg);
+}
+
+.input::placeholder,
+.textarea::placeholder {
+	color: var(--color-fg-faint);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+	opacity: 0.5;
+}
+
+.label-text {
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--color-fg-muted);
+}
+
+/* Phones: one 36px control height (touch), and fields at 16px so iOS does not zoom in. */
 @media (max-width: 767px) {
-	.rq-card h2,
-	.rq-card h3 {
-		font-size: 1rem;
+	.input,
+	.select {
+		min-height: 2.25rem;
+	}
+
+	.rq-btn {
+		height: 2.25rem;
+	}
+
+	.rq-btn-icon {
+		width: 2.25rem;
+	}
+
+	.rq-btn-sm {
+		height: 2rem;
+	}
+
+	.rq-btn-icon.rq-btn-sm {
+		width: 2rem;
 	}
 }
 
-/* iOS auto-zooms any focused field with a font-size below 16px — keep form
-   controls at 16px on small screens to prevent the viewport from jumping. */
 @media (max-width: 767px) {
 	input,
 	select,
@@ -108,149 +271,265 @@ body {
 	}
 }
 
-.rq-page-subtitle {
-	font-size: 0.875rem;
-	color: var(--color-surface-400);
-	margin-top: 0.25rem;
-}
-
-/* ============================================
-   Cards
-   ============================================ */
-.rq-card {
-	background: var(--color-surface-800);
-	border: 1px solid var(--runqy-border-subtle);
-	border-radius: 0.75rem;
-	/* Inset top highlight simulates elevation on dark backgrounds. */
-	box-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 1px 3px rgba(0,0,0,0.35), 0 1px 2px rgba(0,0,0,0.25);
-}
-
-.rq-card-interactive {
-	transition: border-color 150ms ease, box-shadow 150ms ease;
-	cursor: pointer;
-}
-
-.rq-card-interactive:hover {
-	border-color: rgba(59,130,246,0.35);
-	box-shadow: 0 4px 12px rgba(59,130,246,0.08), 0 1px 3px rgba(0,0,0,0.3);
-}
-
-/* Metric sub-boxes inside cards */
-.rq-metric-box {
-	padding: 0.75rem;
-	border-radius: 0.5rem;
-	background: rgba(255,255,255,0.03);
-	border: 1px solid var(--runqy-border-subtle);
-}
-
-/* ============================================
-   Section Titles
-   ============================================ */
-.rq-section-title {
-	font-size: 0.7rem;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.08em;
-	color: var(--color-surface-400);
-}
-
-/* ============================================
-   Pills (Filter Buttons)
-   ============================================ */
-.rq-pill {
+/* =====================================================================================
+   Buttons: .rq-btn + one variant (+ optional size). Used by ui/Button.svelte.
+   ===================================================================================== */
+.rq-btn {
 	display: inline-flex;
 	align-items: center;
-	padding: 0.375rem 0.875rem;
+	justify-content: center;
+	gap: 0.375rem;
+	height: 2rem;
+	padding: 0 0.75rem;
+	border: 1px solid transparent;
+	border-radius: 0.375rem;
 	font-size: 0.8125rem;
 	font-weight: 500;
-	border-radius: 9999px;
-	border: 1px solid var(--runqy-border-default);
-	background: transparent;
-	color: var(--color-surface-400);
-	transition: all 150ms ease;
+	line-height: 1;
+	white-space: nowrap;
+	user-select: none;
 	cursor: pointer;
+	transition:
+		background-color var(--dur-fast) ease,
+		border-color var(--dur-fast) ease,
+		color var(--dur-fast) ease,
+		box-shadow var(--dur-fast) ease;
 }
 
-.rq-pill:hover {
-	border-color: rgba(255,255,255,0.15);
-	color: var(--color-surface-200);
-}
-
-.rq-pill-active {
-	display: inline-flex;
-	align-items: center;
-	padding: 0.375rem 0.875rem;
-	font-size: 0.8125rem;
-	font-weight: 500;
-	border-radius: 9999px;
-	border: 1px solid rgba(59,130,246,0.4);
-	background: rgba(59,130,246,0.1);
-	color: #60a5fa;
-	cursor: pointer;
-}
-
-/* ============================================
-   Buttons
-   ============================================ */
-.rq-btn-primary {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	padding: 0.5rem 1rem;
-	font-size: 0.875rem;
-	font-weight: 500;
-	border-radius: 0.5rem;
-	background: var(--runqy-primary);
-	color: white;
-	border: none;
-	cursor: pointer;
-	transition: background 150ms ease, box-shadow 150ms ease;
-}
-
-.rq-btn-primary:hover {
-	background: #2563EB;
-	box-shadow: 0 2px 8px rgba(59,130,246,0.25);
-}
-
-.rq-btn-ghost {
-	display: inline-flex;
-	align-items: center;
-	gap: 0.5rem;
-	padding: 0.5rem 0.75rem;
-	font-size: 0.875rem;
-	font-weight: 500;
-	border-radius: 0.5rem;
-	background: transparent;
-	color: var(--color-surface-400);
-	border: 1px solid var(--runqy-border-default);
-	cursor: pointer;
-	transition: all 150ms ease;
-}
-
-.rq-btn-ghost:hover {
-	border-color: rgba(255,255,255,0.15);
-	color: var(--color-surface-200);
-	background: rgba(255,255,255,0.03);
-}
-
-.rq-btn-ghost:disabled {
-	opacity: 0.4;
+.rq-btn:disabled,
+.rq-btn[aria-disabled='true'] {
+	opacity: 0.5;
 	pointer-events: none;
 }
 
-/* ============================================
+.rq-btn svg {
+	width: 1rem;
+	height: 1rem;
+	flex-shrink: 0;
+}
+
+.rq-btn-sm {
+	height: 1.75rem;
+	padding: 0 0.625rem;
+	font-size: 0.75rem;
+}
+
+.rq-btn-sm svg {
+	width: 0.875rem;
+	height: 0.875rem;
+}
+
+.rq-btn-icon {
+	width: 2rem;
+	padding: 0;
+}
+
+.rq-btn-icon.rq-btn-sm {
+	width: 1.75rem;
+}
+
+.rq-btn-v-primary {
+	background: var(--color-primary-500);
+	color: #fff;
+	box-shadow:
+		inset 0 1px 0 rgb(255 255 255 / 0.14),
+		0 1px 2px rgb(0 0 0 / 0.3);
+}
+
+.rq-btn-v-primary:hover {
+	background: color-mix(in oklab, var(--color-primary-500), white 9%);
+}
+
+.rq-btn-v-primary:active {
+	background: var(--color-primary-600);
+}
+
+.rq-btn-v-secondary {
+	background: var(--color-raised);
+	border-color: var(--color-line);
+	color: var(--color-fg);
+}
+
+.rq-btn-v-secondary:hover {
+	background: var(--color-overlay);
+	border-color: var(--color-line-strong);
+}
+
+.rq-btn-v-ghost {
+	background: transparent;
+	color: var(--color-fg-muted);
+}
+
+.rq-btn-v-ghost:hover {
+	background: var(--color-hover);
+	color: var(--color-fg);
+}
+
+.rq-btn-v-ghost:active {
+	background: var(--color-pressed);
+}
+
+/* Destructive confirmation only (dialogs). Row-level deletes are ghost buttons that turn
+   red on hover: .rq-btn-v-ghost.rq-btn-danger-hover */
+.rq-btn-v-danger {
+	background: var(--color-error-600);
+	color: #fff;
+	box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
+}
+
+.rq-btn-v-danger:hover {
+	background: var(--color-error-500);
+}
+
+.rq-btn-danger-hover:hover {
+	color: var(--color-error-300);
+	background: rgb(242 85 90 / 0.1);
+}
+
+/* =====================================================================================
+   Badges: .rq-badge + one tone. Used by ui/Badge.svelte.
+   ===================================================================================== */
+.rq-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	height: 1.25rem;
+	padding: 0 0.5rem;
+	border: 1px solid transparent;
+	border-radius: 0.375rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+	line-height: 1;
+	white-space: nowrap;
+}
+
+.rq-badge-dot {
+	width: 0.375rem;
+	height: 0.375rem;
+	border-radius: 9999px;
+	background: currentColor;
+	flex-shrink: 0;
+}
+
+.rq-badge-neutral {
+	background: rgb(255 255 255 / 0.06);
+	color: var(--color-fg-muted);
+}
+
+.rq-badge-accent {
+	background: rgb(76 130 247 / 0.14);
+	color: var(--color-primary-300);
+}
+
+.rq-badge-success {
+	background: rgb(63 185 80 / 0.13);
+	color: var(--color-success-300);
+}
+
+.rq-badge-warning {
+	background: rgb(210 153 34 / 0.15);
+	color: var(--color-warning-300);
+}
+
+.rq-badge-danger {
+	background: rgb(242 85 90 / 0.14);
+	color: var(--color-error-300);
+}
+
+.rq-badge-outline {
+	background: transparent;
+	border-color: var(--color-line);
+	color: var(--color-fg-muted);
+}
+
+/* =====================================================================================
+   Layout
+   ===================================================================================== */
+.main-content {
+	background: var(--color-canvas);
+}
+
+.rq-page {
+	width: 100%;
+	max-width: 1280px;
+	margin: 0 auto;
+	padding: 1rem;
+}
+
+@media (min-width: 768px) {
+	.rq-page {
+		padding: 1.75rem 2rem 3rem;
+	}
+}
+
+.rq-page-title {
+	font-size: 1.375rem;
+	line-height: 1.875rem;
+	font-weight: 600;
+	letter-spacing: -0.015em;
+	color: var(--color-fg);
+}
+
+.rq-page-subtitle {
+	font-size: 0.8125rem;
+	color: var(--color-fg-muted);
+	margin-top: 0.125rem;
+}
+
+/* =====================================================================================
+   Panels / cards
+   ===================================================================================== */
+.rq-card {
+	background: var(--color-panel);
+	border: 1px solid var(--color-line);
+	border-radius: 0.5rem;
+}
+
+@media (min-width: 768px) {
+	.rq-metric-box {
+		padding: 0.75rem;
+	}
+}
+
+.rq-card-interactive {
+	cursor: pointer;
+	transition:
+		border-color var(--dur-fast) ease,
+		background-color var(--dur-fast) ease;
+}
+
+.rq-card-interactive:hover {
+	background: color-mix(in oklab, var(--color-panel), white 2%);
+	border-color: var(--color-line-strong);
+}
+
+.rq-metric-box {
+	padding: 0.5rem 0.625rem;
+	border-radius: 0.375rem;
+	background: rgb(255 255 255 / 0.02);
+	border: 1px solid var(--color-line-subtle);
+}
+
+/* =====================================================================================
    Tables
-   ============================================ */
-/* Every table sits in a .table-container: scroll horizontally inside the card
-   instead of overflowing the page on narrow screens. */
+   ===================================================================================== */
+/* Tables scroll horizontally inside their container instead of the page. */
 .table-container {
+	/* Positioned so absolutely placed children (sr-only labels) are clipped too. */
+	position: relative;
 	overflow-x: auto;
-	scrollbar-width: thin;
 	-webkit-overflow-scrolling: touch;
 }
 
 .table-container > table {
 	min-width: 640px;
+}
+
+/* Tables that hide columns on mobile instead of scrolling (TaskTable). */
+@media (max-width: 767px) {
+	.table-container > table.rq-table-fluid {
+		min-width: 0;
+	}
 }
 
 .rq-table {
@@ -259,74 +538,87 @@ body {
 }
 
 .rq-table thead th {
-	font-size: 0.7rem;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: 0.06em;
-	color: var(--color-surface-400);
-	padding: 0.75rem 1rem;
-	border-bottom: 1px solid var(--runqy-border-default);
+	height: 2.25rem;
+	padding: 0 0.75rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--color-fg-subtle);
+	border-bottom: 1px solid var(--color-line);
 	text-align: left;
+	white-space: nowrap;
+}
+
+.rq-table thead th.text-right {
+	text-align: right;
+}
+
+.rq-table tbody td.font-mono,
+.rq-table tbody td .font-mono {
+	white-space: nowrap;
 }
 
 .rq-table tbody td {
-	padding: 0.75rem 1rem;
-	border-bottom: 1px solid var(--runqy-border-subtle);
-	font-size: 0.875rem;
+	padding: 0.5rem 0.75rem;
+	font-size: 0.8125rem;
+	border-bottom: 1px solid var(--color-line-subtle);
+}
+
+.rq-table tbody tr {
+	transition: background-color var(--dur-fast) ease;
 }
 
 .rq-table tbody tr:hover {
-	background: rgba(255,255,255,0.04);
+	background: var(--color-hover);
 }
 
-/* ============================================
-   Sidebar
-   ============================================ */
+/* =====================================================================================
+   Sidebar navigation (lib/components/Sidebar.svelte)
+   ===================================================================================== */
 .rq-sidebar {
-	background: var(--color-surface-800);
-	border-right: 1px solid var(--runqy-border-subtle);
+	background: var(--color-panel);
+	border-right: 1px solid var(--color-line-subtle);
 }
 
-.rq-sidebar-nav-item {
+.rq-nav-item {
 	display: flex;
 	align-items: center;
-	gap: 1rem;
-	padding: 0.75rem 1.25rem;
-	border-radius: 0.5rem;
-	border-left: 3px solid transparent;
-	color: var(--color-surface-400);
+	gap: 0.625rem;
+	height: 2rem;
+	padding: 0 0.625rem;
+	border-radius: 0.375rem;
+	font-size: 0.8125rem;
 	font-weight: 500;
-	font-size: 0.9375rem;
-	transition: all 150ms ease;
+	color: var(--color-fg-muted);
 	text-decoration: none;
+	cursor: pointer;
+	transition:
+		background-color var(--dur-fast) ease,
+		color var(--dur-fast) ease;
 }
 
-.rq-sidebar-nav-item:hover {
-	color: var(--color-surface-200);
-	background: rgba(255,255,255,0.04);
+.rq-nav-item:hover {
+	color: var(--color-fg);
+	background: var(--color-hover);
 }
 
-.rq-sidebar-nav-item-active {
-	display: flex;
-	align-items: center;
-	gap: 1rem;
-	padding: 0.75rem 1.25rem;
-	border-radius: 0.5rem;
-	border-left: 3px solid var(--runqy-primary);
-	color: white;
-	background: rgba(59,130,246,0.08);
-	font-weight: 500;
-	font-size: 0.9375rem;
-	text-decoration: none;
+.rq-nav-item-active,
+.rq-nav-item-active:hover {
+	color: var(--color-fg);
+	background: var(--color-raised);
+	box-shadow: inset 0 0 0 1px var(--color-line-subtle);
 }
 
-/* ============================================
-   Progress Bars
-   ============================================ */
+.rq-nav-item-active svg {
+	color: var(--color-primary-400);
+}
+
+/* =====================================================================================
+   Progress bars, shimmer loaders, spinner
+   ===================================================================================== */
 .rq-progress-track {
 	width: 100%;
-	height: 0.375rem;
-	background: rgba(255,255,255,0.06);
+	height: 0.25rem;
+	background: rgb(255 255 255 / 0.07);
 	border-radius: 9999px;
 	overflow: hidden;
 }
@@ -334,78 +626,503 @@ body {
 .rq-progress-bar {
 	height: 100%;
 	border-radius: 9999px;
-	transition: width 300ms ease;
+	transition: width var(--dur-slow) var(--ease-out-soft);
 }
 
-/* ============================================
-   Empty States
-   ============================================ */
-.rq-empty-state {
-	display: flex;
-	flex-direction: column;
-	align-items: center;
-	justify-content: center;
-	padding: 3rem 2rem;
-	text-align: center;
+.rq-skeleton {
+	border-radius: 0.25rem;
+	background: linear-gradient(
+		90deg,
+		rgb(255 255 255 / 0.04) 25%,
+		rgb(255 255 255 / 0.08) 37%,
+		rgb(255 255 255 / 0.04) 63%
+	);
+	background-size: 400% 100%;
+	animation: var(--animate-shimmer);
 }
 
-.rq-empty-state svg {
-	opacity: 0.3;
-	margin-bottom: 1rem;
+.rq-spin {
+	animation: rq-spin 0.8s linear infinite;
 }
 
-/* ============================================
-   Scrollbar styles
-   ============================================ */
-.scrollbar-thin {
-	scrollbar-width: thin;
-}
-
-.scrollbar-thin::-webkit-scrollbar {
-	width: 6px;
-	height: 6px;
-}
-
-.scrollbar-thin::-webkit-scrollbar-track {
-	background: transparent;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb {
-	background-color: var(--color-surface-400);
-	border-radius: 3px;
-}
-
-/* JSON Viewer — two hues max: keys in accent blue, literals in brand teal, strings neutral. */
+/* JSON viewer: keys in accent, literals neutral-bright, null faint. */
 .json-key {
-	color: var(--color-primary-400);
+	color: var(--color-primary-300);
 }
 
 .json-string {
-	color: var(--color-surface-200);
+	color: var(--color-fg);
 }
 
-.json-number {
-	color: var(--runqy-accent);
-}
-
+.json-number,
 .json-boolean {
-	color: var(--runqy-accent);
+	color: var(--color-warning-300);
 }
 
 .json-null {
-	color: var(--color-surface-500);
+	color: var(--color-fg-subtle);
 }
 
-/* ============================================
-   Charts (layerchart axis labels fix for dark theme)
-   ============================================ */
-
-/* Refresh button animation */
-@keyframes spin {
-	from { transform: rotate(0deg); }
-	to { transform: rotate(360deg); }
+/* =====================================================================================
+   Live indicator, stat strip, "more" links
+   ===================================================================================== */
+.rq-live {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.5rem;
+	height: 1.75rem;
+	padding: 0 0.625rem;
+	border-radius: 9999px;
+	border: 1px solid var(--color-line);
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--color-fg-muted);
+	cursor: pointer;
+	transition:
+		background-color var(--dur-fast) ease,
+		border-color var(--dur-fast) ease;
 }
 
-.refresh-spinning svg {
-	animation: spin 0.5s ease-in-out;
+.rq-live:hover {
+	background: var(--color-hover);
+	border-color: var(--color-line-strong);
+}
+
+.rq-live-dot {
+	position: relative;
+	width: 0.4375rem;
+	height: 0.4375rem;
+	border-radius: 9999px;
+	background: var(--color-fg-faint);
+}
+
+.rq-live-live .rq-live-dot {
+	background: var(--color-success-500);
+}
+
+/* Soft pulse while live: a ring that fades out, not a blinking dot. */
+.rq-live-live .rq-live-dot::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: 9999px;
+	background: var(--color-success-500);
+	animation: rq-live-pulse 2.4s ease-out infinite;
+}
+
+.rq-live-failing {
+	color: var(--color-warning-300);
+	border-color: rgb(210 153 34 / 0.35);
+}
+
+.rq-live-failing .rq-live-dot,
+.rq-live-stale .rq-live-dot {
+	background: var(--color-warning-500);
+}
+
+/* use:flash: a value changed during auto-refresh. */
+.rq-flash {
+	animation: rq-flash 600ms var(--ease-out-soft);
+	border-radius: 4px;
+}
+
+@keyframes rq-flash {
+	from {
+		background-color: color-mix(in oklab, var(--color-primary-500) 18%, transparent);
+	}
+	to {
+		background-color: transparent;
+	}
+}
+
+@keyframes rq-live-pulse {
+	0% {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	70%,
+	100% {
+		transform: scale(2.6);
+		opacity: 0;
+	}
+}
+
+/* Figures separated by hairlines, without a box each. */
+.rq-stat {
+	min-width: 0;
+	padding: 0.5rem 0.75rem;
+	border-color: var(--color-line-subtle);
+	display: block;
+}
+
+.rq-stat-link {
+	border-radius: 0.375rem;
+	transition: background-color var(--dur-fast) ease;
+}
+
+.rq-stat-link:hover {
+	background: var(--color-hover);
+}
+
+@media (max-width: 767px) {
+	.rq-stat-strip {
+		row-gap: 0.25rem;
+	}
+}
+
+@media (min-width: 768px) {
+	.rq-stat-strip > .rq-stat {
+		flex: 1 1 0;
+		padding: 0.25rem 1.25rem;
+	}
+
+	.rq-stat-strip > .rq-stat + .rq-stat {
+		border-left-width: 1px;
+	}
+
+	.rq-stat-strip > .rq-stat:first-child {
+		padding-left: 0;
+	}
+
+	.rq-card.rq-stat-strip {
+		padding: 0.875rem 0.25rem;
+	}
+
+	.rq-card.rq-stat-strip > .rq-stat:first-child {
+		padding-left: 1.25rem;
+	}
+}
+
+.rq-card.rq-stat-strip {
+	padding: 0.5rem 0.25rem;
+}
+
+.rq-more-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.25rem;
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--color-primary-400);
+	transition: color var(--dur-fast) ease;
+}
+
+.rq-more-link:hover {
+	color: var(--color-primary-300);
+}
+
+.rq-more-link svg {
+	transition: transform var(--dur-fast) ease;
+}
+
+.rq-more-link:hover svg {
+	transform: translateX(2px);
+}
+
+/* =====================================================================================
+   ui/ component chrome. Skeleton styles its parts with [data-scope][data-part]
+   selectors (specificity 0,2,0): ours pair a class with [data-part] and come later.
+   ===================================================================================== */
+
+/* Tooltip */
+.rq-tooltip[data-part='content'] {
+	z-index: 60;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.375rem;
+	border: 1px solid var(--color-line);
+	background: var(--color-overlay);
+	color: var(--color-fg);
+	font-size: 0.75rem;
+	font-weight: 500;
+	box-shadow: var(--shadow-overlay);
+	animation: rq-fade-in var(--dur-fast) var(--ease-out-soft);
+}
+
+/* Menu (account menu) */
+.rq-menu[data-part='content'] {
+	z-index: 60;
+	min-width: 12rem;
+	padding: 0.25rem;
+	gap: 0;
+	border-radius: 0.5rem;
+	border: 1px solid var(--color-line);
+	background: var(--color-overlay);
+	box-shadow: var(--shadow-overlay);
+	animation: rq-fade-in var(--dur-fast) var(--ease-out-soft);
+}
+
+.rq-menu[data-part='content']:focus-visible {
+	outline: none;
+}
+
+.rq-menu .rq-menu-item[data-part='item'] {
+	padding: 0.375rem 0.5rem;
+	border-radius: 0.375rem;
+	font-size: 0.8125rem;
+	color: var(--color-fg);
+}
+
+.rq-menu .rq-menu-item[data-part='item'][data-highlighted] {
+	background: var(--color-hover);
+}
+
+.rq-menu .rq-menu-separator[data-part='separator'] {
+	margin: 0.25rem 0;
+	border-color: var(--color-line-subtle);
+}
+
+/* Dialog */
+.rq-dialog-backdrop {
+	background: rgb(0 0 0 / 0.6);
+	backdrop-filter: blur(2px);
+}
+
+.rq-dialog-backdrop[data-state='open'] {
+	animation: rq-backdrop-in var(--dur-base) ease-out;
+}
+
+.rq-dialog {
+	background: var(--color-panel);
+	border: 1px solid var(--color-line);
+	box-shadow: var(--shadow-overlay);
+}
+
+.rq-dialog[data-state='open'] {
+	animation: rq-dialog-in var(--dur-slow) var(--ease-out-soft);
+}
+
+@keyframes rq-backdrop-in {
+	from {
+		opacity: 0;
+	}
+}
+
+@keyframes rq-dialog-in {
+	from {
+		opacity: 0;
+		transform: translateY(6px) scale(0.98);
+	}
+}
+
+/* Segmented (filters). Scrolls sideways on phones when it does not fit, without a
+   visible scrollbar. */
+.rq-segmented[data-part='control']::-webkit-scrollbar,
+.rq-tabs[data-part='list']::-webkit-scrollbar {
+	display: none;
+}
+
+.rq-segmented[data-part='control'] {
+	/* Positioned so the absolutely placed hidden radios scroll with it. */
+	position: relative;
+	display: inline-flex;
+	align-self: flex-start;
+	max-width: 100%;
+	overflow-x: auto;
+	scrollbar-width: none;
+	gap: 0.125rem;
+	padding: 0.125rem;
+	border-radius: 0.5rem;
+	border: 1px solid var(--color-line);
+	background: var(--color-panel);
+	box-shadow: none;
+}
+
+.rq-segmented .rq-segmented-item[data-part='item'] {
+	flex: none;
+	height: 1.625rem;
+	padding: 0 0.625rem;
+	border-radius: 0.375rem;
+	background: transparent;
+	box-shadow: none;
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--color-fg-muted);
+	transition:
+		background-color var(--dur-fast) ease,
+		color var(--dur-fast) ease;
+}
+
+@media (max-width: 767px) {
+	.rq-segmented .rq-segmented-item[data-part='item'] {
+		height: 1.875rem;
+	}
+}
+
+.rq-segmented .rq-segmented-item[data-part='item']:hover {
+	color: var(--color-fg);
+}
+
+.rq-segmented .rq-segmented-item[data-part='item'][data-state='checked'] {
+	background: var(--color-raised);
+	box-shadow: inset 0 0 0 1px var(--color-line-strong);
+	color: var(--color-fg);
+}
+
+.rq-segmented .rq-segmented-item [data-part='item-text'],
+.rq-segmented .rq-segmented-item [data-part='item-text'][data-state='checked'] {
+	color: inherit;
+}
+
+.rq-segmented-count {
+	margin-left: 0.375rem;
+	font-size: 0.75rem;
+	color: var(--color-fg-subtle);
+}
+
+/* Tabs */
+.rq-tabs[data-part='list'] {
+	gap: 1.25rem;
+	padding-bottom: 0;
+	margin-bottom: 0;
+	border-color: var(--color-line-subtle);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+
+.rq-tabs .rq-tab[data-part='trigger'] {
+	height: 2.5rem;
+	padding: 0 0.125rem;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	font-size: 0.8125rem;
+	font-weight: 500;
+	color: var(--color-fg-muted);
+	white-space: nowrap;
+	gap: 0.375rem;
+}
+
+.rq-tabs .rq-tab[data-part='trigger']:hover {
+	background: transparent;
+	color: var(--color-fg);
+}
+
+.rq-tabs .rq-tab[data-part='trigger'][data-selected] {
+	color: var(--color-fg);
+}
+
+.rq-tabs-indicator[data-part='indicator'] {
+	background: var(--color-primary-500);
+	height: 2px;
+	bottom: -1px;
+	border-radius: 2px;
+}
+
+.rq-tab-count {
+	display: inline-flex;
+	align-items: center;
+	height: 1.125rem;
+	padding: 0 0.375rem;
+	border-radius: 9999px;
+	background: rgb(255 255 255 / 0.06);
+	font-size: 0.6875rem;
+	color: var(--color-fg-muted);
+}
+
+/* Switch */
+.rq-switch[data-part='control'] {
+	width: 2rem;
+	height: 1.125rem;
+	padding: 2px;
+	flex-shrink: 0;
+	margin-top: 0.125rem;
+	background: rgb(255 255 255 / 0.14);
+	transition: background-color var(--dur-fast) ease;
+}
+
+.rq-switch[data-part='control'][data-state='checked'] {
+	background: var(--color-primary-500);
+}
+
+.rq-switch-thumb[data-part='thumb'] {
+	background: #fff;
+	transition: transform var(--dur-base) var(--ease-out-soft);
+}
+
+.rq-switch-thumb[data-part='thumb'][data-state='checked'] {
+	transform: translateX(0.875rem);
+}
+
+[data-scope='switch'][data-part='root'][data-focus-visible] {
+	outline: 2px solid var(--color-primary-500);
+}
+
+/* Toast: dark card with a status edge instead of a fully coloured box. */
+[data-scope='toast'][data-part='root'],
+[data-scope='toast'][data-part='root'][data-type] {
+	background: var(--color-overlay);
+	color: var(--color-fg);
+	border: 1px solid var(--color-line);
+	border-radius: 0.5rem;
+	box-shadow: var(--shadow-overlay);
+}
+
+[data-scope='toast'][data-part='root'][data-type='success'] {
+	box-shadow: inset 3px 0 0 var(--color-success-500), var(--shadow-overlay);
+}
+
+[data-scope='toast'][data-part='root'][data-type='warning'] {
+	box-shadow: inset 3px 0 0 var(--color-warning-500), var(--shadow-overlay);
+}
+
+[data-scope='toast'][data-part='root'][data-type='error'] {
+	box-shadow: inset 3px 0 0 var(--color-error-500), var(--shadow-overlay);
+}
+
+[data-scope='toast'][data-part='title'] {
+	font-size: 0.8125rem;
+	font-weight: 600;
+}
+
+[data-scope='toast'][data-part='description'] {
+	font-size: 0.8125rem;
+	color: var(--color-fg-muted);
+}
+
+/* Command palette (⌘K) */
+.rq-palette-input {
+	flex: 1;
+	min-width: 0;
+	height: 3rem;
+	background: transparent;
+	border: 0;
+	outline: none;
+	font-size: 0.875rem;
+	color: var(--color-fg);
+}
+
+.rq-palette-input::placeholder {
+	color: var(--color-fg-faint);
+}
+
+.rq-palette-item {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	gap: 0.625rem;
+	padding: 0.5rem 0.625rem;
+	border-radius: 0.375rem;
+	text-align: left;
+	font-size: 0.8125rem;
+	color: var(--color-fg);
+}
+
+.rq-palette-item[aria-selected='true'] {
+	background: var(--color-raised);
+}
+
+.rq-kbd {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.25rem;
+	height: 1.25rem;
+	padding: 0 0.3rem;
+	border: 1px solid var(--color-line);
+	border-radius: 4px;
+	background: var(--color-raised);
+	font-family: var(--font-sans);
+	font-size: 0.6875rem;
+	color: var(--color-fg-muted);
+	line-height: 1;
 }

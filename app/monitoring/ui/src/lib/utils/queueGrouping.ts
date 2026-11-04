@@ -74,11 +74,3 @@ export function groupQueues(queues: Queue[]): QueueGroup[] {
 
 	return groups;
 }
-
-/**
- * Check if grouping would make a difference (i.e., there are multi-queue groups)
- */
-export function hasMultiQueueGroups(queues: Queue[]): boolean {
-	const groups = groupQueues(queues);
-	return groups.some((g) => g.queues.length > 1);
-}

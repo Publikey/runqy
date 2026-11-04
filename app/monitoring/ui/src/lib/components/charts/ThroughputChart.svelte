@@ -12,6 +12,7 @@
 	import { queuesStore } from '$lib/stores/queues';
 	import { onMount, onDestroy } from 'svelte';
 	import { settings } from '$lib/stores/settings';
+	import { Panel, Segmented, Shimmer } from '$lib/components/ui';
 
 	interface Props {
 		height?: number;
@@ -21,12 +22,17 @@
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 
-	// Time range buttons
-	const timeRanges: { key: TimeRangeKey; label: string }[] = [
-		{ key: 'today', label: 'Today' },
-		{ key: '7d', label: '7D' },
-		{ key: '30d', label: '30D' }
+	// Time range switcher
+	const timeRanges: { value: TimeRangeKey; label: string }[] = [
+		{ value: 'today', label: 'Today' },
+		{ value: '7d', label: '7D' },
+		{ value: '30d', label: '30D' }
 	];
+
+	// Series colours (classes, applied through fill="currentColor").
+	const seriesClass = ['text-success-500', 'text-error-500'];
+
+	const tickLabelProps = { style: 'fill: var(--color-fg-subtle); stroke: none; font-size: 11px;' };
 
 	function selectTimeRange(range: TimeRangeKey) {
 		queueStatsStore.setTimeRange(range);
@@ -68,12 +74,19 @@
 	let barChartData = $derived.by(() => {
 		const stats = $todayStats;
 		return [
-			{ label: 'Processed', value: stats.processed, color: 'rgb(34, 197, 94)' },
-			{ label: 'Failed', value: stats.failed, color: 'rgb(239, 68, 68)' }
+			{ label: 'Processed', value: stats.processed, color: 'bg-success-500' },
+			{ label: 'Failed', value: stats.failed, color: 'bg-error-500' }
 		];
 	});
 
 	let barMaxValue = $derived(Math.max(1, ...barChartData.map((d) => d.value)));
+
+	// Nothing processed or failed in the selected period: a short line instead of a flat chart.
+	let isEmpty = $derived(
+		$queueStatsStore.selectedTimeRange === 'today'
+			? barChartData.every((d) => !d.value)
+			: $dailyThroughputData.every((d) => !d.processed && !d.failed)
+	);
 
 	// Format functions
 	function formatDate(date: Date): string {
@@ -104,76 +117,62 @@
 	});
 </script>
 
-<div class="rq-card p-5">
-	<div class="flex items-center justify-between mb-4 flex-wrap gap-2">
-		<h3 class="text-lg font-semibold">Task History</h3>
-		<div class="flex items-center gap-3">
-			<!-- Queue filter dropdown -->
-			{#if $availableQueues.length > 1}
-				<select
-					class="select select-sm w-32"
-					value={$queueStatsStore.selectedQueue || ''}
-					onchange={(e) => selectQueue(e.currentTarget.value || null)}
-				>
-					<option value="">All Queues</option>
-					{#each $availableQueues as queue}
-						<option value={queue}>{queue}</option>
-					{/each}
-				</select>
-			{/if}
-			<!-- Time range buttons -->
-			<div class="flex gap-1">
-				{#each timeRanges as { key, label }}
-					<button
-						type="button"
-						class="{$queueStatsStore.selectedTimeRange === key
-							? 'rq-pill-active'
-							: 'rq-pill'}"
-						onclick={() => selectTimeRange(key)}
-					>
-						{label}
-					</button>
+<Panel title="Task History" class="min-w-0" bodyClass="min-w-0">
+	{#snippet actions()}
+		{#if $availableQueues.length > 1}
+			<select
+				class="select h-8 w-36 text-ui"
+				aria-label="Queue"
+				value={$queueStatsStore.selectedQueue || ''}
+				onchange={(e) => selectQueue(e.currentTarget.value || null)}
+			>
+				<option value="">All queues</option>
+				{#each $availableQueues as queue (queue)}
+					<option value={queue}>{queue}</option>
 				{/each}
-			</div>
-		</div>
-	</div>
+			</select>
+		{/if}
+		<Segmented
+			items={timeRanges}
+			label="Time range"
+			value={$queueStatsStore.selectedTimeRange}
+			onchange={selectTimeRange}
+		/>
+	{/snippet}
 
 	{#if $queueStatsStore.loading && Object.keys($queueStatsStore.rawStats).length === 0}
-		<div class="flex items-center justify-center" style="height: {height}px">
-			<div class="animate-pulse text-surface-500">Loading stats...</div>
+		<div class="flex flex-col justify-end gap-3" style="height: {height}px">
+			<Shimmer class="h-full w-full" />
 		</div>
 	{:else if $queueStatsStore.error}
 		<div class="flex items-center justify-center" style="height: {height}px">
-			<p class="text-error-500">{$queueStatsStore.error}</p>
+			<p class="text-ui text-error-300">{$queueStatsStore.error}</p>
+		</div>
+	{:else if isEmpty}
+		<div class="flex h-20 items-center justify-center">
+			<p class="text-ui text-fg-subtle">No tasks processed in this period</p>
 		</div>
 	{:else if $queueStatsStore.selectedTimeRange === 'today'}
-		<!-- Today View - Bar Chart -->
-		<div style="height: {height}px" class="flex items-center justify-center">
-			<div class="flex gap-16 items-end">
-				{#each barChartData as item}
+		<!-- Today: two bars -->
+		<div style="height: {height}px" class="flex items-end justify-center pb-2">
+			<div class="flex gap-12 sm:gap-16 items-end">
+				{#each barChartData as item (item.label)}
 					<div class="flex flex-col items-center">
 						<div
-							class="w-24 rounded-t transition-all duration-300"
-							style="background-color: {item.color}; height: {Math.max(
-								20,
-								(item.value / Math.max(barMaxValue, 1)) * (height - 100)
-							)}px;"
+							class="w-16 sm:w-20 rounded-t-sm transition-all duration-300 {item.color}"
+							style="height: {Math.max(20, (item.value / Math.max(barMaxValue, 1)) * (height - 100))}px;"
 						></div>
 						<div class="mt-3 text-center">
-							<div class="text-2xl font-bold">{formatLargeNumber(item.value)}</div>
-							<div class="text-sm text-surface-500">{item.label}</div>
+							<div class="text-xl font-semibold tracking-tight tabular-nums text-fg">{formatLargeNumber(item.value)}</div>
+							<div class="text-xs text-fg-subtle">{item.label}</div>
 						</div>
 					</div>
 				{/each}
 			</div>
 		</div>
-	{:else if $dailyThroughputData.length === 0}
-		<div class="flex items-center justify-center" style="height: {height}px">
-			<p class="text-surface-500">No historical data available</p>
-		</div>
 	{:else}
-		<!-- 7D/30D View - Area Chart -->
-		<div style="height: {height}px">
+		<!-- 7D/30D: stacked areas -->
+		<div class="w-full min-w-0 overflow-hidden" style="height: {height}px">
 			<Chart
 				data={areaChartData.data}
 				x={(d: { timestamp: Date }) => d.timestamp}
@@ -182,59 +181,57 @@
 				yScale={scaleLinear()}
 				yDomain={areaChartData.yDomain}
 				yNice
-				padding={{ top: 20, right: 20, bottom: 40, left: 50 }}
+				padding={{ top: 12, right: 12, bottom: 28, left: 44 }}
 				tooltip={{ mode: 'bisect-x' }}
 			>
 				<Svg>
-					<!-- Grid lines -->
-					<g class="grid-lines">
-						{#each [0.25, 0.5, 0.75, 1] as ratio}
-							<line
-								x1="0"
-								x2="100%"
-								y1="{(1 - ratio) * 100}%"
-								y2="{(1 - ratio) * 100}%"
-								stroke="currentColor"
-								stroke-opacity="0.1"
-							/>
-						{/each}
-					</g>
+					<Axis
+						placement="left"
+						format={formatNumber}
+						ticks={5}
+						tickLength={0}
+						grid={{ class: 'stroke-line-subtle' }}
+						{tickLabelProps}
+					/>
+					<Axis placement="bottom" format={formatDate} ticks={6} tickLength={0} {tickLabelProps} />
 
-					<!-- Stacked areas -->
-					{#each areaChartData.series as s, i}
-						{@const colors = ['rgb(34, 197, 94)', 'rgb(239, 68, 68)']}
-						{@const fillOpacity = [0.6, 0.6]}
+					{#each areaChartData.series as s, i (i)}
 						<Area
 							data={s}
 							x={(d) => d.data.timestamp}
 							y0={(d) => d[0]}
 							y1={(d) => d[1]}
-							fill={colors[i]}
-							fillOpacity={fillOpacity[i]}
+							fill="currentColor"
+							fillOpacity={0.35}
+							line={/* Stacked: the failed band's top edge is processed + failed, so only
+							       the processed series gets a line (red there would read as failures). */
+							i === 0
+								? { stroke: 'currentColor', strokeWidth: 1.5, class: seriesClass[i] }
+								: { stroke: 'none' }}
+							class={seriesClass[i]}
 							curve={curveMonotoneX}
 							tweened
 						/>
 					{/each}
 
-					<!-- Axes -->
-					<Axis placement="bottom" format={formatDate} ticks={6} classes={{ tickLabel: '!fill-[#9ca3af] !stroke-[#111118]' }} />
-					<Axis placement="left" format={formatNumber} ticks={5} classes={{ tickLabel: '!fill-[#9ca3af] !stroke-[#111118]' }} />
-
-					<!-- Highlight on hover -->
-					<Highlight lines />
+					<Highlight lines={{ class: 'stroke-line-strong' }} />
 				</Svg>
 
-				<Tooltip.Root let:data>
+				<Tooltip.Root variant="none" let:data>
 					{#if data}
-						<div class="bg-surface-800 text-white p-2 rounded shadow-lg text-sm">
+						<div class="rounded-md border border-line bg-overlay px-2.5 py-2 text-xs text-fg" style="box-shadow: var(--shadow-overlay)">
 							<div class="font-medium mb-1">{data.date}</div>
-							<div class="flex justify-between gap-4">
-								<span class="text-success-400">Processed:</span>
-								<span>{formatLargeNumber(data.processed)}</span>
+							<div class="flex items-center justify-between gap-4">
+								<span class="flex items-center gap-1.5 text-fg-muted"
+									><span class="h-2 w-2 rounded-full bg-success-500"></span>Processed</span
+								>
+								<span class="tabular-nums">{formatLargeNumber(data.processed)}</span>
 							</div>
-							<div class="flex justify-between gap-4">
-								<span class="text-error-400">Failed:</span>
-								<span>{formatLargeNumber(data.failed)}</span>
+							<div class="flex items-center justify-between gap-4">
+								<span class="flex items-center gap-1.5 text-fg-muted"
+									><span class="h-2 w-2 rounded-full bg-error-500"></span>Failed</span
+								>
+								<span class="tabular-nums">{formatLargeNumber(data.failed)}</span>
 							</div>
 						</div>
 					{/if}
@@ -243,15 +240,10 @@
 		</div>
 	{/if}
 
-	<!-- Legend -->
-	<div class="flex items-center justify-center gap-6 mt-3">
-		<div class="flex items-center gap-2">
-			<div class="w-3 h-3 rounded" style="background-color: rgb(34, 197, 94);"></div>
-			<span class="text-sm text-surface-600 dark:text-surface-400">Processed</span>
+	{#if !isEmpty && !$queueStatsStore.error}
+		<div class="flex items-center justify-center gap-4 mt-3 text-xs text-fg-muted">
+			<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-success-500"></span>Processed</span>
+			<span class="flex items-center gap-1.5"><span class="h-2 w-2 rounded-full bg-error-500"></span>Failed</span>
 		</div>
-		<div class="flex items-center gap-2">
-			<div class="w-3 h-3 rounded" style="background-color: rgb(239, 68, 68);"></div>
-			<span class="text-sm text-surface-600 dark:text-surface-400">Failed</span>
-		</div>
-	</div>
-</div>
+	{/if}
+</Panel>

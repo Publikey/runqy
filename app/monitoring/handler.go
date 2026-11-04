@@ -190,6 +190,10 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 	// Queue Historical Stats endpoint.
 	api.HandleFunc("/queue_stats", newListQueueStatsHandlerFunc(inspector)).Methods("GET")
 
+	// Cross-queue task endpoints (Tasks page, live task page).
+	api.HandleFunc("/tasks", newListAllTasksHandlerFunc(rc, inspector, payloadFmt, resultFmt)).Methods("GET")
+	api.HandleFunc("/tasks/{task_id}", newGetTaskByIDHandlerFunc(rc, inspector, payloadFmt, resultFmt)).Methods("GET")
+
 	// Task endpoints.
 	api.HandleFunc("/queues/{qname}/active_tasks", newListActiveTasksHandlerFunc(inspector, payloadFmt)).Methods("GET")
 	api.HandleFunc("/queues/{qname}/active_tasks/{task_id}:cancel", newCancelActiveTaskHandlerFunc(inspector)).Methods("POST")
@@ -316,7 +320,8 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 
 	// Autoscale endpoints (instance status/protection + provider config CRUD).
 	if opts.AutoscaleStore != nil && opts.AutoscaleProviderStore != nil {
-		api.HandleFunc("/autoscale/status", newAutoscaleStatusHandlerFunc(opts.AutoscaleStore)).Methods("GET")
+		api.HandleFunc("/autoscale/status", newAutoscaleStatusHandlerFunc(opts.AutoscaleStore, rc)).Methods("GET")
+		api.HandleFunc("/autoscale/instances/{id}/logs", newAutoscaleInstanceLogsHandlerFunc(opts.AutoscaleStore, opts.AutoscaleProviderStore)).Methods("GET")
 		api.HandleFunc("/autoscale/instances/{id}/protect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, true)).Methods("POST")
 		api.HandleFunc("/autoscale/instances/{id}/unprotect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, false)).Methods("POST")
 		api.HandleFunc("/autoscale/provider-types", newAutoscaleProviderTypesHandlerFunc()).Methods("GET")

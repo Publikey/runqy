@@ -2,12 +2,14 @@
 	import { parseWorkerQueues } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/stores';
-	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
+	import { ArrowLeft, Cpu, Download, GitBranch, Pause, Play, RotateCw } from '@lucide/svelte';
 	import { workersStore } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
 	import { getWorkerLogs, sendControl } from '$lib/api/client';
-	import { formatRelativeTime } from '$lib/utils/format';
+	import { formatBytes, formatRelativeTime } from '$lib/utils/format';
+	import { workerState, workerStatus } from '$lib/utils/status';
+	import { Badge, Button, EmptyState, KeyValue, PageHeader, Panel, ProgressBar, Shimmer } from '$lib/components/ui';
 	import { toaster } from '$lib/stores/toaster';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import type { Worker, LogLine, ControlAction } from '$lib/api/types';
@@ -28,28 +30,6 @@
 	// Metrics helpers
 	let m = $derived(worker?.metrics);
 	let memPercent = $derived(m && m.memory_total_bytes > 0 ? (m.memory_used_bytes / m.memory_total_bytes) * 100 : 0);
-
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return bytes + ' B';
-		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
-		if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-		return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-	}
-
-	function barColor(percent: number): string {
-		if (percent >= 90) return 'bg-error-500';
-		if (percent >= 70) return 'bg-warning-500';
-		return 'bg-success-500';
-	}
-
-	// Get worker status
-	let processingServerIds = $derived(
-		new Set(
-			$workersStore.servers
-				.filter(s => s.active_workers && s.active_workers.length > 0)
-				.map(s => s.id)
-		)
-	);
 
 	// Control channel (drain, resume, code/worker update, config reload)
 	let canControl = $derived((worker?.control_actions?.length ?? 0) > 0);
@@ -94,17 +74,7 @@
 		};
 	}
 
-	let status = $derived.by(() => {
-		if (!worker) return 'unknown';
-		if (worker.is_stale) return 'stale';
-		if (worker.status === 'bootstrapping') return 'bootstrapping';
-		if (worker.status === 'draining') return 'draining';
-		if (worker.status === 'drained') return 'drained';
-		if (worker.status === 'stopped') return 'stopped';
-		if (worker.status === 'running' && processingServerIds.has(worker.worker_id)) return 'processing';
-		if (worker.status === 'running') return 'idle';
-		return 'stopped';
-	});
+	let status = $derived(worker ? workerState(worker, $workersStore.servers) : null);
 
 	function scrollToBottom() {
 		if (logContainer && pinToBottom) {
@@ -182,197 +152,202 @@
 	<title>{workerId} - Worker Detail - runqy Monitor</title>
 </svelte:head>
 
-<div class="rq-page space-y-8">
-	<!-- Back button + Header -->
-	<div class="flex items-center gap-4">
-		<button
-			type="button"
-			class="rq-btn-ghost"
-			onclick={() => goto(`${base}/workers`)}
-		>
-			<svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-				<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-			</svg>
-			Back
-		</button>
-		<div class="flex-1">
-			<h1 class="rq-page-title font-mono">{workerId}</h1>
-			{#if worker}
-				<p class="text-surface-500 text-sm">
-					{#if status === 'processing'}
-						<span class="badge preset-filled-primary-500 text-xs">Processing</span>
-					{:else if status === 'idle'}
-						<span class="badge preset-filled-success-500 text-xs">Idle</span>
-					{:else if status === 'stale'}
-						<span class="badge preset-filled-warning-500 text-xs">Stale</span>
-					{:else if status === 'bootstrapping'}
-						<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
-					{:else if status === 'draining'}
-						<span class="badge preset-filled-warning-500 text-xs">Draining</span>
-					{:else if status === 'drained'}
-						<span class="badge preset-filled-surface-500 text-xs">Drained</span>
-					{:else}
-						<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
-					{/if}
-					{#if worker.version}<span class="ml-2">Version: {worker.version}</span>{/if}
-					<span class="ml-2">Concurrency: {worker.concurrency}</span>
-					<span class="ml-2">Started: {formatRelativeTime(new Date(worker.started_at * 1000))}</span>
-					<span class="ml-2">Last beat: {formatRelativeTime(new Date(worker.last_beat * 1000))}</span>
-				</p>
-			{/if}
-		</div>
-	</div>
+<div class="rq-page space-y-4 md:space-y-6">
+	<PageHeader
+		title={workerId}
+		mono
+		breadcrumbs={[{ label: 'Workers', href: '/workers' }, { label: workerId }]}
+		onrefresh={() => workersStore.fetch()}
+	>
+		{#snippet titleExtra()}
+			{#if status}<Badge status={workerStatus(status)} />{/if}
+		{/snippet}
+	</PageHeader>
 
 	{#if worker}
-		<!-- Queues -->
-		<div class="flex flex-wrap gap-1">
-			{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
-				<span class="badge preset-outlined-primary-500 text-sm">
-					{queue.name} <span class="text-surface-400 ml-1">p:{queue.priority}</span>
-				</span>
-			{/each}
-		</div>
+		<Panel title="Overview">
+			<div class="space-y-5">
+				<KeyValue
+					columns={3}
+					items={[
+						{ label: 'Version', value: worker.version || '—', mono: true },
+						{ label: 'Concurrency', value: worker.concurrency },
+						{ label: 'Started', value: formatRelativeTime(new Date(worker.started_at * 1000)) },
+						{ label: 'Last heartbeat', value: formatRelativeTime(new Date(worker.last_beat * 1000)) }
+					]}
+				/>
+				<div>
+					<h3 class="text-xs font-medium text-fg-subtle mb-1.5">Queues</h3>
+					<div class="flex flex-wrap gap-1">
+						{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
+							<Badge tone="outline">
+								<span>{queue.name}</span>
+								<span class="text-fg-faint ml-1 font-mono tabular-nums">p:{queue.priority}</span>
+							</Badge>
+						{/each}
+					</div>
+				</div>
+			</div>
+		</Panel>
 
-		<!-- Metrics -->
 		{#if m}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-				<!-- CPU -->
-				<div class="rq-card p-5">
-					<div class="text-xs text-surface-500 mb-2">CPU</div>
-					<div class="text-2xl font-bold mb-2">{m.cpu_percent.toFixed(1)}%</div>
-					<div class="rq-progress-track">
-						<div class="h-full rounded-full transition-all {barColor(m.cpu_percent)}" style="width: {Math.min(m.cpu_percent, 100)}%"></div>
+			<Panel title="Resources">
+				<!-- Figures sit directly in the panel (no box-in-a-box). -->
+				<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-x-8 gap-y-5">
+					<div class="min-w-0 space-y-2">
+						<div>
+							<div class="text-xs text-fg-subtle">CPU</div>
+							<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">{m.cpu_percent.toFixed(1)}%</div>
+						</div>
+						<ProgressBar value={m.cpu_percent} />
 					</div>
-				</div>
-				<!-- RAM -->
-				<div class="rq-card p-5">
-					<div class="text-xs text-surface-500 mb-2">Memory</div>
-					<div class="text-2xl font-bold mb-2">{formatBytes(m.memory_used_bytes)} <span class="text-sm font-normal text-surface-500">/ {formatBytes(m.memory_total_bytes)}</span></div>
-					<div class="rq-progress-track">
-						<div class="h-full rounded-full transition-all {barColor(memPercent)}" style="width: {Math.min(memPercent, 100)}%"></div>
-					</div>
-				</div>
-				<!-- GPUs -->
-				{#if m.gpus && m.gpus.length > 0}
-					{#each m.gpus as gpu (gpu.index)}
-						{@const gpuMemPercent = gpu.memory_total_mb > 0 ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100 : 0}
-						<div class="rq-card p-5">
-							<div class="text-xs text-surface-500 mb-2">GPU {gpu.index} - {gpu.name}</div>
-							<div class="text-2xl font-bold mb-1">{gpu.utilization_percent.toFixed(0)}%</div>
-							<div class="rq-progress-track mb-2">
-								<div class="h-full rounded-full transition-all {barColor(gpu.utilization_percent)}" style="width: {Math.min(gpu.utilization_percent, 100)}%"></div>
-							</div>
-							<div class="flex justify-between text-xs text-surface-500">
-								<span>VRAM: {gpu.memory_used_mb}/{gpu.memory_total_mb} MB ({gpuMemPercent.toFixed(0)}%)</span>
-								<span>{gpu.temperature_c}&deg;C</span>
+					<div class="min-w-0 space-y-2">
+						<div>
+							<div class="text-xs text-fg-subtle">Memory</div>
+							<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">
+								{formatBytes(m.memory_used_bytes)}
+								<span class="text-ui font-normal text-fg-subtle">/ {formatBytes(m.memory_total_bytes)}</span>
 							</div>
 						</div>
-					{/each}
-				{/if}
-			</div>
+						<ProgressBar value={memPercent} />
+					</div>
+					{#if m.gpus && m.gpus.length > 0}
+						{#each m.gpus as gpu (gpu.index)}
+							{@const gpuMemPercent = gpu.memory_total_mb > 0 ? (gpu.memory_used_mb / gpu.memory_total_mb) * 100 : 0}
+							<div class="min-w-0 space-y-2">
+								<div class="min-w-0">
+									<div class="text-xs text-fg-subtle truncate" title={gpu.name}>GPU {gpu.index} · {gpu.name}</div>
+									<div class="mt-0.5 text-lg font-semibold tracking-tight tabular-nums text-fg">
+										{gpu.utilization_percent.toFixed(0)}%
+									</div>
+								</div>
+								<ProgressBar value={gpu.utilization_percent} />
+								<div class="flex justify-between gap-2 text-xs text-fg-subtle tabular-nums">
+									<span>VRAM {gpu.memory_used_mb}/{gpu.memory_total_mb} MB ({gpuMemPercent.toFixed(0)}%)</span>
+									<span>{gpu.temperature_c}°C</span>
+								</div>
+							</div>
+						{/each}
+					{/if}
+				</div>
+			</Panel>
 		{/if}
 
-		<!-- Control -->
-		<div class="rq-card p-5 space-y-4">
-			<div class="flex items-center justify-between">
-				<h2 class="text-lg font-semibold">Control</h2>
+		<Panel title="Control">
+			{#snippet titleExtra()}
 				{#if held.length > 0}
-					<span class="badge preset-filled-warning-500 text-xs">Not taking tasks: {held.join(', ')}</span>
+					<Badge tone="warning">Not taking tasks: {held.join(', ')}</Badge>
 				{/if}
-			</div>
+			{/snippet}
+
 			{#if !canControl}
-				<p class="text-sm text-surface-500">
-					This worker predates the control channel. Upgrade it to runqy-worker v0.4.0 or later to drain or update it from here.
+				<p class="text-ui text-fg-muted">
+					This worker predates the control channel. Upgrade it to runqy-worker v0.4.0 or later to drain or update it
+					from here.
 				</p>
 			{:else}
-				<div class="flex flex-wrap gap-2">
-					{#if held.length > 0}
-						<button type="button" class="rq-btn-ghost" disabled={sending} onclick={() => control('resume')}>Resume</button>
-					{:else}
-						<button
-							type="button"
-							class="rq-btn-ghost"
-							disabled={sending}
-							onclick={() => confirmControl('drain', 'The worker stops taking new tasks; tasks in flight finish. Use Resume to undo.')}
-						>Drain</button>
-					{/if}
-					<button
-						type="button"
-						class="rq-btn-ghost"
-						disabled={sending}
-						onclick={() => confirmControl('code_update', 'The worker waits for its tasks to finish, updates the code to the latest commit of the queue branch, reinstalls dependencies and restarts the task process (models reload).')}
-					>Update code</button>
-					<button type="button" class="rq-btn-ghost" disabled={sending} onclick={() => control('config_reload')}>Reload config</button>
-				</div>
-				<div class="flex flex-wrap items-center gap-2">
-					<input class="input w-40" placeholder="Version, e.g. 0.4.1" bind:value={updateVersion} />
-					<button
-						type="button"
-						class="rq-btn-ghost"
-						disabled={sending || !updateVersion.trim()}
-						onclick={() => confirmControl('worker_update', `The worker downloads runqy-worker ${updateVersion.trim()}, waits for its tasks to finish and restarts into it in the same container.`, updateVersion.trim())}
-					>Update worker</button>
-				</div>
-				{#if lastCommand}
-					<div class="text-sm">
-						<span class="text-surface-500">Last command:</span>
-						<span class="font-mono">{lastCommand.action}</span>
-						{#if lastCommand.state === 'done'}
-							<span class="badge preset-filled-success-500 text-xs">done</span>
-						{:else if lastCommand.state === 'failed'}
-							<span class="badge preset-filled-error-500 text-xs">failed</span>
+				<div class="space-y-4">
+					<div class="flex flex-wrap gap-2">
+						{#if held.length > 0}
+							<Button icon={Play} disabled={sending} onclick={() => control('resume')}>Resume</Button>
 						{:else}
-							<span class="badge preset-filled-secondary-500 text-xs">running</span>
+							<Button
+								icon={Pause}
+								disabled={sending}
+								onclick={() =>
+									confirmControl('drain', 'The worker stops taking new tasks; tasks in flight finish. Use Resume to undo.')}
+								>Drain</Button
+							>
 						{/if}
-						<span class="text-surface-500">{formatRelativeTime(new Date(lastCommand.at * 1000))}</span>
-						{#if lastCommand.message}
-							<div class="text-surface-500 mt-1 break-all">{lastCommand.message}</div>
-						{/if}
+						<Button
+							icon={GitBranch}
+							disabled={sending}
+							onclick={() =>
+								confirmControl(
+									'code_update',
+									'The worker waits for its tasks to finish, updates the code to the latest commit of the queue branch, reinstalls dependencies and restarts the task process (models reload).'
+								)}>Update code</Button
+						>
+						<Button icon={RotateCw} disabled={sending} onclick={() => control('config_reload')}>Reload config</Button>
 					</div>
-				{/if}
-			{/if}
-		</div>
 
-		<!-- Log Viewer -->
-		<div class="rq-card">
-			<div class="flex items-center justify-between p-4" style="border-bottom: 1px solid var(--runqy-border-subtle);">
-				<h2 class="text-lg font-semibold">Logs</h2>
-				<div class="flex items-center gap-2">
-					<label class="flex items-center gap-2 text-sm text-surface-500">
-						<input type="checkbox" bind:checked={pinToBottom} class="checkbox" />
-						Auto-scroll
-					</label>
+					<div class="flex flex-wrap items-center gap-2">
+						<input
+							class="input w-44"
+							aria-label="Worker version"
+							placeholder="Version, e.g. 0.4.1"
+							bind:value={updateVersion}
+						/>
+						<Button
+							icon={Download}
+							disabled={sending || !updateVersion.trim()}
+							onclick={() =>
+								confirmControl(
+									'worker_update',
+									`The worker downloads runqy-worker ${updateVersion.trim()}, waits for its tasks to finish and restarts into it in the same container.`,
+									updateVersion.trim()
+								)}>Update worker</Button
+						>
+					</div>
+
+					{#if lastCommand}
+						<div class="pt-4 border-t border-line-subtle text-ui">
+							<div class="flex flex-wrap items-center gap-2">
+								<span class="text-fg-subtle">Last command</span>
+								<span class="font-mono text-fg">{lastCommand.action}</span>
+								{#if lastCommand.state === 'done'}
+									<Badge tone="success">done</Badge>
+								{:else if lastCommand.state === 'failed'}
+									<Badge tone="danger">failed</Badge>
+								{:else}
+									<Badge tone="accent">running</Badge>
+								{/if}
+								<span class="text-fg-subtle">{formatRelativeTime(new Date(lastCommand.at * 1000))}</span>
+							</div>
+							{#if lastCommand.message}
+								<div class="text-fg-muted mt-1 break-all">{lastCommand.message}</div>
+							{/if}
+						</div>
+					{/if}
 				</div>
-			</div>
+			{/if}
+		</Panel>
+
+		<Panel title="Logs" flush>
+			{#snippet actions()}
+				<label class="flex items-center gap-2 text-ui text-fg-muted cursor-pointer">
+					<input type="checkbox" bind:checked={pinToBottom} class="checkbox" />
+					Auto-scroll
+				</label>
+			{/snippet}
 			<div
 				bind:this={logContainer}
-				class="h-96 overflow-y-auto font-mono text-xs bg-surface-900 text-surface-100 p-4"
+				class="min-h-[120px] max-h-[60vh] overflow-y-auto bg-canvas rounded-b-lg px-4 py-3 font-mono text-xs text-fg"
 			>
 				{#if logsLoading}
-					<div class="text-surface-400 animate-pulse">Loading logs...</div>
+					<Shimmer lines={4} />
 				{:else if logLines.length === 0}
-					<div class="text-surface-400">No logs available. Logs appear when the worker process outputs to stderr or non-JSON stdout.</div>
+					<p class="font-sans text-ui text-fg-subtle">
+						No logs yet. They appear when the task process writes to stderr or non-JSON stdout.
+					</p>
 				{:else}
 					{#each logLines as line (line.seq || line.ts)}
-						<div class="flex gap-2 hover:bg-surface-800 py-px">
-							<span class="text-surface-500 shrink-0">{formatLogTime(line.ts)}</span>
-							<span class="{line.src === 'stderr' ? 'text-error-400' : 'text-surface-400'} shrink-0 w-12">[{line.src}]</span>
+						<div class="flex gap-2 py-px hover:bg-hover">
+							<span class="text-fg-faint shrink-0 tabular-nums">{formatLogTime(line.ts)}</span>
+							<span class="{line.src === 'stderr' ? 'text-error-300' : 'text-fg-subtle'} shrink-0 w-14">[{line.src}]</span>
 							<span class="break-all">{line.text}</span>
 						</div>
 					{/each}
 				{/if}
 			</div>
-		</div>
+		</Panel>
 	{:else}
-		<div class="rq-card rq-empty-state">
-			<p class="text-surface-500">Worker not found or no longer connected.</p>
-			<button
-				type="button"
-				class="rq-btn-primary mt-4"
-				onclick={() => goto(`${base}/workers`)}
-			>
-				Back to Workers
-			</button>
+		<div class="rq-card">
+			<EmptyState icon={Cpu} title="Worker not found" description="Worker not found or no longer connected.">
+				{#snippet action()}
+					<Button href="{base}/workers" icon={ArrowLeft}>Back to Workers</Button>
+				{/snippet}
+			</EmptyState>
 		</div>
 	{/if}
 </div>

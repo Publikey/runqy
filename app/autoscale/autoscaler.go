@@ -683,9 +683,17 @@ func (a *Autoscaler) teardown(ctx context.Context, prov provider.Provider, inst 
 	if finalStatus == StatusFailed {
 		a.reportFailure(inst.Queue, fmt.Sprintf("instance %s destroyed: %s", inst.InstanceID, reason))
 	}
+	meta := map[string]string{"reason": reason, "final_status": finalStatus}
+	if finalStatus == StatusFailed {
+		// Keep the machine's last output: once destroyed it is the only trace of why it
+		// never became ready.
+		for k, v := range captureLogs(ctx, prov, inst) {
+			meta[k] = v
+		}
+	}
 	wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := a.instances.UpdateStatusWithMeta(wctx, inst, StatusDraining, map[string]string{"reason": reason, "final_status": finalStatus}); err != nil {
+	if err := a.instances.UpdateStatusWithMeta(wctx, inst, StatusDraining, meta); err != nil {
 		log.Printf("[AUTOSCALE] teardown %s: cannot record intent, not destroying yet: %v", inst.InstanceID, err)
 		return
 	}

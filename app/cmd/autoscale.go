@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/Publikey/runqy/autoscale"
 	"github.com/Publikey/runqy/autoscale/provider"
@@ -21,6 +22,7 @@ var (
 	providerDisable bool
 	providerEnable  bool
 	autoscaleForce  bool
+	autoscaleAll    bool
 )
 
 var autoscaleCmd = &cobra.Command{
@@ -33,7 +35,9 @@ Per-queue autoscaling rules live in the queue config (YAML/API/UI). These comman
 the provider registry, live instance status, and instance protection.
 
 Examples:
-  runqy autoscale status
+  runqy autoscale status          # active instances + provisioning pauses
+  runqy autoscale status --all    # also failed/terminated instances, with the reason
+  runqy autoscale logs as-1234    # machine logs (live, or saved when it failed)
   runqy autoscale provider-types
   runqy autoscale providers list
   runqy autoscale providers create my-mock --type mock
@@ -48,8 +52,15 @@ Remote mode:
 
 var autoscaleStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show tracked autoscaler instances and cost",
+	Short: "Show active autoscaler instances, provisioning pauses and cost",
 	RunE:  runAutoscaleStatus,
+}
+
+var autoscaleLogsCmd = &cobra.Command{
+	Use:   "logs <instance-id>",
+	Short: "Show an instance's machine logs (live from the provider, or saved at teardown)",
+	Args:  cobra.ExactArgs(1),
+	RunE:  runAutoscaleLogs,
 }
 
 var autoscaleProtectCmd = &cobra.Command{
@@ -117,6 +128,8 @@ var autoscaleProvidersDeleteCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(autoscaleCmd)
 	autoscaleCmd.AddCommand(autoscaleStatusCmd)
+	autoscaleCmd.AddCommand(autoscaleLogsCmd)
+	autoscaleStatusCmd.Flags().BoolVar(&autoscaleAll, "all", false, "Also list failed and terminated instances")
 	autoscaleCmd.AddCommand(autoscaleProtectCmd)
 	autoscaleCmd.AddCommand(autoscaleUnprotectCmd)
 	autoscaleCmd.AddCommand(autoscaleProviderTypesCmd)
@@ -170,51 +183,121 @@ func printInstanceRow(w io.Writer, i *autoscale.Instance) {
 	if gpu == "" {
 		gpu = "-"
 	}
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%v\t$%.3f\t$%.4f\n", i.InstanceID, i.Queue, i.Provider, gpu,
-		autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.PricePerHour, i.CostAccumulated)
+	reason := i.Error
+	if reason == "" {
+		reason = i.Reason
+	}
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%v\t$%.3f\t$%.4f\t%s\n", i.InstanceID, i.Queue, i.Provider, gpu,
+		autoscale.DisplayStatus(i.Status, i.WorkerID), i.WorkerID, i.Protected, i.PricePerHour, i.CostAccumulated, reason)
 }
 
 func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "INSTANCE ID\tQUEUE\tPROVIDER\tGPU\tSTATUS\tWORKER\tPROTECTED\tPRICE/HR\tCOST")
-
+	var (
+		instances []*autoscale.Instance
+		pauses    []autoscale.Pause
+		total     float64
+	)
 	if IsRemoteMode() {
 		resp, err := NewAPIClient().AutoscaleStatusAPI()
 		if err != nil {
 			return err
 		}
-		if len(resp.Instances) == 0 {
-			fmt.Println("No autoscaler instances.")
-			return nil
-		}
 		for _, i := range resp.Instances {
-			printInstanceRow(w, &autoscale.Instance{InstanceID: i.InstanceID, Queue: i.Queue, Provider: i.Provider, GPU: i.GPU,
-				Status: i.Status, WorkerID: i.WorkerID, Protected: i.Protected, PricePerHour: i.PricePerHour, CostAccumulated: i.CostAccumulated})
+			instances = append(instances, &autoscale.Instance{InstanceID: i.InstanceID, Queue: i.Queue, Provider: i.Provider, GPU: i.GPU,
+				Status: i.Status, WorkerID: i.WorkerID, Protected: i.Protected, PricePerHour: i.PricePerHour, CostAccumulated: i.CostAccumulated,
+				Reason: i.Reason, Error: i.Error})
 		}
-		w.Flush()
-		fmt.Printf("\nTotal accumulated cost: $%.4f\n", resp.TotalCost)
-		return nil
+		pauses, total = resp.Pauses, resp.TotalCost
+	} else {
+		store, err := getAutoscaleInstanceStore()
+		if err != nil {
+			return err
+		}
+		instances, err = store.ListAll(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, i := range instances {
+			total += i.CostAccumulated
+		}
+		if conns, err := models.BuildRedisConns(GetConfig()); err == nil {
+			pauses, _ = autoscale.ListPauses(context.Background(), conns.RDB, time.Now())
+			conns.RDB.Close()
+		}
 	}
 
-	store, err := getAutoscaleInstanceStore()
-	if err != nil {
-		return err
-	}
-	instances, err := store.ListAll(context.Background())
-	if err != nil {
-		return err
-	}
-	if len(instances) == 0 {
-		fmt.Println("No autoscaler instances.")
-		return nil
-	}
-	var total float64
+	shown, hidden := 0, 0
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	for _, i := range instances {
+		ended := i.Status == autoscale.StatusFailed || i.Status == autoscale.StatusTerminated
+		if ended && !autoscaleAll {
+			hidden++
+			continue
+		}
+		if shown == 0 {
+			fmt.Fprintln(w, "INSTANCE ID\tQUEUE\tPROVIDER\tGPU\tSTATUS\tWORKER\tPROTECTED\tPRICE/HR\tCOST\tREASON")
+		}
 		printInstanceRow(w, i)
-		total += i.CostAccumulated
+		shown++
 	}
 	w.Flush()
+	if shown == 0 {
+		fmt.Println("No active autoscaler instances.")
+	}
+	if hidden > 0 {
+		fmt.Printf("(%d failed/terminated instance(s) hidden, use --all)\n", hidden)
+	}
+
+	if len(pauses) > 0 {
+		fmt.Println("\nProvisioning paused:")
+		pw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(pw, "QUEUE\tUNTIL\tFAILURES\tCAUSE")
+		for _, p := range pauses {
+			fmt.Fprintf(pw, "%s\t%s (in %s)\t%d\t%s\n", p.Queue, p.Until.Local().Format("15:04:05"),
+				time.Until(p.Until).Round(time.Second), p.Failures, p.Cause)
+		}
+		pw.Flush()
+	}
 	fmt.Printf("\nTotal accumulated cost: $%.4f\n", total)
+	return nil
+}
+
+func runAutoscaleLogs(cmd *cobra.Command, args []string) error {
+	var (
+		logs *autoscale.InstanceLogs
+		err  error
+	)
+	if IsRemoteMode() {
+		logs, err = NewAPIClient().InstanceLogsAPI(args[0])
+	} else {
+		instStore, serr := getAutoscaleInstanceStore()
+		if serr != nil {
+			return serr
+		}
+		provStore, serr := getAutoscaleProviderStore()
+		if serr != nil {
+			return serr
+		}
+		logs, err = autoscale.FetchInstanceLogs(context.Background(), instStore, provStore, args[0])
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case logs.Source == "live":
+		fmt.Fprintf(os.Stderr, "# live logs of %s, fetched %s\n", logs.InstanceID, logs.FetchedAt)
+	case logs.Logs == "" && logs.Error != "":
+		return fmt.Errorf("logs could not be captured before teardown: %s", logs.Error)
+	case logs.Logs == "":
+		fmt.Println("No saved logs for this instance (captured only for instances that failed after renting a machine).")
+		return nil
+	default:
+		fmt.Fprintf(os.Stderr, "# logs of %s saved at teardown (%s)\n", logs.InstanceID, logs.FetchedAt)
+	}
+	fmt.Print(logs.Logs)
+	if !strings.HasSuffix(logs.Logs, "\n") {
+		fmt.Println()
+	}
 	return nil
 }
 

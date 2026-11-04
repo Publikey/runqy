@@ -66,6 +66,15 @@ type Stateful interface {
 	SetStateStore(ctx context.Context, s StateStore)
 }
 
+// LogFetcher is implemented by providers that can return an instance's recent output
+// (container stdout/stderr, or the host's own messages when the container never
+// started). The autoscaler saves it before destroying an instance that failed, so the
+// cause of a boot failure stays visible after the machine is gone.
+type LogFetcher interface {
+	// Logs returns up to the last tail lines of the instance's logs.
+	Logs(ctx context.Context, instanceID string, tail int) (string, error)
+}
+
 // Provider is a pluggable cloud GPU backend. Implementations must be safe for concurrent
 // use by the autoscaler goroutine.
 type Provider interface {
