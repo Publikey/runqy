@@ -1,0 +1,1 @@
+import{e as S,S as T,y as h,T as k,U as c}from"./ByoIXhom.js";function t(r,i){return r===i||(r==null?void 0:r[c])===i}function y(r={},i,a,q){return S(()=>{var f,s;return T(()=>{f=s,s=[],h(()=>{r!==a(...s)&&(i(r,...s),f&&t(a(...f),r)&&i(null,...f))})}),()=>{k(()=>{s&&t(a(...s),r)&&i(null,...s)})}}),r}export{y as b};

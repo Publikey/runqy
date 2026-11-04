@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { parseWorkerQueues } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
@@ -9,7 +8,6 @@
 	import { formatRelativeTime } from '$lib/utils/format';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
-	let viewMode = $state<'cards' | 'table'>('cards');
 	let statusFilter = $state<string | null>(null);
 	let refreshing = $state(false);
 
@@ -36,19 +34,6 @@
 		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
 		if (worker.status === 'running') return 'idle';
 		return 'stopped'; // fallback for unknown statuses
-	}
-
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return bytes + ' B';
-		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
-		if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-		return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-	}
-
-	function barColor(percent: number): string {
-		if (percent >= 90) return 'bg-error-500';
-		if (percent >= 70) return 'bg-warning-500';
-		return 'bg-success-500';
 	}
 
 	function navigateToWorker(workerId: string) {
@@ -192,39 +177,6 @@
 				Stopped
 			</button>
 		</div>
-
-		<div class="flex items-center gap-1 bg-surface-200 dark:bg-surface-700 rounded-lg p-1">
-			<button
-				type="button"
-				class="p-2 rounded {viewMode === 'cards' ? 'bg-white dark:bg-surface-600 shadow-sm' : ''}"
-				onclick={() => (viewMode = 'cards')}
-				title="Card view"
-			>
-				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
-					/>
-				</svg>
-			</button>
-			<button
-				type="button"
-				class="p-2 rounded {viewMode === 'table' ? 'bg-white dark:bg-surface-600 shadow-sm' : ''}"
-				onclick={() => (viewMode = 'table')}
-				title="Table view"
-			>
-				<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M4 6h16M4 10h16M4 14h16M4 18h16"
-					/>
-				</svg>
-			</button>
-		</div>
 	</div>
 
 	<!-- Error State -->
@@ -236,33 +188,17 @@
 
 	<!-- Workers List -->
 	{#if $workersStore.loading && filteredWorkers.length === 0}
-		{#if viewMode === 'cards'}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-				{#each [1, 2, 3] as i (i)}
-					<div class="rq-card p-5">
-						<div class="animate-pulse space-y-3">
-							<div class="h-5 bg-surface-300 dark:bg-surface-600 rounded w-2/3"></div>
-							<div class="h-4 bg-surface-300 dark:bg-surface-600 rounded w-1/2"></div>
-							<div class="h-12 bg-surface-300 dark:bg-surface-600 rounded"></div>
-						</div>
+		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+			{#each [1, 2, 3] as i (i)}
+				<div class="rq-card p-5">
+					<div class="animate-pulse space-y-3">
+						<div class="h-5 bg-surface-300 dark:bg-surface-600 rounded w-2/3"></div>
+						<div class="h-4 bg-surface-300 dark:bg-surface-600 rounded w-1/2"></div>
+						<div class="h-12 bg-surface-300 dark:bg-surface-600 rounded"></div>
 					</div>
-				{/each}
-			</div>
-		{:else}
-			<div class="table-container">
-				<table class="table">
-					<tbody>
-						{#each [1, 2, 3] as i (i)}
-							<tr>
-								<td colspan="10">
-									<div class="animate-pulse h-4 bg-surface-300 dark:bg-surface-600 rounded"></div>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		{/if}
+				</div>
+			{/each}
+		</div>
 	{:else if filteredWorkers.length === 0}
 		<div class="rq-card rq-empty-state">
 			<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -278,117 +214,11 @@
 				{statusFilter ? 'No workers match the selected filter' : 'Workers will appear here when they connect'}
 			</p>
 		</div>
-	{:else if viewMode === 'cards'}
+	{:else}
 		<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
 			{#each filteredWorkers as worker (worker.worker_id)}
 				<WorkerCard {worker} onclick={() => navigateToWorker(worker.worker_id)} />
 			{/each}
-		</div>
-	{:else}
-		<div class="table-container">
-			<table class="rq-table">
-				<thead>
-					<tr>
-						<th>Worker ID</th>
-						<th>Status</th>
-						<th>Version</th>
-						<th>Concurrency</th>
-						<th>CPU</th>
-						<th>RAM</th>
-						<th>GPU</th>
-						<th>Queues</th>
-						<th>Started</th>
-						<th>Last Beat</th>
-					</tr>
-				</thead>
-				<tbody>
-					{#each filteredWorkers as worker (worker.worker_id)}
-						{@const wm = worker.metrics}
-						{@const memPct = wm && wm.memory_total_bytes > 0 ? (wm.memory_used_bytes / wm.memory_total_bytes) * 100 : 0}
-						<tr class="cursor-pointer" onclick={() => navigateToWorker(worker.worker_id)}>
-							<td class="font-mono text-sm">{worker.worker_id}</td>
-							<td>
-								{#if getWorkerStatus(worker) === 'processing'}
-									<span class="badge preset-filled-primary-500 text-xs">Processing</span>
-								{:else if getWorkerStatus(worker) === 'idle'}
-									<span class="badge preset-filled-success-500 text-xs">Idle</span>
-								{:else if getWorkerStatus(worker) === 'bootstrapping'}
-									<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
-								{:else if getWorkerStatus(worker) === 'stale'}
-									<span class="badge preset-filled-warning-500 text-xs">Stale</span>
-								{:else if getWorkerStatus(worker) === 'draining'}
-									<span class="badge preset-filled-warning-500 text-xs">Draining</span>
-								{:else if getWorkerStatus(worker) === 'drained'}
-									<span class="badge preset-filled-surface-500 text-xs">Drained</span>
-								{:else}
-									<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
-								{/if}
-							</td>
-							<td class="font-mono text-sm">{worker.version || '<0.4.0'}</td>
-							<td class="font-mono">{worker.concurrency}</td>
-							<td>
-								{#if wm}
-									<div class="flex items-center gap-2 min-w-[80px]">
-										<div class="rq-progress-track w-16">
-											<div class="h-full rounded-full {barColor(wm.cpu_percent)}" style="width: {Math.min(wm.cpu_percent, 100)}%"></div>
-										</div>
-										<span class="text-xs text-surface-500">{wm.cpu_percent.toFixed(0)}%</span>
-									</div>
-								{:else}
-									<span class="text-xs text-surface-400">-</span>
-								{/if}
-							</td>
-							<td>
-								{#if wm}
-									<div class="flex items-center gap-2 min-w-[100px]">
-										<div class="rq-progress-track w-16">
-											<div class="h-full rounded-full {barColor(memPct)}" style="width: {Math.min(memPct, 100)}%"></div>
-										</div>
-										<span class="text-xs text-surface-500">{formatBytes(wm.memory_used_bytes)}</span>
-									</div>
-								{:else}
-									<span class="text-xs text-surface-400">-</span>
-								{/if}
-							</td>
-							<td>
-								{#if wm?.gpus && wm.gpus.length > 0}
-									<div class="space-y-1">
-										{#each wm.gpus as gpu (gpu.index)}
-											<div class="flex items-center gap-2 min-w-[100px]">
-												<div class="rq-progress-track w-16">
-													<div class="h-full rounded-full {barColor(gpu.utilization_percent)}" style="width: {Math.min(gpu.utilization_percent, 100)}%"></div>
-												</div>
-												<span class="text-xs text-surface-500" title={gpu.name}>{gpu.utilization_percent.toFixed(0)}% {gpu.temperature_c}&deg;C</span>
-											</div>
-										{/each}
-									</div>
-								{:else}
-									<span class="text-xs text-surface-400">-</span>
-								{/if}
-							</td>
-							<td>
-								<div class="flex flex-wrap gap-1">
-									{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
-										<span class="badge preset-outlined-primary-500 text-xs">
-											{queue.name}
-											{#if queue.priority === 0 && getWorkerStatus(worker) === 'bootstrapping'}
-												<svg class="w-3 h-3 ml-1 animate-spin inline-block" fill="none" viewBox="0 0 24 24">
-													<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-													<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-												</svg>
-											{:else}
-												<span class="text-surface-400 ml-1">p:{queue.priority}</span>
-											{/if}
-										</span>
-									{/each}
-								</div>
-							</td>
-							<td class="text-surface-500">{formatRelativeTime(new Date(worker.started_at * 1000))}</td>
-							<td class="text-surface-500">{formatRelativeTime(new Date(worker.last_beat * 1000))}</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
 		</div>
 	{/if}
 </div>

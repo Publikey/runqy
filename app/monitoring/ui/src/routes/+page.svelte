@@ -1,51 +1,66 @@
 <script lang="ts">
-	import { parseWorkerQueues } from '$lib/utils/workerQueues';
+	import { workerQueueNames } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { queuesStore, totalStats } from '$lib/stores/queues';
 	import { workersStore, workerStats } from '$lib/stores/workers';
 	import { settings } from '$lib/stores/settings';
-	import QueueCard from '$lib/components/QueueCard.svelte';
-	import QueueGroupCard from '$lib/components/QueueGroupCard.svelte';
 	import StatCard from '$lib/components/StatCard.svelte';
 	import ThroughputChart from '$lib/components/charts/ThroughputChart.svelte';
 	import QueueSizesChart from '$lib/components/charts/QueueSizesChart.svelte';
-	import { formatRelativeTime, truncateId } from '$lib/utils/format';
-	import { groupQueues, hasMultiQueueGroups } from '$lib/utils/queueGrouping';
-
-	// Create a set of server IDs that have active workers (processing tasks)
-	let processingServerIds = $derived(
-		new Set(
-			$workersStore.servers
-				.filter(s => s.active_workers && s.active_workers.length > 0)
-				.map(s => s.id)
-		)
-	);
-
-	// Check if a worker is processing by matching worker_id to server.id
-	function isWorkerProcessing(workerId: string): boolean {
-		return processingServerIds.has(workerId);
-	}
-
-	// Get worker status: 'processing' | 'idle' | 'stale' | 'bootstrapping' | 'stopped'
-	function getWorkerStatus(worker: typeof $workersStore.workers[0]): string {
-		if (worker.is_stale) return 'stale';
-		if (worker.status === 'bootstrapping') return 'bootstrapping';
-		if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
-		if (worker.status === 'stopped') return 'stopped';
-		if (worker.status === 'running' && isWorkerProcessing(worker.worker_id)) return 'processing';
-		if (worker.status === 'running') return 'idle';
-		return 'stopped'; // fallback for unknown statuses
-	}
+	import { formatDuration, formatNumber, formatRelativeTime } from '$lib/utils/format';
+	import { groupQueues, type QueueGroup } from '$lib/utils/queueGrouping';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let refreshing = $state(false);
-	let groupQueuesEnabled = $state(true);
 
-	// Grouped queues
 	let queueGroups = $derived(groupQueues($queuesStore.queues));
-	let showGroupToggle = $derived(hasMultiQueueGroups($queuesStore.queues));
+
+	// Parent queues whose sub-queues no worker listens on.
+	function hasWorkers(group: QueueGroup): boolean {
+		const names = new Set(group.queues.map((q) => q.queue));
+		return $workersStore.workers.some((w) => workerQueueNames(w.queues).some((n) => names.has(n)));
+	}
+
+	let pausedSubQueues = $derived($queuesStore.queues.filter((q) => q.paused).length);
+	let groupsWithoutWorkers = $derived(queueGroups.filter((g) => !hasWorkers(g)));
+
+	interface Attention {
+		group: QueueGroup;
+		issues: string[];
+	}
+
+	// Queues worth a look: waiting work with no worker, paused sub-queues, failures.
+	let attention = $derived.by((): Attention[] => {
+		const out: Attention[] = [];
+		for (const g of queueGroups) {
+			const issues: string[] = [];
+			if (!hasWorkers(g)) {
+				issues.push(g.pending > 0 ? `${formatNumber(g.pending)} pending, no worker` : 'no worker');
+			}
+			const paused = g.queues.filter((q) => q.paused).length;
+			if (paused > 0) {
+				issues.push(paused === g.queues.length ? 'paused' : `${paused}/${g.queues.length} paused`);
+			}
+			if (g.failed > 0) issues.push(`${formatNumber(g.failed)} failed`);
+			if (issues.length) out.push({ group: g, issues });
+		}
+		return out.sort((a, b) => b.group.pending - a.group.pending).slice(0, 6);
+	});
+
+	// Busiest parent queues by waiting + running work.
+	let busiest = $derived(
+		[...queueGroups]
+			.filter((g) => g.pending + g.active > 0)
+			.sort((a, b) => b.pending + b.active - (a.pending + a.active))
+			.slice(0, 5)
+	);
+
+	function queueHref(g: QueueGroup): string {
+		return g.queues.length === 1
+			? `${base}/queues/${encodeURIComponent(g.queues[0].queue)}`
+			: `${base}/queues?q=${encodeURIComponent(g.name)}`;
+	}
 
 	async function loadData() {
 		await Promise.all([queuesStore.fetch(), workersStore.fetch()]);
@@ -65,10 +80,6 @@
 	onDestroy(() => {
 		if (pollInterval) clearInterval(pollInterval);
 	});
-
-	function navigateToQueue(qname: string) {
-		goto(`${base}/queues/${encodeURIComponent(qname)}`);
-	}
 </script>
 
 <svelte:head>
@@ -103,7 +114,7 @@
 
 	<!-- Stats Overview -->
 	<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-		<StatCard label="Total Queues" value={$totalStats.totalQueues} variant="primary" href="/queues" />
+		<StatCard label="Queues" value={queueGroups.length} variant="primary" href="/queues" />
 		<StatCard label="Pending" value={$totalStats.totalPending} variant="warning" />
 		<StatCard label="Active" value={$totalStats.totalActive} variant="success" />
 		<StatCard label="Processed" value={$totalStats.totalProcessed} variant="default" />
@@ -117,190 +128,134 @@
 		<QueueSizesChart height={280} maxQueues={6} />
 	</div>
 
-	<!-- Error State -->
 	{#if $queuesStore.error}
 		<div class="rq-card p-4">
 			<p class="text-error-500">Failed to load queues: {$queuesStore.error}</p>
 		</div>
 	{/if}
 
-	<!-- Queues Grid -->
-	<div>
-		<div class="flex items-center justify-between mb-4">
-			<h2 class="rq-section-title">Queues</h2>
-			{#if showGroupToggle}
-				<button
-					type="button"
-					class="{groupQueuesEnabled ? 'rq-pill-active' : 'rq-pill'}"
-					onclick={() => groupQueuesEnabled = !groupQueuesEnabled}
-					title={groupQueuesEnabled ? 'Show individual queues' : 'Group sub-queues'}
-				>
-					<svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-						{#if groupQueuesEnabled}
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
-						{:else}
-							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-						{/if}
-					</svg>
-					{groupQueuesEnabled ? 'Grouped' : 'Ungrouped'}
-				</button>
-			{/if}
-		</div>
+	<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+		<!-- Queues Overview -->
+		<section class="rq-card p-5 space-y-5">
+			<div class="flex items-center justify-between">
+				<h2 class="rq-section-title">Queues</h2>
+				<a href="{base}/queues" class="text-primary-500 hover:text-primary-600 text-sm font-medium">View all →</a>
+			</div>
 
-		{#if $queuesStore.loading && $queuesStore.queues.length === 0}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-				{#each [1, 2, 3, 4, 5, 6] as i (i)}
-					<div class="rq-card p-5">
-						<div class="animate-pulse space-y-3">
-							<div class="h-6 bg-surface-300 dark:bg-surface-600 rounded w-1/2"></div>
-							<div class="grid grid-cols-3 gap-3">
-								<div class="h-16 bg-surface-300 dark:bg-surface-600 rounded"></div>
-								<div class="h-16 bg-surface-300 dark:bg-surface-600 rounded"></div>
-								<div class="h-16 bg-surface-300 dark:bg-surface-600 rounded"></div>
-							</div>
+			<div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+				<div class="rq-metric-box text-center">
+					<div class="text-xl font-bold">{queueGroups.length}</div>
+					<div class="text-xs text-surface-500">Queues</div>
+				</div>
+				<div class="rq-metric-box text-center">
+					<div class="text-xl font-bold">{$queuesStore.queues.length}</div>
+					<div class="text-xs text-surface-500">Sub-queues</div>
+				</div>
+				<div class="rq-metric-box text-center">
+					<div class="text-xl font-bold {pausedSubQueues > 0 ? 'text-warning-500' : ''}">{pausedSubQueues}</div>
+					<div class="text-xs text-surface-500">Paused</div>
+				</div>
+				<div class="rq-metric-box text-center">
+					<div class="text-xl font-bold {groupsWithoutWorkers.length > 0 ? 'text-warning-500' : ''}">{groupsWithoutWorkers.length}</div>
+					<div class="text-xs text-surface-500">Without worker</div>
+				</div>
+			</div>
+
+			{#if $queuesStore.queues.length === 0}
+				<p class="text-sm text-surface-400">
+					{$queuesStore.loading ? 'Loading…' : 'No queues yet. They appear once configured.'}
+				</p>
+			{:else}
+				<div>
+					<h3 class="text-xs font-medium uppercase tracking-wider text-surface-400 mb-2">Needs attention</h3>
+					{#if attention.length === 0}
+						<p class="text-sm text-success-500">Every queue has a worker, none is paused and nothing failed.</p>
+					{:else}
+						<ul class="space-y-1">
+							{#each attention as a (a.group.name)}
+								<li>
+									<a href={queueHref(a.group)} class="flex flex-wrap items-center justify-between gap-2 rounded px-2 py-1.5 hover:bg-surface-100-900">
+										<span class="font-mono text-sm truncate">{a.group.name}</span>
+										<span class="flex flex-wrap gap-1">
+											{#each a.issues as issue (issue)}
+												<span class="badge preset-outlined-warning-500 text-xs">{issue}</span>
+											{/each}
+										</span>
+									</a>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				</div>
+
+				{#if busiest.length > 0}
+					<div>
+						<div class="flex items-center justify-between mb-2 px-2">
+							<h3 class="text-xs font-medium uppercase tracking-wider text-surface-400">Busiest</h3>
+							<span class="flex items-center gap-3 text-[0.65rem] uppercase tracking-wider text-surface-400">
+								<span class="text-warning-500">Pending</span>
+								<span class="text-success-500">Active</span>
+								<span>Latency</span>
+							</span>
 						</div>
+						<ul class="space-y-1">
+							{#each busiest as g (g.name)}
+								<li>
+									<a href={queueHref(g)} class="flex items-center justify-between gap-3 rounded px-2 py-1.5 hover:bg-surface-100-900 text-sm">
+										<span class="font-mono truncate">{g.name}</span>
+										<span class="flex items-center gap-3 font-mono shrink-0">
+											<span class="text-warning-500" title="Pending">{formatNumber(g.pending)}</span>
+											<span class="text-success-500" title="Active">{formatNumber(g.active)}</span>
+											<span class="text-surface-500" title="Highest latency">{formatDuration(g.latency_msec)}</span>
+										</span>
+									</a>
+								</li>
+							{/each}
+						</ul>
 					</div>
-				{/each}
-			</div>
-		{:else if $queuesStore.queues.length === 0}
-			<div class="rq-card rq-empty-state">
-				<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
-					/>
-				</svg>
-				<p class="text-surface-500">No queues found</p>
-				<p class="text-sm text-surface-400 mt-1">Queues will appear here when workers connect</p>
-			</div>
-		{:else if groupQueuesEnabled}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-				{#each queueGroups as group (group.name)}
-					<QueueGroupCard {group} workers={$workersStore.workers} onQueueClick={navigateToQueue} />
-				{/each}
-			</div>
-		{:else}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-				{#each $queuesStore.queues as queue (queue.queue)}
-					<QueueCard {queue} workers={$workersStore.workers} onClick={() => navigateToQueue(queue.queue)} />
-				{/each}
-			</div>
-		{/if}
-	</div>
+				{/if}
+			{/if}
+		</section>
 
-	<!-- Workers Overview -->
-	{#if $workersStore.workers.length > 0}
-		<div class="mt-8">
-			<div class="flex items-center justify-between mb-4">
-				<h2 class="rq-section-title">Workers Overview</h2>
-				<a href="{base}/workers" class="text-primary-500 hover:text-primary-600 text-sm font-medium">
-					View all →
-				</a>
+		<!-- Workers Overview -->
+		<section class="rq-card p-5 space-y-5">
+			<div class="flex items-center justify-between">
+				<h2 class="rq-section-title">Workers</h2>
+				<a href="{base}/workers" class="text-primary-500 hover:text-primary-600 text-sm font-medium">View all →</a>
 			</div>
 
-			<!-- Worker Stats -->
-			<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 mb-4">
-				<div class="rq-card p-3 text-center">
-					<div class="text-xl md:text-2xl font-bold text-primary-500">{$workerStats.processing}</div>
-					<div class="text-xs text-surface-500">Processing</div>
-				</div>
-				<div class="rq-card p-3 text-center">
-					<div class="text-xl md:text-2xl font-bold text-success-500">{$workerStats.idle}</div>
-					<div class="text-xs text-surface-500">Idle</div>
-				</div>
-				<div class="rq-card p-3 text-center">
-					<div class="text-xl md:text-2xl font-bold text-secondary-500">{$workerStats.bootstrapping}</div>
-					<div class="text-xs text-surface-500">Bootstrapping</div>
-				</div>
-				<div class="rq-card p-3 text-center">
-					<div class="text-xl md:text-2xl font-bold text-warning-500">{$workerStats.stale}</div>
-					<div class="text-xs text-surface-500">Stale</div>
-				</div>
-				<div class="rq-card p-3 text-center">
-					<div class="text-xl md:text-2xl font-bold text-surface-500">{$workerStats.stopped}</div>
-					<div class="text-xs text-surface-500">Stopped</div>
-				</div>
-			</div>
-
-			<!-- Worker List Table -->
-			<div class="table-container">
-				<table class="rq-table">
-					<thead>
-						<tr>
-							<th>Worker ID</th>
-							<th>Status</th>
-							<th>Queues</th>
-							<th>Last Beat</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each $workersStore.workers.slice(0, 8) as worker (worker.worker_id)}
-							<tr>
-								<td class="font-mono text-sm" title={worker.worker_id}>{truncateId(worker.worker_id, 24)}</td>
-								<td>
-									{#if getWorkerStatus(worker) === 'processing'}
-										<span class="badge preset-filled-primary-500 text-xs">Processing</span>
-									{:else if getWorkerStatus(worker) === 'idle'}
-										<span class="badge preset-filled-success-500 text-xs">Idle</span>
-									{:else if getWorkerStatus(worker) === 'bootstrapping'}
-										<span class="badge preset-filled-secondary-500 text-xs">Bootstrapping</span>
-									{:else if getWorkerStatus(worker) === 'stale'}
-										<span class="badge preset-filled-warning-500 text-xs">Stale</span>
-									{:else if getWorkerStatus(worker) === 'draining'}
-										<span class="badge preset-filled-warning-500 text-xs">Draining</span>
-									{:else if getWorkerStatus(worker) === 'drained'}
-										<span class="badge preset-filled-surface-500 text-xs">Drained</span>
-									{:else}
-										<span class="badge preset-filled-surface-500 text-xs">Stopped</span>
-									{/if}
-								</td>
-								<td>
-									<div class="flex flex-wrap gap-1">
-										{#each parseWorkerQueues(worker.queues) as queue (queue.name)}
-											<span class="badge preset-outlined-primary-500 text-xs">
-												{queue.name}
-												{#if queue.priority === 0 && getWorkerStatus(worker) === 'bootstrapping'}
-													<svg class="w-3 h-3 ml-1 animate-spin inline-block" fill="none" viewBox="0 0 24 24">
-														<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-														<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-													</svg>
-												{/if}
-											</span>
-										{/each}
-									</div>
-								</td>
-								<td class="text-surface-500 text-sm">{formatRelativeTime(new Date(worker.last_beat * 1000))}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-
-			{#if $workersStore.workers.length > 8}
-				<div class="text-center mt-4">
-					<a href="{base}/workers" class="text-primary-500 hover:text-primary-600 text-sm font-medium">
-						+{$workersStore.workers.length - 8} more workers →
-					</a>
+			{#if $workersStore.workers.length === 0}
+				<p class="text-sm text-surface-400">
+					{$workersStore.loading ? 'Loading…' : 'No workers connected. They appear here when they register.'}
+				</p>
+			{:else}
+				<div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold">{$workerStats.total}</div>
+						<div class="text-xs text-surface-500">Total</div>
+					</div>
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold text-primary-500">{$workerStats.processing}</div>
+						<div class="text-xs text-surface-500">Processing</div>
+					</div>
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold text-success-500">{$workerStats.idle}</div>
+						<div class="text-xs text-surface-500">Idle</div>
+					</div>
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold text-secondary-500">{$workerStats.bootstrapping}</div>
+						<div class="text-xs text-surface-500">Bootstrapping</div>
+					</div>
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold {$workerStats.stale > 0 ? 'text-warning-500' : ''}">{$workerStats.stale}</div>
+						<div class="text-xs text-surface-500">Stale</div>
+					</div>
+					<div class="rq-metric-box text-center">
+						<div class="text-xl font-bold text-surface-500">{$workerStats.stopped}</div>
+						<div class="text-xs text-surface-500">Stopped</div>
+					</div>
 				</div>
 			{/if}
-		</div>
-	{:else}
-		<div class="mt-8">
-			<h2 class="rq-section-title mb-4">Workers Overview</h2>
-			<div class="rq-card rq-empty-state">
-				<svg class="w-12 h-12 mx-auto text-surface-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"
-					/>
-				</svg>
-				<p class="text-surface-500">No workers found</p>
-				<p class="text-sm text-surface-400 mt-1">Workers will appear here when they connect</p>
-			</div>
-		</div>
-	{/if}
+		</section>
+	</div>
 </div>
