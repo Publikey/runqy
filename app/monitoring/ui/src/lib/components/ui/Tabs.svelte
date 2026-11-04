@@ -3,6 +3,7 @@
 	// Built on Skeleton's Tabs for keyboard navigation and ARIA.
 	import { Tabs } from '@skeletonlabs/skeleton-svelte';
 	import { formatNumber } from '$lib/utils/format';
+	import { flash } from '$lib/actions/flash';
 
 	interface Item {
 		value: T;
@@ -30,7 +31,7 @@
 		{#each items as item (item.value)}
 			<Tabs.Trigger value={item.value} class="rq-tab">
 				{item.label}
-				{#if item.count !== undefined}<span class="rq-tab-count">{formatNumber(item.count)}</span>{/if}
+				{#if item.count !== undefined}<span class="rq-tab-count" use:flash={item.count}>{formatNumber(item.count)}</span>{/if}
 			</Tabs.Trigger>
 		{/each}
 		<Tabs.Indicator class="rq-tabs-indicator" />

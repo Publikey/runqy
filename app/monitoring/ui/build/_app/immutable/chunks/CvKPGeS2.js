@@ -1,1 +1,0 @@
-import"./CfDybbhu.js";import{b as s,r as t}from"./C4fEglLl.js";import{I as p}from"./B_lwdMaR.js";const o={name:"chevron-down",size:24,node:[["path",{d:"m6 9 6 6 6-6"}]]};o.node;function m(r,e){let n=t(e,["$$slots","$$events","$$legacy"]);p(r,s(()=>n,{get icon(){return o}}))}export{m as C};

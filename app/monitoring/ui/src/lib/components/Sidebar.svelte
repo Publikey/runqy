@@ -17,14 +17,18 @@
 		PanelLeftClose,
 		PanelLeftOpen,
 		ChevronsUpDown,
-		ListChecks
+		ListChecks,
+		Search
 	} from '@lucide/svelte';
+	import { paletteOpen } from '$lib/components/CommandPalette.svelte';
 	import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
 	import { settings } from '$lib/stores/settings';
 	import { authStore } from '$lib/stores/auth';
 	import { Logo, LiveIndicator } from '$lib/components/ui';
 
 	let { mobileOpen = false }: { mobileOpen?: boolean } = $props();
+
+	const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
 	async function handleLogout() {
 		await authStore.logout();
@@ -100,6 +104,23 @@
 				<PanelLeftOpen size={16} strokeWidth={1.75} />
 			{:else}
 				<PanelLeftClose size={16} strokeWidth={1.75} />
+			{/if}
+		</button>
+	</div>
+
+	<!-- Command palette -->
+	<div class="px-2.5 pb-2">
+		<button
+			type="button"
+			class="rq-nav-item w-full text-fg-subtle {iconOnly ? 'justify-center !px-0' : ''}"
+			onclick={() => paletteOpen.set(true)}
+			title={iconOnly ? 'Search (Ctrl+K)' : undefined}
+			aria-label="Search (Ctrl+K)"
+		>
+			<Search size={16} strokeWidth={1.75} class="shrink-0" />
+			{#if !iconOnly}
+				<span class="flex-1 text-left">Search…</span>
+				<kbd class="rq-kbd hidden md:inline-flex">{isMac ? '⌘' : 'Ctrl'} K</kbd>
 			{/if}
 		</button>
 	</div>

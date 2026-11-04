@@ -8,8 +8,10 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import Toast from '$lib/components/Toast.svelte';
 	import { Logo, Spinner, LiveIndicator } from '$lib/components/ui';
-	import { Menu } from '@lucide/svelte';
+	import { Menu, Search } from '@lucide/svelte';
 	import { authStore } from '$lib/stores/auth';
+	import CommandPalette, { paletteOpen } from '$lib/components/CommandPalette.svelte';
+	import { requestRefresh } from '$lib/stores/live';
 
 	let { children } = $props();
 
@@ -21,8 +23,70 @@
 		mobileNavOpen = false;
 	});
 
+	// Keyboard shortcuts: Ctrl/⌘+K palette, "g" then a letter to navigate, "/" search, "r" refresh.
+	const goKeys: Record<string, string> = { d: '/', q: '/queues', t: '/tasks', w: '/workers', a: '/autoscaling' };
+	let goPending = 0;
+
+	function isTyping(t: EventTarget | null): boolean {
+		if (!(t instanceof HTMLElement)) return false;
+		return t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName);
+	}
+
+	function focusPageSearch(): boolean {
+		const inputs = document.querySelectorAll<HTMLInputElement>(
+			'main input[type="text"], main input[type="search"], main input:not([type])'
+		);
+		// Prefer a search / filter field over other text inputs (e.g. "Go to task ID").
+		const ordered = [...inputs].sort(
+			(a, b) => Number(/^(search|filter)/i.test(b.placeholder)) - Number(/^(search|filter)/i.test(a.placeholder))
+		);
+		for (const el of ordered) {
+			if (el.offsetParent !== null && !el.disabled) {
+				el.focus();
+				el.select();
+				return true;
+			}
+		}
+		return false;
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape') mobileNavOpen = false;
+		if (!showSidebar) return;
+		if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+			e.preventDefault();
+			paletteOpen.update((o) => !o);
+			return;
+		}
+		if ($paletteOpen || e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+		if (document.querySelector('[role="dialog"]:not([hidden]), [role="alertdialog"]:not([hidden])')) return;
+		const key = e.key.toLowerCase();
+		if (Date.now() - goPending < 1200 && goKeys[key]) {
+			e.preventDefault();
+			goPending = 0;
+			goto(`${base}${goKeys[key]}`);
+			return;
+		}
+		goPending = 0;
+		if (key === 'g') goPending = Date.now();
+		else if (e.key === '/') {
+			if (focusPageSearch()) e.preventDefault();
+		} else if (key === 'r' && !e.shiftKey) requestRefresh();
+	}
+
+	// Native tooltip with the full text on any truncated (ellipsis) element that has no title.
+	function handleMouseover(e: MouseEvent) {
+		const el = (e.target as Element | null)?.closest?.('.truncate');
+		if (!(el instanceof HTMLElement)) return;
+		const auto = el.dataset.rqAutoTitle === '1';
+		if (el.hasAttribute('title') && !auto) return;
+		if (el.scrollWidth > el.clientWidth) {
+			el.title = (el.textContent ?? '').trim();
+			el.dataset.rqAutoTitle = '1';
+		} else if (auto) {
+			el.removeAttribute('title');
+			delete el.dataset.rqAutoTitle;
+		}
 	}
 
 	// Public routes that don't require authentication
@@ -96,7 +160,17 @@
 				<Menu size={18} strokeWidth={1.75} />
 			</button>
 			<a href="{base}/" aria-label="runqy dashboard"><Logo size={20} wordmark /></a>
-			<div class="ml-auto pr-1"><LiveIndicator compact /></div>
+			<div class="ml-auto flex items-center gap-1 pr-1">
+				<button
+					type="button"
+					class="rq-btn rq-btn-icon rq-btn-v-ghost !w-11 !h-11"
+					aria-label="Search"
+					onclick={() => paletteOpen.set(true)}
+				>
+					<Search size={18} strokeWidth={1.75} />
+				</button>
+				<LiveIndicator compact />
+			</div>
 		</header>
 
 		<!-- Mobile drawer backdrop -->
@@ -116,10 +190,12 @@
 			{@render children()}
 		</main>
 	</div>
+	<CommandPalette />
 {:else}
 	{@render children()}
 {/if}
 
 <svelte:window onkeydown={handleKeydown} />
+<svelte:document onmouseover={handleMouseover} />
 
 <Toast />

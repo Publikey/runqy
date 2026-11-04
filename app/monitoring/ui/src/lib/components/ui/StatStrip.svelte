@@ -17,6 +17,7 @@
 	// inside a Panel (no box-in-a-box) or as a page-level activity strip (`card`).
 	import { base } from '$app/paths';
 	import { formatNumber } from '$lib/utils/format';
+	import { flash } from '$lib/actions/flash';
 
 	interface Props {
 		items: Stat[];
@@ -56,7 +57,7 @@
 			class="rq-stat {s.href ? 'rq-stat-link' : ''}"
 		>
 			<div class="text-2xs md:text-xs text-fg-subtle truncate">{s.label}</div>
-			<div class="mt-0.5 text-base md:text-lg font-semibold tracking-tight tabular-nums {valueClass(s)}">
+			<div class="mt-0.5 text-base md:text-lg font-semibold tracking-tight tabular-nums {valueClass(s)}" use:flash={s.value}>
 				{typeof s.value === 'number' ? formatNumber(s.value) : s.value}
 			</div>
 			{#if s.hint}<div class="text-2xs text-fg-faint truncate">{s.hint}</div>{/if}

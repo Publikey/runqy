@@ -720,6 +720,21 @@ select.select option {
 	background: var(--color-warning-500);
 }
 
+/* use:flash: a value changed during auto-refresh. */
+.rq-flash {
+	animation: rq-flash 600ms var(--ease-out-soft);
+	border-radius: 4px;
+}
+
+@keyframes rq-flash {
+	from {
+		background-color: color-mix(in oklab, var(--color-primary-500) 18%, transparent);
+	}
+	to {
+		background-color: transparent;
+	}
+}
+
 @keyframes rq-live-pulse {
 	0% {
 		transform: scale(1);
@@ -1062,4 +1077,52 @@ select.select option {
 [data-scope='toast'][data-part='description'] {
 	font-size: 0.8125rem;
 	color: var(--color-fg-muted);
+}
+
+/* Command palette (⌘K) */
+.rq-palette-input {
+	flex: 1;
+	min-width: 0;
+	height: 3rem;
+	background: transparent;
+	border: 0;
+	outline: none;
+	font-size: 0.875rem;
+	color: var(--color-fg);
+}
+
+.rq-palette-input::placeholder {
+	color: var(--color-fg-faint);
+}
+
+.rq-palette-item {
+	display: flex;
+	width: 100%;
+	align-items: center;
+	gap: 0.625rem;
+	padding: 0.5rem 0.625rem;
+	border-radius: 0.375rem;
+	text-align: left;
+	font-size: 0.8125rem;
+	color: var(--color-fg);
+}
+
+.rq-palette-item[aria-selected='true'] {
+	background: var(--color-raised);
+}
+
+.rq-kbd {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 1.25rem;
+	height: 1.25rem;
+	padding: 0 0.3rem;
+	border: 1px solid var(--color-line);
+	border-radius: 4px;
+	background: var(--color-raised);
+	font-family: var(--font-sans);
+	font-size: 0.6875rem;
+	color: var(--color-fg-muted);
+	line-height: 1;
 }

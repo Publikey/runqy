@@ -2,6 +2,8 @@
 	import { workerQueueNames } from '$lib/utils/workerQueues';
 	import { onMount, onDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { flash } from '$lib/actions/flash';
 	import { base } from '$app/paths';
 	import { queuesStore } from '$lib/stores/queues';
 	import { workersStore } from '$lib/stores/workers';
@@ -192,6 +194,13 @@
 	function handleSearchInput(e: Event) {
 		searchQuery = (e.target as HTMLInputElement).value;
 	}
+
+	// The command palette links here with ?create=1 (also while this page is already open).
+	$effect(() => {
+		if ($page.url.searchParams.get('create') !== '1') return;
+		openCreateQueueConfig();
+		goto(`${base}/queues`, { replaceState: true, noScroll: true, keepFocus: true });
+	});
 
 	function openCreateQueueConfig() {
 		selectedQueueConfig = null;
@@ -500,11 +509,11 @@
 {/snippet}
 
 {#snippet statCells(pending: number, active: number, retry: number, completed: number, failed: number)}
-	<td class="text-right tabular-nums {countClass(pending)}">{formatNumber(pending)}</td>
-	<td class="text-right tabular-nums {countClass(active)}">{formatNumber(active)}</td>
-	<td class="text-right tabular-nums {countClass(retry)}">{formatNumber(retry)}</td>
-	<td class="text-right tabular-nums {countClass(completed)}">{formatNumber(completed)}</td>
-	<td class="text-right tabular-nums {countClass(failed, 'danger')}">{formatNumber(failed)}</td>
+	<td class="text-right tabular-nums {countClass(pending)}" use:flash={pending}>{formatNumber(pending)}</td>
+	<td class="text-right tabular-nums {countClass(active)}" use:flash={active}>{formatNumber(active)}</td>
+	<td class="text-right tabular-nums {countClass(retry)}" use:flash={retry}>{formatNumber(retry)}</td>
+	<td class="text-right tabular-nums {countClass(completed)}" use:flash={completed}>{formatNumber(completed)}</td>
+	<td class="text-right tabular-nums {countClass(failed, 'danger')}" use:flash={failed}>{formatNumber(failed)}</td>
 {/snippet}
 
 {#snippet compactStatus(paused: number, total: number)}
