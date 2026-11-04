@@ -14,12 +14,21 @@
 	import QueueConfigModal from '$lib/components/QueueConfigModal.svelte';
 	import { Callout, PageHeader, Panel, Button, IconButton, Badge, Segmented, EmptyState, Shimmer } from '$lib/components/ui';
 	import { queueStatus } from '$lib/utils/status';
-	import { Plus, Search, Pause, Play, Trash2, Settings2, Layers, TriangleAlert } from '@lucide/svelte';
+	import { Plus, Search, Pause, Play, Trash2, Settings2, Layers, TriangleAlert, ChevronRight } from '@lucide/svelte';
 	import type { Queue, Worker, QueueConfigDetail, DeploymentConfig } from '$lib/api/types';
 
 	let queueConfigMap = $state<Map<string, QueueConfigDetail>>(new Map());
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let searchQuery = $state('');
+	// Mobile: parent queues whose sub-queues are unfolded.
+	let expanded = $state<Set<string>>(new Set());
+
+	function toggleExpanded(name: string) {
+		const next = new Set(expanded);
+		if (next.has(name)) next.delete(name);
+		else next.add(name);
+		expanded = next;
+	}
 	let statusFilter = $state<'all' | 'running' | 'paused'>('all');
 	let showPaused: boolean | null = $derived(
 		statusFilter === 'all' ? null : statusFilter === 'paused'
@@ -386,44 +395,53 @@
 			</div>
 		</Panel>
 
-		<!-- Mobile: the same list as stacked blocks, no horizontal scroll -->
-		<div class="md:hidden space-y-4">
+		<!-- Mobile: one compact row per parent queue; multi sub-queue rows unfold in place. -->
+		<div class="md:hidden rounded-lg border border-line bg-panel overflow-hidden divide-y divide-line-subtle">
 			{#each queueGroups as group (group.name)}
 				{@const multi = group.queues.length > 1}
-				<div class="rounded-lg border border-line bg-panel overflow-hidden">
-					<div class="flex items-center justify-between gap-2 px-4 py-3 bg-raised">
-						{@render groupTitle(group)}
-						{@render editButton(group)}
-					</div>
-					{#each group.queues as queue (queue.queue)}
-						<!-- svelte-ignore a11y_click_events_have_key_events -->
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div
-							class="px-4 py-3 cursor-pointer border-t border-line-subtle hover:bg-hover transition-colors"
-							onclick={() => navigateToQueue(queue.queue)}
-						>
-							<div class="flex items-center justify-between gap-2">
-								<div class="flex items-center gap-2 min-w-0">
-									<span class="font-mono text-ui text-fg truncate">{subName(queue)}</span>
-									<span class="text-2xs text-fg-faint tabular-nums">p:{priorityOf(queue.queue)}</span>
-									<Badge status={queueStatus(queue.paused)} />
-								</div>
-								{@render queueActions(queue)}
+				{@const open = multi && (expanded.has(group.name) || searchQuery !== '')}
+				{@const groupWorkers = getWorkersForGroup(group)}
+				<div>
+					<button
+						type="button"
+						class="w-full text-left px-3.5 py-3 flex items-center gap-2.5 hover:bg-hover transition-colors"
+						aria-expanded={multi ? open : undefined}
+						onclick={() => (multi ? toggleExpanded(group.name) : navigateToQueue(group.queues[0].queue))}
+					>
+						<ChevronRight
+							size={14}
+							strokeWidth={1.75}
+							class="shrink-0 text-fg-subtle transition-transform duration-150 {open ? 'rotate-90' : ''} {multi ? '' : 'invisible'}"
+						/>
+						<div class="min-w-0 flex-1">
+							<div class="flex items-center gap-2 min-w-0">
+								<span class="font-mono text-ui font-medium text-fg truncate">{group.name}</span>
+								{#if multi}<span class="text-2xs text-fg-subtle tabular-nums shrink-0">{group.queues.length}</span>{/if}
+								{@render compactStatus(group.queues.filter((q) => q.paused).length, group.queues.length)}
 							</div>
-							<div class="mt-2">{@render workersBadge(getWorkersForQueue(queue.queue))}</div>
-							{@render mobileStats(queue.pending, queue.active, queue.retry, queue.completed, queue.failed ?? 0, queue.latency_msec ?? 0)}
+							{@render compactMeta(group.pending, group.active, group.failed, group.latency_msec, groupWorkers.length)}
 						</div>
-					{/each}
-					{#if multi}
-						<div class="px-4 py-3 border-t border-line">
-							<div class="flex items-center justify-between gap-2">
-								<span class="text-xs font-medium text-fg-subtle">Total</span>
-								<div class="flex items-center gap-2">
-									{@render groupStatus(group)}
-									{@render workersBadge(getWorkersForGroup(group))}
+					</button>
+					{#if open}
+						<div class="bg-canvas/60 border-t border-line-subtle">
+							{#each group.queues as queue (queue.queue)}
+								<div class="flex items-center gap-2 pl-9 pr-2 py-2 border-b border-line-subtle last:border-b-0">
+									<button type="button" class="min-w-0 flex-1 text-left" onclick={() => navigateToQueue(queue.queue)}>
+										<div class="flex items-center gap-2 min-w-0">
+											<span class="font-mono text-ui text-fg truncate">{subName(queue)}</span>
+											<span class="text-2xs text-fg-faint tabular-nums shrink-0">p:{priorityOf(queue.queue)}</span>
+											{@render compactStatus(queue.paused ? 1 : 0, 1)}
+										</div>
+										{@render compactMeta(queue.pending, queue.active, queue.failed ?? 0, queue.latency_msec ?? 0, getWorkersForQueue(queue.queue).length)}
+									</button>
+									{@render queueActions(queue)}
 								</div>
+							{/each}
+							<div class="flex justify-end px-2 py-1.5 border-t border-line-subtle">
+								<Button variant="ghost" size="sm" icon={Settings2} onclick={() => openEditQueueConfig(group.queues[0].queue)}>
+									Edit config
+								</Button>
 							</div>
-							{@render mobileStats(group.pending, group.active, group.retry, group.completed, group.failed, group.latency_msec)}
 						</div>
 					{/if}
 				</div>
@@ -485,21 +503,23 @@
 	<td class="text-right tabular-nums {failed > 0 ? 'text-error-300' : 'text-fg-muted'}">{formatNumber(failed)}</td>
 {/snippet}
 
-{#snippet mobileStats(pending: number, active: number, retry: number, completed: number, failed: number, latency: number)}
-	<dl class="grid grid-cols-3 gap-x-3 gap-y-2 mt-3 text-center">
-		{@render mobileStat('Pending', formatNumber(pending), pending > 0 ? 'text-warning-300' : 'text-fg-muted')}
-		{@render mobileStat('Active', formatNumber(active), 'text-fg-muted')}
-		{@render mobileStat('Retry', formatNumber(retry), 'text-fg-muted')}
-		{@render mobileStat('Completed', formatNumber(completed), 'text-fg-muted')}
-		{@render mobileStat('Failed', formatNumber(failed), failed > 0 ? 'text-error-300' : 'text-fg-muted')}
-		{@render mobileStat('Latency', formatDuration(latency), 'text-fg-muted')}
-	</dl>
+{#snippet compactStatus(paused: number, total: number)}
+	{#if paused === total}
+		<Badge status={queueStatus(true)} class="shrink-0" />
+	{:else if paused > 0}
+		<Badge tone="warning" class="shrink-0">{paused}/{total} paused</Badge>
+	{/if}
 {/snippet}
 
-{#snippet mobileStat(label: string, value: string, tone: string)}
-	<div class="flex flex-col-reverse">
-		<dt class="text-2xs text-fg-subtle">{label}</dt>
-		<dd class="text-ui tabular-nums {tone}">{value}</dd>
+{#snippet compactMeta(pending: number, active: number, failed: number, latency: number, workers: number)}
+	<div class="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-xs tabular-nums text-fg-subtle">
+		<span><span class={pending > 0 ? 'text-warning-300' : 'text-fg-muted'}>{formatNumber(pending)}</span> pending</span>
+		<span><span class="text-fg-muted">{formatNumber(active)}</span> active</span>
+		{#if failed > 0}<span><span class="text-error-300">{formatNumber(failed)}</span> failed</span>{/if}
+		<span>{formatDuration(latency)}</span>
+		{#if workers === 0}
+			<span class="inline-flex items-center gap-1 text-warning-300"><TriangleAlert size={12} strokeWidth={1.75} />No worker</span>
+		{/if}
 	</div>
 {/snippet}
 
