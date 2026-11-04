@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { Task, TaskState } from '$lib/api/types';
+	import { base } from '$app/paths';
 	import { formatRelativeTime, truncateId } from '$lib/utils/format';
-	import { Search, Copy, X, Play, Archive, Trash2, Inbox } from '@lucide/svelte';
+	import { Search, Copy, X, Play, Archive, Trash2, Inbox, ChevronRight } from '@lucide/svelte';
 	import { Badge, IconButton, EmptyState, Shimmer, KeyValue } from '$lib/components/ui';
 	import JsonViewer from './JsonViewer.svelte';
 
@@ -13,6 +14,10 @@
 		onselect?: (detail: { id: string; selected: boolean }) => void;
 		onselectall?: (detail: { selected: boolean }) => void;
 		onaction?: (detail: { action: string; taskId: string }) => void;
+		/** Queue column linking to the queue page (cross-queue lists). */
+		showQueue?: boolean;
+		/** Row checkboxes for bulk actions. */
+		selectable?: boolean;
 	}
 
 	let {
@@ -22,7 +27,9 @@
 		selectedIds = new Set(),
 		onselect,
 		onselectall,
-		onaction
+		onaction,
+		showQueue = false,
+		selectable = true
 	}: Props = $props();
 
 	let expandedId = $state<string | null>(null);
@@ -47,9 +54,11 @@
 	let canArchive = $derived(taskState === 'pending' || taskState === 'scheduled' || taskState === 'retry');
 	let canDelete = $derived(taskState !== 'active');
 
-	// Columns: checkbox, id, type, queue, state-specific ones, actions.
+	// Columns: [checkbox], id, type, [queue], state-specific ones, actions.
 	let colCount = $derived(
-		5 +
+		3 +
+			(selectable ? 1 : 0) +
+			(showQueue ? 1 : 0) +
 			(taskState === 'retry' || taskState === 'archived' ? 1 : 0) +
 			(taskState === 'scheduled' || taskState === 'retry' ? 1 : 0) +
 			(taskState === 'completed' ? 1 : 0) +
@@ -107,22 +116,26 @@
 
 	<!-- Table -->
 	<div class="table-container">
-		<table class="rq-table">
+		<table class="rq-table rq-table-fluid">
 			<thead>
 				<tr>
-					<th class="w-10">
-						<input
-							type="checkbox"
-							class="checkbox"
-							aria-label="Select all tasks"
-							checked={allSelected}
-							indeterminate={someSelected && !allSelected}
-							onchange={handleSelectAll}
-						/>
-					</th>
+					{#if selectable}
+						<th class="w-10">
+							<input
+								type="checkbox"
+								class="checkbox"
+								aria-label="Select all tasks"
+								checked={allSelected}
+								indeterminate={someSelected && !allSelected}
+								onchange={handleSelectAll}
+							/>
+						</th>
+					{/if}
 					<th>Task ID</th>
-					<th>Type</th>
-					<th>Queue</th>
+					<th class="hidden md:table-cell">Type</th>
+					{#if showQueue}
+						<th class="hidden md:table-cell">Queue</th>
+					{/if}
 					{#if taskState === 'retry' || taskState === 'archived'}
 						<th class="text-right">Retries</th>
 					{/if}
@@ -160,33 +173,61 @@
 				{:else}
 					{#each filteredTasks as task, i (task.id || `_idx_${i}`)}
 						<tr class="task-row">
-							<td>
-								<input
-									type="checkbox"
-									class="checkbox"
-									aria-label="Select task {task.id}"
-									checked={selectedIds.has(task.id)}
-									onchange={(e) => handleSelect(task.id, e)}
-								/>
-							</td>
+							{#if selectable}
+								<td>
+									<input
+										type="checkbox"
+										class="checkbox"
+										aria-label="Select task {task.id}"
+										checked={selectedIds.has(task.id)}
+										onchange={(e) => handleSelect(task.id, e)}
+									/>
+								</td>
+							{/if}
 							<td>
 								<div class="flex items-center gap-1">
 									<button
 										type="button"
-										class="font-mono text-ui text-primary-400 hover:text-primary-300 transition-colors"
+										class="rq-btn rq-btn-icon rq-btn-sm rq-btn-v-ghost"
 										onclick={() => toggleExpand(task.id)}
-										title={task.id}
+										aria-label={expandedId === task.id ? 'Hide details' : 'Show details'}
 										aria-expanded={expandedId === task.id}
 									>
-										{truncateId(task.id, 16)}
+										<ChevronRight
+											size={14}
+											strokeWidth={1.75}
+											class="transition-transform duration-150 {expandedId === task.id ? 'rotate-90' : ''}"
+										/>
 									</button>
-									<IconButton icon={Copy} label="Copy ID" onclick={() => copyTaskId(task.id)} />
+									<a
+										href="{base}/tasks/{encodeURIComponent(task.id)}"
+										class="font-mono text-ui text-primary-400 hover:text-primary-300 transition-colors"
+										title="Open task {task.id}"
+									>
+										{truncateId(task.id, 16)}
+									</a>
+									<span class="hidden md:inline-flex">
+										<IconButton icon={Copy} label="Copy ID" onclick={() => copyTaskId(task.id)} />
+									</span>
+								</div>
+								<!-- Mobile: queue (or type) under the id instead of their own columns. -->
+								<div class="md:hidden pl-8 text-xs text-fg-subtle truncate max-w-[14rem]">
+									{showQueue ? task.queue : task.type}
 								</div>
 							</td>
-							<td>
+							<td class="hidden md:table-cell">
 								<Badge tone="outline" class="font-mono">{task.type}</Badge>
 							</td>
-							<td class="font-mono text-fg-muted">{task.queue}</td>
+							{#if showQueue}
+								<td class="hidden md:table-cell">
+									<a
+										href="{base}/queues/{encodeURIComponent(task.queue)}"
+										class="text-fg-muted hover:text-fg transition-colors"
+									>
+										{task.queue}
+									</a>
+								</td>
+							{/if}
 							{#if taskState === 'retry' || taskState === 'archived'}
 								<td class="text-right tabular-nums text-fg-muted">
 									{task.retried}/{task.max_retry}

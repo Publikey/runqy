@@ -26,7 +26,10 @@ import type {
 	AlertsOverview,
 	AlertSettings,
 	ControlRequest,
-	ControlResult
+	ControlResult,
+	TaskDetail,
+	AllTasksResponse,
+	ListableTaskState
 } from './types';
 
 const BASE_URL = `${base}/api`;
@@ -201,7 +204,7 @@ export async function archiveAllTasks(qname: string, state: TaskState): Promise<
 export async function deleteAllTasks(qname: string, state: TaskState): Promise<{ deleted_count: number }> {
 	return fetchJson(
 		`${BASE_URL}/queues/${encodeURIComponent(qname)}/${state}_tasks:delete_all`,
-		{ method: 'POST' }
+		{ method: 'DELETE' } // the routes are registered as DELETE (POST got a 405)
 	);
 }
 
@@ -518,4 +521,38 @@ export async function sendTestAlert(settings?: AlertSettings): Promise<{ message
 // last_command once its next heartbeat lands.
 export async function sendControl(req: ControlRequest): Promise<ControlResult> {
 	return fetchJson(`${BASE_URL}/control`, { method: 'POST', body: JSON.stringify(req) });
+}
+
+// Cross-queue task lookup: resolves the task's queue on the server (reverse lookup, then a
+// scan of the queues). Throws TaskNotFoundError on 404 (deleted or expired after its TTL).
+export class TaskNotFoundError extends Error {
+	constructor(id: string) {
+		super(`Task ${id} not found`);
+		this.name = 'TaskNotFoundError';
+	}
+}
+
+export async function getTaskAnyQueue(taskId: string): Promise<TaskDetail> {
+	try {
+		return await fetchJson<TaskDetail>(`${BASE_URL}/tasks/${encodeURIComponent(taskId)}`);
+	} catch (e) {
+		if (e instanceof Error && e.message.includes('task not found')) throw new TaskNotFoundError(taskId);
+		throw e;
+	}
+}
+
+// Tasks of one state across all queues (or one exact queue), merged and paginated server-side.
+export async function listAllTasks(opts: {
+	state: ListableTaskState;
+	queue?: string;
+	page?: number;
+	size?: number;
+}): Promise<AllTasksResponse> {
+	const params = new URLSearchParams({
+		state: opts.state,
+		page: String(opts.page ?? 1),
+		size: String(opts.size ?? 20)
+	});
+	if (opts.queue) params.set('queue', opts.queue);
+	return fetchJson(`${BASE_URL}/tasks?${params}`);
 }

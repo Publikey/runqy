@@ -16,7 +16,8 @@
 		LogOut,
 		PanelLeftClose,
 		PanelLeftOpen,
-		ChevronsUpDown
+		ChevronsUpDown,
+		ListChecks
 	} from '@lucide/svelte';
 	import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
 	import { settings } from '$lib/stores/settings';
@@ -42,6 +43,7 @@
 			items: [
 				{ label: 'Dashboard', href: '', icon: LayoutDashboard },
 				{ label: 'Queues', href: '/queues', icon: Layers },
+				{ label: 'Tasks', href: '/tasks', icon: ListChecks },
 				{ label: 'Workers', href: '/workers', icon: Cpu },
 				{ label: 'Playground', href: '/playground', icon: FlaskConical }
 			]

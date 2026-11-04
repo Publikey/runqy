@@ -482,3 +482,30 @@ export interface AlertsOverview {
 		last_error_at?: string;
 	};
 }
+
+// ---- Cross-queue tasks (Tasks page, live task page) ----
+
+/** Task states listable across queues (GET /api/tasks). */
+export type ListableTaskState = 'active' | 'pending' | 'scheduled' | 'retry' | 'archived' | 'completed';
+
+/** A task as returned by GET /api/tasks and GET /api/tasks/{id}: the per-queue task detail plus its queue. */
+export interface TaskDetail extends Task {
+	/** RFC3339; set while pending when the task hash records it. */
+	pending_since?: string;
+	/** Seconds the task has left to be retained (completed only, from the retention). */
+	ttl_seconds?: number;
+	/** Remaining lifetime of the task hash in Redis, seconds (absent: no expiry). */
+	key_ttl_seconds?: number;
+	/** Lifecycle limits stamped on the task at enqueue, seconds. */
+	limits?: Partial<Record<'ttl_completed' | 'ttl_archived' | 'pending_timeout' | 'active_timeout', number>>;
+	/** Only when the task is active and its worker reports it (asynq-native servers). */
+	worker?: { id: string; started: string; deadline?: string };
+}
+
+export interface AllTasksResponse {
+	tasks: TaskDetail[];
+	/** Number of tasks in this state over the queues (from queue stats). */
+	total: number;
+	page: number;
+	size: number;
+}

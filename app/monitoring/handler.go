@@ -190,6 +190,10 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 	// Queue Historical Stats endpoint.
 	api.HandleFunc("/queue_stats", newListQueueStatsHandlerFunc(inspector)).Methods("GET")
 
+	// Cross-queue task endpoints (Tasks page, live task page).
+	api.HandleFunc("/tasks", newListAllTasksHandlerFunc(rc, inspector, payloadFmt, resultFmt)).Methods("GET")
+	api.HandleFunc("/tasks/{task_id}", newGetTaskByIDHandlerFunc(rc, inspector, payloadFmt, resultFmt)).Methods("GET")
+
 	// Task endpoints.
 	api.HandleFunc("/queues/{qname}/active_tasks", newListActiveTasksHandlerFunc(inspector, payloadFmt)).Methods("GET")
 	api.HandleFunc("/queues/{qname}/active_tasks/{task_id}:cancel", newCancelActiveTaskHandlerFunc(inspector)).Methods("POST")

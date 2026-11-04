@@ -8,7 +8,7 @@
 	import { toaster } from '$lib/stores/toaster';
 	import { formatRelativeTime, truncate } from '$lib/utils/format';
 	import JsonViewer from '$lib/components/JsonViewer.svelte';
-	import { PageHeader, Panel, Field, Button, Badge, EmptyState } from '$lib/components/ui';
+	import { PageHeader, Panel, Field, Button, Badge, EmptyState, MoreLink } from '$lib/components/ui';
 	import { taskStatus } from '$lib/utils/status';
 	import { ChevronRight, Send, RotateCw, History } from '@lucide/svelte';
 
@@ -22,6 +22,8 @@
 		count: number;
 		timeout: number;
 		sentAt: string;
+		/** First task id of the send, to follow it on its task page. */
+		taskId?: string;
 	}
 
 	interface TrackedTask {
@@ -175,7 +177,14 @@
 			const response = await playgroundEnqueue(queue, JSON.parse(payload), sendCount, sendTimeout);
 			tracked = response.tasks.slice(0, TRACK_MAX).map((t) => ({ id: t.id, queue: t.queue, task: null }));
 			extraSent = Math.max(0, response.count - TRACK_MAX);
-			addToHistory({ queue, payload, count: sendCount, timeout: sendTimeout, sentAt: new Date().toISOString() });
+			addToHistory({
+				queue,
+				payload,
+				count: sendCount,
+				timeout: sendTimeout,
+				sentAt: new Date().toISOString(),
+				taskId: response.tasks[0]?.id
+			});
 			toaster.success({
 				title: 'Enqueued',
 				description: `${response.count} task${response.count > 1 ? 's' : ''} sent to ${response.tasks[0]?.queue ?? queue}`
@@ -382,6 +391,15 @@
 									<span class="text-xs text-fg-subtle tabular-nums">{entry.timeout}s timeout</span>
 								{/if}
 								<div class="flex-1"></div>
+								{#if entry.taskId}
+									<Button
+										variant="ghost"
+										size="sm"
+										href="{base}/tasks/{encodeURIComponent(entry.taskId)}"
+									>
+										Follow
+									</Button>
+								{/if}
 								<Button variant="ghost" size="sm" onclick={() => loadEntry(entry)}>Load</Button>
 								<Button variant="ghost" size="sm" icon={RotateCw} onclick={() => handleResend(entry)}>Resend</Button>
 							</div>
@@ -404,13 +422,20 @@
 					<li class="px-4 md:px-5 py-3">
 						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 min-w-0">
 							<a
-								href="{base}/queues/{encodeURIComponent(t.queue)}"
+								href="{base}/tasks/{encodeURIComponent(t.id)}"
 								class="text-ui font-mono text-primary-400 hover:text-primary-300 break-all"
+								title="Follow this task"
 							>
 								{t.id}
 							</a>
 							<Badge status={taskStatus(t.task?.state)} />
-							<span class="text-xs font-mono text-fg-subtle">{t.queue}</span>
+							<a
+								href="{base}/queues/{encodeURIComponent(t.queue)}"
+								class="text-xs text-fg-subtle hover:text-fg transition-colors"
+							>
+								{t.queue}
+							</a>
+							<span class="ml-auto"><MoreLink href="/tasks/{encodeURIComponent(t.id)}" label="Follow" /></span>
 							{#if t.task?.state === 'retry' || t.task?.state === 'archived'}
 								<span class="text-xs text-error-300 truncate" title={t.task.error_message}>
 									{truncate(t.task.error_message ?? '', 80)}
