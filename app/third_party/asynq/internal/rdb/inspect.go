@@ -218,7 +218,7 @@ func (r *RDB) CurrentStats(qname string) (*Stats, error) {
 			if val == 0 {
 				stats.Latency = 0
 			} else {
-				stats.Latency = r.clock.Now().Sub(time.Unix(0, int64(val)))
+				stats.Latency = r.clock.Now().Sub(pendingSinceTime(int64(val)))
 			}
 		case "group_size":
 			stats.Groups = val
@@ -2051,4 +2051,19 @@ func (r *RDB) ClusterNodes(qname string) ([]redis.ClusterNode, error) {
 		}
 	}
 	return nil, fmt.Errorf("nodes not found")
+}
+
+// pendingSinceTime decodes a task's pending_since field. asynq writes nanoseconds, but
+// runqy-worker before v0.3.2 wrote seconds when moving a task from retry back to pending:
+// read as nanoseconds, those gave a latency of ~56 years (since 1970), which fired the
+// latency alert and autoscale trigger.
+func pendingSinceTime(v int64) time.Time {
+	switch {
+	case v > 1e15: // nanoseconds
+		return time.Unix(0, v)
+	case v > 1e12: // milliseconds
+		return time.UnixMilli(v)
+	default: // seconds
+		return time.Unix(v, 0)
+	}
 }

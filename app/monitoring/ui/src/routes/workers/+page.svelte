@@ -9,7 +9,7 @@
 	import { Callout, EmptyState, PageHeader, Segmented, Shimmer, StatStrip } from '$lib/components/ui';
 	import { workerState, type WorkerState } from '$lib/utils/status';
 
-	type Filter = 'all' | 'processing' | 'idle' | 'bootstrapping' | 'stale' | 'stopped';
+	type Filter = 'all' | 'processing' | 'idle' | 'bootstrapping' | 'unhealthy' | 'stale' | 'stopped';
 
 	let pollInterval: ReturnType<typeof setInterval> | null = null;
 	let statusFilter = $state<Filter>('all');
@@ -31,6 +31,7 @@
 		{ value: 'processing', label: 'Processing', count: countState('processing') },
 		{ value: 'idle', label: 'Idle', count: countState('idle') },
 		{ value: 'bootstrapping', label: 'Bootstrapping', count: countState('bootstrapping') },
+		{ value: 'unhealthy', label: 'Unhealthy', count: countState('unhealthy') },
 		{ value: 'stale', label: 'Stale', count: countState('stale') },
 		{ value: 'stopped', label: 'Stopped', count: countState('stopped') }
 	]);

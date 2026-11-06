@@ -40,15 +40,18 @@ type gpuMetrics struct {
 
 // workerData represents an external worker from asynq:workers:* keys
 type workerData struct {
-	WorkerID    string         `json:"worker_id"`
-	StartedAt   int64          `json:"started_at"`
-	LastBeat    int64          `json:"last_beat"`
-	Concurrency int            `json:"concurrency"`
-	Queues      string         `json:"queues"`
-	Status      string         `json:"status"`
-	IsStale     bool           `json:"is_stale"` // True if no heartbeat for 30+ seconds
-	Metrics     *systemMetrics `json:"metrics,omitempty"`
-	InstanceID  string         `json:"instance_id,omitempty"`
+	WorkerID    string `json:"worker_id"`
+	StartedAt   int64  `json:"started_at"`
+	LastBeat    int64  `json:"last_beat"`
+	Concurrency int    `json:"concurrency"`
+	Queues      string `json:"queues"`
+	Status      string `json:"status"`
+	IsStale     bool   `json:"is_stale"` // True if no heartbeat for 30+ seconds
+	// Healthy is false while the worker's process is down or degraded: the worker keeps
+	// heartbeating but takes no task. Absent when the heartbeat does not report it.
+	Healthy    *bool          `json:"healthy,omitempty"`
+	Metrics    *systemMetrics `json:"metrics,omitempty"`
+	InstanceID string         `json:"instance_id,omitempty"`
 	control.WorkerFields
 }
 
@@ -111,6 +114,10 @@ func newListWorkersHandlerFunc(rc redis.UniversalClient) http.HandlerFunc {
 				worker.LastBeat = lastBeat
 				// Consider stale if no heartbeat for 30 seconds
 				worker.IsStale = (now - lastBeat) > 30
+			}
+			if v, ok := data["healthy"]; ok {
+				healthy := v != "0" && !strings.EqualFold(v, "false")
+				worker.Healthy = &healthy
 			}
 			if concurrency, err := strconv.Atoi(data["concurrency"]); err == nil {
 				worker.Concurrency = concurrency

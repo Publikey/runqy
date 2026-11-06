@@ -23,6 +23,7 @@ export type WorkerState =
 	| 'processing'
 	| 'idle'
 	| 'bootstrapping'
+	| 'unhealthy'
 	| 'stale'
 	| 'draining'
 	| 'drained'
@@ -36,6 +37,8 @@ export function isWorkerProcessing(workerId: string, servers: ServerInfo[]): boo
 export function workerState(worker: Worker, servers: ServerInfo[]): WorkerState {
 	if (worker.is_stale) return 'stale';
 	if (worker.status === 'bootstrapping') return 'bootstrapping';
+	// Process down or degraded: the worker heartbeats but takes no task.
+	if (worker.healthy === false) return 'unhealthy';
 	if (worker.status === 'draining' || worker.status === 'drained') return worker.status;
 	if (worker.status === 'running') {
 		return isWorkerProcessing(worker.worker_id, servers) ? 'processing' : 'idle';
@@ -47,6 +50,7 @@ const WORKER: Record<WorkerState, StatusView> = {
 	processing: { label: 'Processing', tone: 'accent' },
 	idle: { label: 'Idle', tone: 'success' },
 	bootstrapping: { label: 'Bootstrapping', tone: 'accent' },
+	unhealthy: { label: 'Unhealthy', tone: 'danger' },
 	stale: { label: 'Stale', tone: 'warning' },
 	draining: { label: 'Draining', tone: 'warning' },
 	drained: { label: 'Drained', tone: 'neutral' },

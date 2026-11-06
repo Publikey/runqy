@@ -70,6 +70,7 @@ export interface Worker {
 	queues: string;      // JSON {"queue":priority}; legacy workers: "map[queue1:5 queue2:5]" (see parseWorkerQueues)
 	status: string;
 	is_stale: boolean;
+	healthy?: boolean; // false: process down or degraded, the worker takes no task
 	metrics?: WorkerMetrics;
 	instance_id?: string;
 	version?: string;
