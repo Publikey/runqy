@@ -92,6 +92,21 @@ func newAutoscaleStatusHandlerFunc(store *autoscale.Store, rc redis.UniversalCli
 	}
 }
 
+// newAutoscaleResumeQueueHandlerFunc lifts a queue's provisioning pauses.
+func newAutoscaleResumeQueueHandlerFunc(rc redis.UniversalClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		queue := mux.Vars(r)["queue"]
+		n, err := autoscale.ResumeQueue(r.Context(), rc, queue)
+		if err != nil {
+			writeJSONError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("[AUTOSCALE] queue %q: %d provisioning pause(s) lifted from the dashboard", queue, n)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"queue": queue, "resumed": n})
+	}
+}
+
 // newAutoscaleInstanceLogsHandlerFunc returns an instance's logs: live from the provider
 // while the machine exists, otherwise those saved when it was destroyed.
 func newAutoscaleInstanceLogsHandlerFunc(store *autoscale.Store, providers *asprovider.Store) http.HandlerFunc {

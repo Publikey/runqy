@@ -19,6 +19,9 @@ type Pause struct {
 	Failures int       `json:"failures"`
 	Until    time.Time `json:"until"`
 	Cause    string    `json:"cause"`
+	// Suspended marks a queue that reached max_boot_failures: provisioning is stopped for
+	// a day rather than retried within the hour (see ResumeQueue).
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 // pauseCauses explains each backoff kind in plain words.
@@ -48,7 +51,11 @@ func ListPauses(ctx context.Context, rdb redis.Cmdable, now time.Time) ([]Pause,
 		if json.Unmarshal([]byte(v), &b) != nil || !b.Until.After(now) {
 			continue
 		}
-		out = append(out, Pause{Queue: queue, Kind: kind, Failures: b.Failures, Until: b.Until, Cause: pauseCauses[kind]})
+		cause := pauseCauses[kind]
+		if b.Suspended {
+			cause += "; provisioning suspended"
+		}
+		out = append(out, Pause{Queue: queue, Kind: kind, Failures: b.Failures, Until: b.Until, Cause: cause, Suspended: b.Suspended})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Queue != out[j].Queue {
@@ -57,4 +64,15 @@ func ListPauses(ctx context.Context, rdb redis.Cmdable, now time.Time) ([]Pause,
 		return out[i].Kind < out[j].Kind
 	})
 	return out, nil
+}
+
+// ResumeQueue lifts every provisioning pause of a queue (failure counts start over) and
+// returns how many were removed. The autoscaler leader notices on its next evaluation.
+func ResumeQueue(ctx context.Context, rdb redis.Cmdable, queue string) (int, error) {
+	if rdb == nil {
+		return 0, nil
+	}
+	n, err := rdb.HDel(ctx, backoffKey,
+		backoffField(backoffProvision, queue), backoffField(backoffBoot, queue), backoffField(backoffHost, queue)).Result()
+	return int(n), err
 }

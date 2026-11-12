@@ -47,6 +47,12 @@ const maxProvisionBackoff = 10 * time.Minute
 // instance was billed for a whole boot_timeout, so retries slow down much more.
 const maxBootBackoff = time.Hour
 
+// bootSuspension is how long provisioning stops for a queue once max_boot_failures
+// instances in a row never became ready: by then the image, the task code or the queue
+// config is at fault, and renting a machine every hour only adds to the bill. One
+// instance is tried again afterwards; `runqy autoscale resume` lifts it sooner.
+const bootSuspension = 24 * time.Hour
+
 // workerStatusBootstrapping is the heartbeat status a worker reports from registration
 // until its supervised process signals ready (see runqy-worker heartbeat).
 const workerStatusBootstrapping = "bootstrapping"
@@ -129,6 +135,7 @@ type bootObservation struct {
 type provisionBackoff struct {
 	failures  int
 	until     time.Time
+	suspended bool // boot failures reached max_boot_failures (see bootSuspension)
 	announced bool // the pause was logged (log it once, not every poll)
 }
 
@@ -308,7 +315,7 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		return
 	}
 	now := time.Now()
-	live := a.reconcileInstances(ctx, prov, parent, managed, byInstance, asc.BootTimeoutOrDefault(), now)
+	live := a.reconcileInstances(ctx, prov, parent, managed, byInstance, asc.BootTimeoutOrDefault(), asc.MaxBootFailuresOrDefault(), now)
 
 	stats := a.queueStats(ctx, parent)
 	a.accrueCost(ctx, live, elapsed)
@@ -430,9 +437,10 @@ func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *worke
 //   - Teardown left unfinished (provider error, crash): retry the destroy.
 //   - Provider reports failed/terminated: destroy (idempotent; frees e.g. Vast storage).
 //   - No worker registered within boot_timeout of creation, or a worker bootstrapping for
-//     longer than boot_timeout: destroy (bad image, crash loop...).
+//     longer than boot_timeout: destroy (bad image, crash loop, slow host...) and avoid
+//     that host. maxBootFails such instances in a row suspend provisioning.
 //   - Correlated worker dead for workerLostTimeout across evaluations: destroy.
-func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provider, parent string, managed []*Instance, byInstance map[string]*workerHeartbeat, bootTimeout time.Duration, now time.Time) []*Instance {
+func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provider, parent string, managed []*Instance, byInstance map[string]*workerHeartbeat, bootTimeout time.Duration, maxBootFails int, now time.Time) []*Instance {
 	live := make([]*Instance, 0, len(managed))
 	for _, inst := range managed {
 		if inst.Status == StatusDraining || inst.Status == StatusDestroying {
@@ -460,11 +468,13 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 						// retry soon on another one.
 						reason += a.recordFailure(backoffHost, parent, hostFaultRetryBase, maxProvisionBackoff, now, "host fault")
 					} else {
-						reason += a.recordBootFailure(parent, bootTimeout, now)
+						reason += a.recordBootFailure(parent, bootTimeout, maxBootFails, now)
 					}
 				}
 				log.Printf("[AUTOSCALE] queue %q: instance %s reported %s by provider — tearing down", parent, inst.InstanceID, st.Status)
-				a.teardown(ctx, prov, inst, final, reason)
+				// A machine that stops while its worker was serving is unexpected too: keep
+				// its last output, the only trace of why it went away.
+				a.teardownKeepingLogs(ctx, prov, inst, final, reason)
 				continue
 			}
 		}
@@ -497,7 +507,12 @@ func (a *Autoscaler) reconcileInstances(ctx context.Context, prov provider.Provi
 		}
 		if stillBooting && now.Sub(bootRef) > bootTimeout {
 			log.Printf("[AUTOSCALE] queue %q: instance %s has no ready worker after %s — tearing down", parent, inst.InstanceID, bootTimeout)
-			reason := fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout) + a.recordBootFailure(parent, bootTimeout, now)
+			reason := fmt.Sprintf("no ready worker within boot_timeout (%s)", bootTimeout) + a.recordBootFailure(parent, bootTimeout, maxBootFails, now)
+			// The cheapest offer is often the same machine again: stop renting it for a
+			// while (slow network or disk; if the image is at fault the suspension applies).
+			if ha, ok := prov.(provider.HostAvoider); ok {
+				ha.AvoidHost(ctx, providerInstanceID(inst))
+			}
 			a.teardown(ctx, prov, inst, StatusFailed, reason)
 			continue
 		}
@@ -551,8 +566,9 @@ func (a *Autoscaler) recordFailure(kind, parent string, base, max time.Duration,
 // recordBootFailure counts an instance that never became ready and pauses provisioning
 // for boot_timeout × 2^(failures-1), capped at maxBootBackoff: a broken image or a
 // crashing task would otherwise rent (and pay for) a new machine every boot_timeout,
-// forever. It returns a suffix for the teardown reason.
-func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration, now time.Time) string {
+// forever. From maxFails failures in a row, provisioning is suspended for bootSuspension
+// instead. It returns a suffix for the teardown reason.
+func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration, maxFails int, now time.Time) string {
 	b := a.bootFails[parent]
 	if b == nil {
 		b = &provisionBackoff{}
@@ -563,11 +579,37 @@ func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration,
 	if delay > maxBootBackoff || delay <= 0 {
 		delay = maxBootBackoff
 	}
+	b.suspended = maxFails > 0 && b.failures >= maxFails
+	if b.suspended {
+		delay = bootSuspension
+	}
 	b.until = now.Add(delay)
 	b.announced = false
 	a.persistBackoff(backoffBoot, parent)
+	if b.suspended {
+		log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning suspended for %s (runqy autoscale resume %s)", parent, b.failures, delay, parent)
+		return fmt.Sprintf("; %d in a row, provisioning suspended for %s (fix the image or the queue config, then: runqy autoscale resume %s)", b.failures, delay, parent)
+	}
 	log.Printf("[AUTOSCALE] queue %q: %d instance(s) in a row never became ready, provisioning paused for %s", parent, b.failures, delay)
 	return fmt.Sprintf("; %d in a row, next instance in %s", b.failures, delay)
+}
+
+// pausedBy returns the queue's pause of the given kind when it is still in effect. A
+// pause removed from the store (`runqy autoscale resume`, possibly handled by another
+// server) is dropped here, failure count included.
+func (a *Autoscaler) pausedBy(ctx context.Context, kind, parent string, now time.Time) *provisionBackoff {
+	b := a.backoffMap(kind)[parent]
+	if b == nil || !now.Before(b.until) {
+		return nil
+	}
+	if a.backoffs != nil {
+		if ok, err := a.backoffs.Has(ctx, backoffField(kind, parent)); err == nil && !ok {
+			delete(a.backoffMap(kind), parent)
+			log.Printf("[AUTOSCALE] queue %q: %s pause lifted, provisioning resumes", parent, kind)
+			return nil
+		}
+	}
+	return b
 }
 
 // provisionN creates up to n instances, stopping at the first failure and backing off
@@ -576,21 +618,21 @@ func (a *Autoscaler) recordBootFailure(parent string, bootTimeout time.Duration,
 // scaleLog describes the decision; it is logged only when provisioning is actually
 // attempted, and pauses are logged once per pause instead of every poll.
 func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string, n int, pollInterval time.Duration, now time.Time, scaleLog string) {
-	if b := a.backoff[parent]; b != nil && now.Before(b.until) {
+	if b := a.pausedBy(ctx, backoffProvision, parent, now); b != nil {
 		if !b.announced {
 			log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d failure(s)", parent, b.until.Format(time.RFC3339), b.failures)
 			b.announced = true
 		}
 		return
 	}
-	if b := a.hostFails[parent]; b != nil && now.Before(b.until) {
+	if b := a.pausedBy(ctx, backoffHost, parent, now); b != nil {
 		if !b.announced {
 			log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d host fault(s)", parent, b.until.Format(time.RFC3339), b.failures)
 			b.announced = true
 		}
 		return
 	}
-	if b := a.bootFails[parent]; b != nil && now.Before(b.until) {
+	if b := a.pausedBy(ctx, backoffBoot, parent, now); b != nil {
 		if !b.announced {
 			log.Printf("[AUTOSCALE] queue %q: provisioning paused until %s after %d instance(s) that never became ready", parent, b.until.Format(time.RFC3339), b.failures)
 			b.announced = true
@@ -632,6 +674,7 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 		spec.MaxPricePerHour = asc.Instance.MaxPricePerHour
 		spec.MinRAMGB = asc.Instance.MinRAMGB
 		spec.MinVCPU = asc.Instance.MinVCPU
+		spec.MinDownloadMbps = asc.Instance.MinDownloadMbps
 	}
 
 	rented, err := prov.Provision(ctx, spec)
@@ -679,14 +722,25 @@ func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queuewor
 // The intent is persisted first (status draining + final_status/reason in metadata), so a
 // failed Destroy or a crash in between is retried by finishTeardown on later evaluations
 // instead of leaving a machine that nothing tracks.
+//
+// The machine's last output is saved for failed instances: once destroyed it is the only
+// trace of why they never became ready.
 func (a *Autoscaler) teardown(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string) {
+	a.teardownWith(ctx, prov, inst, finalStatus, reason, finalStatus == StatusFailed)
+}
+
+// teardownKeepingLogs is teardown for an instance that ended unexpectedly whatever its
+// final status (a machine the provider stopped while its worker was serving).
+func (a *Autoscaler) teardownKeepingLogs(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string) {
+	a.teardownWith(ctx, prov, inst, finalStatus, reason, true)
+}
+
+func (a *Autoscaler) teardownWith(ctx context.Context, prov provider.Provider, inst *Instance, finalStatus, reason string, keepLogs bool) {
 	if finalStatus == StatusFailed {
 		a.reportFailure(inst.Queue, fmt.Sprintf("instance %s destroyed: %s", inst.InstanceID, reason))
 	}
 	meta := map[string]string{"reason": reason, "final_status": finalStatus}
-	if finalStatus == StatusFailed {
-		// Keep the machine's last output: once destroyed it is the only trace of why it
-		// never became ready.
+	if keepLogs {
 		for k, v := range captureLogs(ctx, prov, inst) {
 			meta[k] = v
 		}

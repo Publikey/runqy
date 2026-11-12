@@ -34,7 +34,8 @@ alerts:
       for: 2m                    # must hold 2 minutes before firing
     - type: latency              # oldest pending job waited too long
       max_latency: 10m
-    - type: worker_unhealthy     # a worker reports a degraded process
+      resolve_after: 10m         # must stay under the limit this long before RESOLVED (default 5m)
+    - type: worker_unhealthy     # a worker reports a degraded process (waits `for: 1m` by default)
     - type: autoscale_failure    # provisioning failed / instance destroyed for failure
 
 queues:

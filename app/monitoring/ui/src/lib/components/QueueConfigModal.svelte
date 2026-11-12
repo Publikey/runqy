@@ -81,6 +81,7 @@
 	let autoscaleMaxWorkers = $state(1);
 	let autoscalePollInterval = $state('30s');
 	let autoscaleBootTimeout = $state('');
+	let autoscaleMaxBootFailures = $state<number | undefined>(undefined);
 	let scaleUp = $state<ScaleTrigger[]>([]);
 	let scaleDown = $state<ScaleTrigger[]>([]);
 	let instanceGpu = $state('');
@@ -89,6 +90,7 @@
 	let instanceMaxPrice = $state<number | undefined>(undefined);
 	let instanceMinRamGb = $state<number | undefined>(undefined);
 	let instanceMinVcpu = $state<number | undefined>(undefined);
+	let instanceMinDownloadMbps = $state<number | undefined>(undefined);
 	let availableProviders = $state<AutoscaleProvider[]>([]);
 
 	// Alert overrides for this queue
@@ -359,6 +361,7 @@
 				max_workers: autoscaleMaxWorkers,
 				poll_interval: autoscalePollInterval.trim() || '30s',
 				boot_timeout: autoscaleBootTimeout.trim() || undefined,
+				max_boot_failures: autoscaleMaxBootFailures || undefined,
 				scale_up: scaleUp.map(cleanTrigger),
 				scale_down: scaleDown.map(cleanTrigger),
 				instance: {
@@ -367,7 +370,8 @@
 					disk_gb: instanceDiskGb,
 					max_price_per_hour: instanceMaxPrice,
 					min_ram_gb: instanceMinRamGb || undefined,
-					min_vcpu: instanceMinVcpu || undefined
+					min_vcpu: instanceMinVcpu || undefined,
+					min_download_mbps: instanceMinDownloadMbps || undefined
 				}
 			};
 			deployment.autoscale = autoscale;
@@ -399,6 +403,7 @@
 						return rule;
 					}
 					if (r.for?.trim()) rule.for = r.for.trim();
+					if (r.resolve_after?.trim()) rule.resolve_after = r.resolve_after.trim();
 					if (r.type === 'latency') rule.max_latency = r.max_latency?.trim();
 					if (r.type === 'pending') rule.threshold = Number(r.threshold);
 					if (r.type === 'no_workers' && r.when_idle) rule.when_idle = true;
@@ -457,6 +462,7 @@
 		autoscaleMaxWorkers = 1;
 		autoscalePollInterval = '30s';
 		autoscaleBootTimeout = '';
+		autoscaleMaxBootFailures = undefined;
 		scaleUp = [];
 		scaleDown = [];
 		instanceGpu = '';
@@ -465,6 +471,7 @@
 		instanceMaxPrice = undefined;
 		instanceMinRamGb = undefined;
 		instanceMinVcpu = undefined;
+		instanceMinDownloadMbps = undefined;
 		alertsMuted = false;
 		alertRules = [];
 		preservedLimits = undefined;
@@ -512,6 +519,7 @@
 						autoscaleMaxWorkers = as.max_workers ?? 1;
 						autoscalePollInterval = as.poll_interval || '30s';
 						autoscaleBootTimeout = as.boot_timeout || '';
+						autoscaleMaxBootFailures = as.max_boot_failures;
 						scaleUp = (as.scale_up || []).map((t) => ({ ...t }));
 						scaleDown = (as.scale_down || []).map((t) => ({ ...t }));
 						instanceGpu = as.instance?.gpu || '';
@@ -520,6 +528,7 @@
 						instanceMaxPrice = as.instance?.max_price_per_hour;
 						instanceMinRamGb = as.instance?.min_ram_gb;
 						instanceMinVcpu = as.instance?.min_vcpu;
+						instanceMinDownloadMbps = as.instance?.min_download_mbps;
 					}
 					alertsMuted = config.deployment.alerts?.disabled ?? false;
 					alertRules = (config.deployment.alerts?.rules || []).map((r) => ({ ...r }));
@@ -733,6 +742,9 @@
 						<Field label="Boot Timeout" for="{uid}-boot">
 							<input id="{uid}-boot" type="text" bind:value={autoscaleBootTimeout} placeholder="20m" class="input w-full" disabled={loading} />
 						</Field>
+						<Field label="Max Boot Failures" for="{uid}-bootfails" hint="In a row, before provisioning is suspended">
+							<input id="{uid}-bootfails" type="number" bind:value={autoscaleMaxBootFailures} min="1" placeholder="5" class="input w-full" disabled={loading} />
+						</Field>
 					</div>
 
 					<!-- Scale Up Triggers -->
@@ -855,6 +867,9 @@
 							</Field>
 							<Field label="Min vCPUs" for="{uid}-vcpu" hint="Optional">
 								<input id="{uid}-vcpu" type="number" bind:value={instanceMinVcpu} min="0" class="input w-full" disabled={loading} />
+							</Field>
+							<Field label="Min Download (Mbps)" for="{uid}-down" hint="Optional, Vast.ai only">
+								<input id="{uid}-down" type="number" bind:value={instanceMinDownloadMbps} min="0" class="input w-full" disabled={loading} />
 							</Field>
 						</div>
 					</div>

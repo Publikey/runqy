@@ -324,6 +324,7 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 		api.HandleFunc("/autoscale/instances/{id}/logs", newAutoscaleInstanceLogsHandlerFunc(opts.AutoscaleStore, opts.AutoscaleProviderStore)).Methods("GET")
 		api.HandleFunc("/autoscale/instances/{id}/protect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, true)).Methods("POST")
 		api.HandleFunc("/autoscale/instances/{id}/unprotect", newAutoscaleSetProtectedHandlerFunc(opts.AutoscaleStore, false)).Methods("POST")
+		api.HandleFunc("/autoscale/queues/{queue}/resume", newAutoscaleResumeQueueHandlerFunc(rc)).Methods("POST")
 		api.HandleFunc("/autoscale/provider-types", newAutoscaleProviderTypesHandlerFunc()).Methods("GET")
 		api.HandleFunc("/autoscale/providers", newListAutoscaleProvidersHandlerFunc(opts.AutoscaleProviderStore)).Methods("GET")
 		api.HandleFunc("/autoscale/providers", newCreateAutoscaleProviderHandlerFunc(opts.AutoscaleProviderStore)).Methods("POST")

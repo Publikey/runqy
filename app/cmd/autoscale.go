@@ -38,6 +38,7 @@ Examples:
   runqy autoscale status          # active instances + provisioning pauses
   runqy autoscale status --all    # also failed/terminated instances, with the reason
   runqy autoscale logs as-1234    # machine logs (live, or saved when it failed)
+  runqy autoscale resume inference  # lift a provisioning pause or suspension
   runqy autoscale provider-types
   runqy autoscale providers list
   runqy autoscale providers create my-mock --type mock
@@ -61,6 +62,19 @@ var autoscaleLogsCmd = &cobra.Command{
 	Short: "Show an instance's machine logs (live from the provider, or saved at teardown)",
 	Args:  cobra.ExactArgs(1),
 	RunE:  runAutoscaleLogs,
+}
+
+var autoscaleResumeCmd = &cobra.Command{
+	Use:   "resume <queue>",
+	Short: "Lift a queue's provisioning pause (after repeated failures) and retry now",
+	Long: `Lift the provisioning pauses of a queue and start its failure counts over.
+
+After repeated failures the autoscaler waits longer and longer before renting another
+machine, and suspends provisioning for a day once max_boot_failures instances in a row
+never became ready. Once the cause is fixed (image, task code, queue config), resume
+makes the next evaluation provision again instead of waiting for the pause to end.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runAutoscaleResume,
 }
 
 var autoscaleProtectCmd = &cobra.Command{
@@ -130,6 +144,7 @@ func init() {
 	autoscaleCmd.AddCommand(autoscaleStatusCmd)
 	autoscaleCmd.AddCommand(autoscaleLogsCmd)
 	autoscaleStatusCmd.Flags().BoolVar(&autoscaleAll, "all", false, "Also list failed and terminated instances")
+	autoscaleCmd.AddCommand(autoscaleResumeCmd)
 	autoscaleCmd.AddCommand(autoscaleProtectCmd)
 	autoscaleCmd.AddCommand(autoscaleUnprotectCmd)
 	autoscaleCmd.AddCommand(autoscaleProviderTypesCmd)
@@ -253,10 +268,11 @@ func runAutoscaleStatus(cmd *cobra.Command, args []string) error {
 		pw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(pw, "QUEUE\tUNTIL\tFAILURES\tCAUSE")
 		for _, p := range pauses {
-			fmt.Fprintf(pw, "%s\t%s (in %s)\t%d\t%s\n", p.Queue, p.Until.Local().Format("15:04:05"),
+			fmt.Fprintf(pw, "%s\t%s (in %s)\t%d\t%s\n", p.Queue, p.Until.Local().Format("Jan 2 15:04"),
 				time.Until(p.Until).Round(time.Second), p.Failures, p.Cause)
 		}
 		pw.Flush()
+		fmt.Println("Retry sooner with: runqy autoscale resume <queue>")
 	}
 	fmt.Printf("\nTotal accumulated cost: $%.4f\n", total)
 	return nil
@@ -289,7 +305,7 @@ func runAutoscaleLogs(cmd *cobra.Command, args []string) error {
 	case logs.Logs == "" && logs.Error != "":
 		return fmt.Errorf("logs could not be captured before teardown: %s", logs.Error)
 	case logs.Logs == "":
-		fmt.Println("No saved logs for this instance (captured only for instances that failed after renting a machine).")
+		fmt.Println("No saved logs for this instance (captured when a rented machine fails or is stopped by its provider, not on a normal scale-down).")
 		return nil
 	default:
 		fmt.Fprintf(os.Stderr, "# logs of %s saved at teardown (%s)\n", logs.InstanceID, logs.FetchedAt)
@@ -298,6 +314,32 @@ func runAutoscaleLogs(cmd *cobra.Command, args []string) error {
 	if !strings.HasSuffix(logs.Logs, "\n") {
 		fmt.Println()
 	}
+	return nil
+}
+
+func runAutoscaleResume(cmd *cobra.Command, args []string) error {
+	queue := args[0]
+	var n int
+	if IsRemoteMode() {
+		var err error
+		if n, err = NewAPIClient().ResumeAutoscaleQueueAPI(queue); err != nil {
+			return err
+		}
+	} else {
+		conns, err := models.BuildRedisConns(GetConfig())
+		if err != nil {
+			return fmt.Errorf("failed to connect to Redis: %w", err)
+		}
+		defer conns.RDB.Close()
+		if n, err = autoscale.ResumeQueue(context.Background(), conns.RDB, queue); err != nil {
+			return err
+		}
+	}
+	if n == 0 {
+		fmt.Printf("Provisioning is not paused for queue '%s'.\n", queue)
+		return nil
+	}
+	fmt.Printf("Provisioning resumed for queue '%s' (%d pause(s) lifted).\n", queue, n)
 	return nil
 }
 

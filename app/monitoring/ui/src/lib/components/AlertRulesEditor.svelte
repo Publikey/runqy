@@ -75,7 +75,26 @@
 						{/if}
 						{#if rule.type !== 'autoscale_failure'}
 							<Field label="For" for="{id}-for" class="w-24">
-								<input id="{id}-for" type="text" bind:value={rule.for} placeholder="0s" class="input" {disabled} />
+								<input
+									id="{id}-for"
+									type="text"
+									bind:value={rule.for}
+									placeholder={rule.type === 'worker_unhealthy' ? '1m' : '0s'}
+									title="How long the condition must hold before the alert fires"
+									class="input"
+									{disabled}
+								/>
+							</Field>
+							<Field label="Resolve after" for="{id}-resolve" class="w-28">
+								<input
+									id="{id}-resolve"
+									type="text"
+									bind:value={rule.resolve_after}
+									placeholder="5m"
+									title="How long the condition must stay clear before the alert is resolved (0s = at once)"
+									class="input"
+									{disabled}
+								/>
 							</Field>
 						{/if}
 					{/if}

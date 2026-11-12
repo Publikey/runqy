@@ -31,11 +31,15 @@ type backoffStore interface {
 	LoadAll(ctx context.Context) (map[string]persistedBackoff, error)
 	Save(ctx context.Context, field string, b persistedBackoff) error
 	Delete(ctx context.Context, field string) error
+	// Has reports whether a pause is still stored (it is removed by ResumeQueue).
+	Has(ctx context.Context, field string) (bool, error)
 }
 
 type persistedBackoff struct {
 	Failures int       `json:"failures"`
 	Until    time.Time `json:"until"`
+	// Suspended marks a boot pause that reached max_boot_failures.
+	Suspended bool `json:"suspended,omitempty"`
 }
 
 type redisBackoffStore struct{ rdb *redis.Client }
@@ -67,6 +71,10 @@ func (s redisBackoffStore) Delete(ctx context.Context, field string) error {
 	return s.rdb.HDel(ctx, backoffKey, field).Err()
 }
 
+func (s redisBackoffStore) Has(ctx context.Context, field string) (bool, error) {
+	return s.rdb.HExists(ctx, backoffKey, field).Result()
+}
+
 func backoffField(kind, parent string) string { return kind + "|" + parent }
 
 // backoffMap returns the in-memory map for a kind.
@@ -89,7 +97,7 @@ func (a *Autoscaler) persistBackoff(kind, parent string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := a.backoffs.Save(ctx, backoffField(kind, parent), persistedBackoff{Failures: b.failures, Until: b.until}); err != nil {
+	if err := a.backoffs.Save(ctx, backoffField(kind, parent), persistedBackoff{Failures: b.failures, Until: b.until, Suspended: b.suspended}); err != nil {
 		log.Printf("[AUTOSCALE] queue %q: cannot persist %s backoff: %v", parent, kind, err)
 	}
 }
@@ -134,7 +142,7 @@ func (a *Autoscaler) loadBackoffs(ctx context.Context, now time.Time) {
 			_ = a.backoffs.Delete(ctx, field)
 			continue
 		}
-		a.backoffMap(kind)[parent] = &provisionBackoff{failures: b.Failures, until: b.Until}
+		a.backoffMap(kind)[parent] = &provisionBackoff{failures: b.Failures, until: b.Until, suspended: b.Suspended}
 		if now.Before(b.Until) {
 			log.Printf("[AUTOSCALE] queue %q: restored %s backoff (%d failure(s), paused until %s)", parent, kind, b.Failures, b.Until.Format(time.RFC3339))
 		}

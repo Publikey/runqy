@@ -25,20 +25,53 @@ const (
 // DefaultAlertRepeatInterval is how often a still-firing alert is re-sent.
 const DefaultAlertRepeatInterval = 4 * time.Hour
 
+// DefaultAlertResolveAfter is how long a firing condition must stay clear before the
+// alert is resolved. Without it a value hovering around its threshold (the oldest
+// pending job being picked up, then the next one crossing the limit) sends a
+// firing/resolved pair every few minutes.
+const DefaultAlertResolveAfter = 5 * time.Minute
+
+// DefaultWorkerUnhealthyFor is the default `for` of the worker_unhealthy rule: a worker
+// reports unhealthy for a few seconds while it stops or restarts its process.
+const DefaultWorkerUnhealthyFor = time.Minute
+
 // AlertRule is one alert condition. Global rules (AlertSettings.Rules) apply to every
 // queue; a queue's own rules replace the global rule of the same type.
 type AlertRule struct {
-	Type       string `yaml:"type" json:"type"`
-	For        string `yaml:"for,omitempty" json:"for,omitempty"`                 // condition must hold this long before firing (Go duration, default 0)
-	MaxLatency string `yaml:"max_latency,omitempty" json:"max_latency,omitempty"` // latency
-	Threshold  int    `yaml:"threshold,omitempty" json:"threshold,omitempty"`     // pending
-	WhenIdle   bool   `yaml:"when_idle,omitempty" json:"when_idle,omitempty"`     // no_workers: also fire when nothing is pending
-	Disabled   bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`       // in a queue override: turn this rule type off
+	Type string `yaml:"type" json:"type"`
+	For  string `yaml:"for,omitempty" json:"for,omitempty"` // condition must hold this long before firing (Go duration; default 0, 1m for worker_unhealthy)
+	// ResolveAfter is how long the condition must stay clear before a firing alert is
+	// resolved (Go duration, default 5m; "0" resolves at once).
+	ResolveAfter string `yaml:"resolve_after,omitempty" json:"resolve_after,omitempty"`
+	MaxLatency   string `yaml:"max_latency,omitempty" json:"max_latency,omitempty"` // latency
+	Threshold    int    `yaml:"threshold,omitempty" json:"threshold,omitempty"`     // pending
+	WhenIdle     bool   `yaml:"when_idle,omitempty" json:"when_idle,omitempty"`     // no_workers: also fire when nothing is pending
+	Disabled     bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`       // in a queue override: turn this rule type off
 }
 
-// ForDuration returns the rule's hold duration (0 when unset).
+// ForDuration returns how long the condition must hold before firing. Unset means 0,
+// except for worker_unhealthy (DefaultWorkerUnhealthyFor); "0" always means at once.
 func (r AlertRule) ForDuration() time.Duration {
+	if r.For == "" {
+		if r.Type == AlertWorkerUnhealthy {
+			return DefaultWorkerUnhealthyFor
+		}
+		return 0
+	}
 	d, _ := time.ParseDuration(r.For)
+	return d
+}
+
+// ResolveAfterDuration returns how long the condition must stay clear before a firing
+// alert is resolved (DefaultAlertResolveAfter when unset, 0 = at once).
+func (r AlertRule) ResolveAfterDuration() time.Duration {
+	if r.ResolveAfter == "" {
+		return DefaultAlertResolveAfter
+	}
+	d, err := time.ParseDuration(r.ResolveAfter)
+	if err != nil || d < 0 {
+		return DefaultAlertResolveAfter
+	}
 	return d
 }
 
@@ -53,6 +86,11 @@ func (r AlertRule) Validate() error {
 	if r.For != "" {
 		if d, err := time.ParseDuration(r.For); err != nil || d < 0 {
 			return fmt.Errorf("rule %q: invalid for %q", r.Type, r.For)
+		}
+	}
+	if r.ResolveAfter != "" {
+		if d, err := time.ParseDuration(r.ResolveAfter); err != nil || d < 0 {
+			return fmt.Errorf("rule %q: invalid resolve_after %q", r.Type, r.ResolveAfter)
 		}
 	}
 	switch r.Type {

@@ -273,10 +273,30 @@ func planChanges(settings *queueworker.AlertSettings, conds map[string]condition
 			if old == nil {
 				continue
 			}
+			// A firing alert is resolved only once the condition has stayed clear for
+			// resolve_after: a value hovering around its threshold must not send a
+			// firing/resolved pair at every swing.
+			clearedAt := now
+			if old.Firing {
+				if delay := c.rule.ResolveAfterDuration(); delay > 0 {
+					if old.ClearSince.IsZero() {
+						cp := *old
+						cp.ClearSince = now
+						out = append(out, change{key: key, next: &cp, fallback: &cp})
+						continue
+					}
+					if now.Sub(old.ClearSince) < delay {
+						continue // still within the delay: keep the state as it is
+					}
+				}
+				if !old.ClearSince.IsZero() {
+					clearedAt = old.ClearSince
+				}
+			}
 			ch := change{key: key}
 			if old.Firing && sendResolved {
 				ch.note = &HistoryEntry{Time: now, Queue: c.queue, Rule: c.rule.Type, Status: StatusResolved,
-					Message: fmt.Sprintf("resolved after %s", roundDuration(now.Sub(old.FiredAt)))}
+					Message: fmt.Sprintf("resolved after %s", roundDuration(clearedAt.Sub(old.FiredAt)))}
 				ch.fallback = old // retry the resolved notification next time
 			}
 			out = append(out, ch)
@@ -289,7 +309,8 @@ func planChanges(settings *queueworker.AlertSettings, conds map[string]condition
 			st = &cp
 		}
 		st.Message = c.message
-		fallback := *st // condition tracking only, no notification bookkeeping
+		st.ClearSince = time.Time{} // the condition is back before resolve_after: same alert
+		fallback := *st             // condition tracking only, no notification bookkeeping
 
 		var note *HistoryEntry
 		switch {
@@ -407,7 +428,10 @@ type ActiveAlert struct {
 	Firing  bool      `json:"firing"`
 	Since   time.Time `json:"since"`
 	FiredAt time.Time `json:"fired_at,omitzero"`
-	Message string    `json:"message"`
+	// ClearSince is set while a firing alert's condition is clear but resolve_after has
+	// not elapsed yet.
+	ClearSince time.Time `json:"clear_since,omitzero"`
+	Message    string    `json:"message"`
 }
 
 // Active returns the current alert conditions, firing first.
@@ -421,7 +445,7 @@ func Active(ctx context.Context, rdb *redis.Client) ([]ActiveAlert, error) {
 		if st.Rule == queueworker.AlertAutoscaleFailure {
 			continue // event throttle bookkeeping, not a condition
 		}
-		out = append(out, ActiveAlert{Queue: st.Queue, Rule: st.Rule, Firing: st.Firing, Since: st.Since, FiredAt: st.FiredAt, Message: st.Message})
+		out = append(out, ActiveAlert{Queue: st.Queue, Rule: st.Rule, Firing: st.Firing, Since: st.Since, FiredAt: st.FiredAt, ClearSince: st.ClearSince, Message: st.Message})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Firing != out[j].Firing {

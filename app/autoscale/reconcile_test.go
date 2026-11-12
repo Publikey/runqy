@@ -125,7 +125,7 @@ func reconcile(t *testing.T, a *Autoscaler, prov provider.Provider, hbs map[stri
 	if hbs == nil {
 		hbs = map[string]*workerHeartbeat{}
 	}
-	return a.reconcileInstances(context.Background(), prov, "inference", managed, hbs, 20*time.Minute, now)
+	return a.reconcileInstances(context.Background(), prov, "inference", managed, hbs, 20*time.Minute, queueworker.DefaultMaxBootFailures, now)
 }
 
 func TestReconcileTearsDownInstancesDeadAtProvider(t *testing.T) {
@@ -482,5 +482,90 @@ func TestProvisionRecordsRentedGPUAndPrice(t *testing.T) {
 	insts, _ = a.instances.ListByQueue(ctx, "inference")
 	if len(insts) != 2 || insts[1].PricePerHour != 0.5 || insts[1].GPU != "" {
 		t.Errorf("fallback: %+v", insts)
+	}
+}
+
+// avoidingProvider is a fakeProvider that can avoid hosts.
+type avoidingProvider struct {
+	fakeProvider
+	avoided []string
+}
+
+func (p *avoidingProvider) AvoidHost(_ context.Context, id string) { p.avoided = append(p.avoided, id) }
+
+func TestBootTimeoutAvoidsTheHost(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "stuck", StatusRunning, "", 30*time.Minute)
+	addInstance(t, a, "gone", StatusProvisioning, "", time.Minute)
+	prov := &avoidingProvider{fakeProvider: fakeProvider{status: map[string]string{"p-gone": provider.StatusTerminated}}}
+
+	reconcile(t, a, prov, nil, time.Now())
+
+	// Only the boot timeout blames the host; an instance the provider ended is handled
+	// by the provider itself (host fault) or is an image problem.
+	if len(prov.avoided) != 1 || prov.avoided[0] != "p-stuck" {
+		t.Fatalf("avoided = %v, want [p-stuck]", prov.avoided)
+	}
+}
+
+// After max_boot_failures instances in a row that never became ready, provisioning stops
+// for a day instead of renting a machine every hour, until `autoscale resume`.
+func TestBootFailuresSuspendProvisioning(t *testing.T) {
+	a := newTestAutoscaler(t)
+	store := newMemBackoffStore()
+	a.backoffs = store
+	sink := &fakeSink{}
+	a.SetEventSink(sink)
+	prov := &fakeProvider{name: "mock"}
+	asc := &queueworker.AutoscaleConfig{MaxWorkers: 2}
+	ctx := context.Background()
+	now := time.Now()
+
+	for i := 1; i <= queueworker.DefaultMaxBootFailures; i++ {
+		addInstance(t, a, fmt.Sprintf("stuck-%d", i), StatusRunning, "", 30*time.Minute)
+		reconcile(t, a, prov, nil, now)
+		b := a.bootFails["inference"]
+		if want := i == queueworker.DefaultMaxBootFailures; b == nil || b.suspended != want {
+			t.Fatalf("after %d failure(s): %+v, want suspended=%v", i, b, want)
+		}
+	}
+	if b := a.bootFails["inference"]; b.until.Sub(now) != bootSuspension {
+		t.Fatalf("suspension lasts %s, want %s", b.until.Sub(now), bootSuspension)
+	}
+	if p := store.m[backoffField(backoffBoot, "inference")]; !p.Suspended || p.Failures != queueworker.DefaultMaxBootFailures {
+		t.Errorf("persisted pause = %+v, want suspended with the failure count", p)
+	}
+	last := sink.messages[len(sink.messages)-1]
+	if !strings.Contains(last, "provisioning suspended for 24h0m0s") || !strings.Contains(last, "runqy autoscale resume inference") {
+		t.Errorf("alert should say provisioning is suspended and how to resume: %q", last)
+	}
+
+	// Hours later (well past the old 1h cap) nothing is rented.
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, now.Add(6*time.Hour), "")
+	if prov.provisions != 0 {
+		t.Fatal("provisioned while suspended")
+	}
+
+	// `runqy autoscale resume` removes the stored pause; the leader notices and starts over.
+	_ = store.Delete(ctx, backoffField(backoffBoot, "inference"))
+	a.provisionN(ctx, "inference", asc, prov, "p", 1, 30*time.Second, now.Add(6*time.Hour), "")
+	if prov.provisions != 1 {
+		t.Fatalf("provisions = %d, want 1 after resume", prov.provisions)
+	}
+	if a.bootFails["inference"] != nil {
+		t.Errorf("failure count kept after resume: %+v", a.bootFails["inference"])
+	}
+}
+
+func TestMaxBootFailuresIsConfigurable(t *testing.T) {
+	a := newTestAutoscaler(t)
+	now := time.Now()
+	a.recordBootFailure("q", 20*time.Minute, 2, now)
+	if a.bootFails["q"].suspended {
+		t.Fatal("suspended after 1 failure with max_boot_failures 2")
+	}
+	a.recordBootFailure("q", 20*time.Minute, 2, now)
+	if !a.bootFails["q"].suspended {
+		t.Fatal("not suspended after 2 failures with max_boot_failures 2")
 	}
 }
