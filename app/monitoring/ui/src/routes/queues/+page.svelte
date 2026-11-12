@@ -532,6 +532,8 @@
 		<span>{formatDuration(latency)}</span>
 		{#if workers === 0}
 			<span class="inline-flex items-center gap-1 text-warning-300"><TriangleAlert size={12} strokeWidth={1.75} />No worker</span>
+		{:else}
+			<span>{workers} worker{workers !== 1 ? 's' : ''}</span>
 		{/if}
 	</div>
 {/snippet}

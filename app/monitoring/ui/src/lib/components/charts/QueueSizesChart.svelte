@@ -38,15 +38,24 @@
 		value: number;
 	}
 
+	interface QueueRow {
+		queue: string;
+		pending: number;
+		active: number;
+		retry: number;
+		total: number;
+	}
+
 	interface ChartData {
 		flattened: ChartDataPoint[];
 		queues: string[];
+		rows: QueueRow[];
 	}
 
 	// Transform queue data into chart format
 	let chartData = $derived.by((): ChartData => {
 		const queues = $queuesStore.queues;
-		if (queues.length === 0) return { flattened: [], queues: [] };
+		if (queues.length === 0) return { flattened: [], queues: [], rows: [] };
 
 		// Sort by total tasks and take top N
 		const sorted = [...queues]
@@ -68,8 +77,17 @@
 			flattened.push({ queue: q.queue, state: 'retry', value: q.retry });
 		}
 
-		return { flattened, queues: sorted.map(q => q.queue) };
+		return { flattened, queues: sorted.map(q => q.queue), rows: sorted };
 	});
+
+	// Narrow screens: one row per queue, bars scaled to the busiest queue.
+	let maxTotal = $derived(Math.max(1, ...chartData.rows.map((r) => r.total)));
+
+	/** Parent queue and sub-queue suffix (".priority"), shown apart so the suffix survives truncation. */
+	function splitQueueName(name: string): { parent: string; sub: string } {
+		const dot = name.indexOf('.');
+		return dot >= 0 ? { parent: name.slice(0, dot), sub: name.slice(dot) } : { parent: name, sub: '' };
+	}
 
 	// Calculate max value for y domain
 	// Every queue empty (nothing pending, active or retrying): no flat chart.
@@ -125,7 +143,43 @@
 			<p class="text-ui text-fg-subtle">All queues are empty</p>
 		</div>
 	{:else if chartData.queues.length > 0}
-		<div class="w-full min-w-0 overflow-hidden" style="height: {height}px">
+		<!-- Narrow screens: column labels cannot fit, so each queue gets a row with its full
+		     name and a horizontal stacked bar. -->
+		<ul class="md:hidden -my-1 divide-y divide-line-subtle">
+			{#each chartData.rows.filter((r) => r.total > 0) as row (row.queue)}
+				{@const name = splitQueueName(row.queue)}
+				<li>
+					<a href="{base}/queues/{encodeURIComponent(row.queue)}" class="block py-2 hover:bg-hover transition-colors">
+						<div class="flex items-baseline gap-3 min-w-0">
+							<span class="flex min-w-0 flex-1 text-ui" title={row.queue}>
+								<span class="truncate font-medium text-fg">{name.parent}</span>
+								<span class="shrink-0 text-fg-subtle">{name.sub}</span>
+							</span>
+							<span class="flex shrink-0 items-center gap-2.5 text-xs tabular-nums text-fg-muted">
+								{#each states as state (state)}
+									{#if row[state] > 0}
+										<span class="flex items-center gap-1" title={stateLabels[state]}>
+											<span class="h-2 w-2 rounded-full {stateColors[state].bg}"></span>
+											{formatNumber(row[state])}
+											<span class="sr-only">{stateLabels[state]}</span>
+										</span>
+									{/if}
+								{/each}
+							</span>
+						</div>
+						<div class="mt-1.5 flex h-1.5 gap-px overflow-hidden rounded-full bg-raised">
+							{#each states as state (state)}
+								{#if row[state] > 0}
+									<div class="{stateColors[state].bg} min-w-[3px]" style="width: {(row[state] / maxTotal) * 100}%"></div>
+								{/if}
+							{/each}
+						</div>
+					</a>
+				</li>
+			{/each}
+		</ul>
+
+		<div class="hidden md:block w-full min-w-0 overflow-hidden" style="height: {height}px">
 			<Chart
 				data={chartData.flattened}
 				x={(d: ChartDataPoint) => d.queue}
