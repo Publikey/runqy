@@ -28,7 +28,8 @@
 		getQueueConfigs,
 		getQueueConfig,
 		updateQueueConfig,
-		getAutoscaleInstanceLogs
+		getAutoscaleInstanceLogs,
+		resumeAutoscaleQueue
 	} from '$lib/api/client';
 	import type {
 		AutoscaleConfig,
@@ -157,6 +158,21 @@
 
 	function pausesFor(parent: string): AutoscalePause[] {
 		return $autoscaleStore.pauses.filter((p) => p.queue === parent);
+	}
+
+	let resuming = $state<string | null>(null);
+
+	async function handleResume(parent: string) {
+		resuming = parent;
+		try {
+			await resumeAutoscaleQueue(parent);
+			toaster.success({ title: 'Provisioning resumed', description: parent });
+			await loadData();
+		} catch (e) {
+			toaster.error({ title: 'Error', description: e instanceof Error ? e.message : 'Failed to resume provisioning' });
+		} finally {
+			resuming = null;
+		}
 	}
 
 
@@ -491,10 +507,24 @@
 											class="mt-1.5"
 											title="{p.failures} failure(s) in a row: {p.cause}. Provisioning resumes automatically at that time."
 										>
-											<Badge tone="warning" class="whitespace-nowrap">paused until {formatUntil(p.until)}</Badge>
+											<Badge tone={p.suspended ? 'danger' : 'warning'} class="whitespace-nowrap"
+												>{p.suspended ? 'suspended' : 'paused'} until {formatUntil(p.until)}</Badge
+											>
 											<div class="mt-0.5 text-xs text-fg-subtle">{p.failures}× {p.cause}</div>
 										</div>
 									{/each}
+									{#if pausesFor(row.parent).length > 0}
+										<Button
+											variant="ghost"
+											size="sm"
+											class="mt-1"
+											loading={resuming === row.parent}
+											onclick={() => handleResume(row.parent)}
+											title="Lift the pause and start the failure count over"
+										>
+											Resume now
+										</Button>
+									{/if}
 								</td>
 								<td>
 									<div class="font-medium text-fg">{asc.provider || '-'}</div>

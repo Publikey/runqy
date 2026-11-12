@@ -89,6 +89,7 @@
 			rules: rules.map((r) => {
 				const rule: AlertRule = { type: r.type };
 				if (r.for?.trim()) rule.for = r.for.trim();
+				if (r.resolve_after?.trim()) rule.resolve_after = r.resolve_after.trim();
 				if (r.type === 'latency') rule.max_latency = r.max_latency?.trim();
 				if (r.type === 'pending') rule.threshold = Number(r.threshold) || 0;
 				if (r.type === 'no_workers' && r.when_idle) rule.when_idle = true;

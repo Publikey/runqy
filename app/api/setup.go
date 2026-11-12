@@ -113,6 +113,7 @@ func SetupAutoscaleAPI(r *gin.Engine, instanceStore *autoscale.Store, providerSt
 	grp.GET("/instances/:id/logs", InstanceLogs(instanceStore, providerStore))
 	grp.POST("/instances/:id/protect", ProtectInstance(instanceStore))
 	grp.POST("/instances/:id/unprotect", UnprotectInstance(instanceStore))
+	grp.POST("/queues/:queue/resume", ResumeAutoscaleQueue(rdb))
 
 	// Provider config CRUD (vault-independent, encrypted at rest)
 	grp.GET("/provider-types", ListProviderTypes())

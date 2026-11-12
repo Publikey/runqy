@@ -505,3 +505,42 @@ func TestVastAINoOffersErrorListsModels(t *testing.T) {
 		t.Fatalf("error = %v, want it to list the searched models", err)
 	}
 }
+
+// A queue that downloads a lot at boot can ask for faster hosts than the provider default.
+func TestVastAIQueueMinDownloadOverridesProvider(t *testing.T) {
+	f, p := newFakeVast(t)
+	p.(*vastAIProvider).cfg.MinDownloadMbps = 200
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img", MinDownloadMbps: 800}); err != nil {
+		t.Fatal(err)
+	}
+	if in, _ := f.search["inet_down"].(map[string]interface{}); in == nil || in["gte"] != 800.0 {
+		t.Errorf("inet_down = %v, want gte 800", f.search["inet_down"])
+	}
+}
+
+// The container started but the worker never became ready within boot_timeout: the
+// autoscaler asks to avoid the machine (slow network), which Destroy alone does not do.
+func TestVastAIAvoidHostExcludesMachine(t *testing.T) {
+	f, p := newFakeVast(t)
+	ctx := context.Background()
+	spec := InstanceSpec{Queue: "q", Image: "img", Env: map[string]string{"RUNQY_INSTANCE_ID": "as-1"}}
+
+	rented, err := p.Provision(ctx, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.status[rented.ID] = "running"
+	p.Status(ctx, rented.ID)
+	p.(HostAvoider).AvoidHost(ctx, rented.ID)
+	p.(HostAvoider).AvoidHost(ctx, "unknown-instance") // no placement: nothing to avoid
+	if err := p.Destroy(ctx, rented.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := p.Provision(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(f.search["machine_id"]) != fmt.Sprint(map[string]interface{}{"notin": []interface{}{"54116"}}) {
+		t.Fatalf("machine_id filter = %v, want notin [54116]", f.search["machine_id"])
+	}
+}

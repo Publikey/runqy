@@ -42,6 +42,13 @@ func (s *memBackoffStore) Delete(_ context.Context, field string) error {
 	return nil
 }
 
+func (s *memBackoffStore) Has(_ context.Context, field string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.m[field]
+	return ok, nil
+}
+
 func TestBackoffSurvivesRestart(t *testing.T) {
 	store := newMemBackoffStore()
 	ctx := context.Background()

@@ -333,6 +333,7 @@ export interface AutoscalePause {
 	failures: number;
 	until: string;
 	cause: string;
+	suspended?: boolean; // max_boot_failures reached: stopped for a day unless resumed
 }
 
 export interface AutoscaleStatus {
@@ -379,6 +380,7 @@ export interface AutoscaleInstanceSpec {
 	max_price_per_hour?: number;
 	min_ram_gb?: number; // system RAM
 	min_vcpu?: number;
+	min_download_mbps?: number; // advertised download speed (Vast.ai), overrides the provider's
 }
 
 export interface AutoscaleConfig {
@@ -388,6 +390,7 @@ export interface AutoscaleConfig {
 	max_workers: number;
 	poll_interval: string;
 	boot_timeout?: string;
+	max_boot_failures?: number; // instances in a row that never became ready before provisioning is suspended (default 5)
 	scale_up: ScaleTrigger[];
 	scale_down: ScaleTrigger[];
 	instance: AutoscaleInstanceSpec;
@@ -424,6 +427,7 @@ export type AlertRuleType = 'no_workers' | 'latency' | 'pending' | 'worker_unhea
 export interface AlertRule {
 	type: AlertRuleType;
 	for?: string; // condition must hold this long before firing
+	resolve_after?: string; // condition must stay clear this long before resolving (default 5m)
 	max_latency?: string; // latency
 	threshold?: number; // pending
 	when_idle?: boolean; // no_workers: also fire when nothing is pending

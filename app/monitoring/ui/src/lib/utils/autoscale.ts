@@ -41,6 +41,7 @@ export function describeInstance(asc: AutoscaleConfig): string[] {
 	if (spec.disk_gb) out.push(`${spec.disk_gb} GB disk`);
 	if (spec.min_ram_gb) out.push(`≥ ${spec.min_ram_gb} GB RAM`);
 	if (spec.min_vcpu) out.push(`≥ ${spec.min_vcpu} vCPU`);
+	if (spec.min_download_mbps) out.push(`≥ ${spec.min_download_mbps} Mbps down`);
 	if (spec.max_price_per_hour) out.push(`≤ $${spec.max_price_per_hour}/hr`);
 	if (spec.image) out.push(spec.image);
 	return out;
@@ -51,5 +52,6 @@ export function formatUntil(until: string): string {
 	const d = new Date(until);
 	const mins = Math.max(0, Math.round((d.getTime() - Date.now()) / 60000));
 	const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	if (mins >= 120) return `${time} (in ${Math.round(mins / 60)} h)`;
 	return mins >= 1 ? `${time} (in ${mins} min)` : `${time} (< 1 min)`;
 }

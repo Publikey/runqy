@@ -605,6 +605,21 @@ func (c *APIClient) InstanceLogsAPI(instanceID string) (*autoscale.InstanceLogs,
 	return &resp, nil
 }
 
+// ResumeAutoscaleQueueAPI lifts a queue's provisioning pauses and returns how many.
+func (c *APIClient) ResumeAutoscaleQueueAPI(queue string) (int, error) {
+	data, err := c.POST("/api/autoscale/queues/"+url.PathEscape(queue)+"/resume", nil)
+	if err != nil {
+		return 0, err
+	}
+	var resp struct {
+		Resumed int `json:"resumed"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return 0, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return resp.Resumed, nil
+}
+
 // SetInstanceProtectedAPI toggles instance protection.
 func (c *APIClient) SetInstanceProtectedAPI(instanceID string, protected bool) error {
 	action := "unprotect"

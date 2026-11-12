@@ -36,7 +36,10 @@ type alertState struct {
 	Firing       bool      `json:"firing"`
 	FiredAt      time.Time `json:"fired_at,omitzero"`
 	LastNotified time.Time `json:"last_notified,omitzero"`
-	Message      string    `json:"message"`
+	// ClearSince is when a firing condition stopped being true; the alert is resolved
+	// once it has stayed clear for the rule's resolve_after. Zero while the condition holds.
+	ClearSince time.Time `json:"clear_since,omitzero"`
+	Message    string    `json:"message"`
 }
 
 // HistoryEntry is one sent notification.

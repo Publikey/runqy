@@ -96,3 +96,51 @@ func TestListPausesReturnsOnlyActivePauses(t *testing.T) {
 		t.Errorf("sdxl pause = %+v", pauses[1])
 	}
 }
+
+// A machine the provider stopped while its worker was serving keeps its last output, like
+// a failed boot: it is the only trace of why it went away.
+func TestProviderTerminatedRunningInstanceSavesLogs(t *testing.T) {
+	a := newTestAutoscaler(t)
+	addInstance(t, a, "lost", StatusRunning, "w1", time.Hour)
+	addInstance(t, a, "fine", StatusRunning, "w2", time.Hour)
+	prov := &loggingProvider{logs: "Killed", fakeProvider: fakeProvider{status: map[string]string{"p-lost": provider.StatusTerminated}}}
+	now := time.Now()
+	hbs := map[string]*workerHeartbeat{"fine": {workerID: "w2", status: "running", lastBeat: now.Unix()}}
+
+	reconcile(t, a, prov, hbs, now)
+
+	inst, _ := a.instances.GetByInstanceID(context.Background(), "lost")
+	if inst.Status != StatusTerminated || inst.MetadataMap()["logs"] != "Killed" {
+		t.Errorf("status %s, metadata %v, want terminated with the saved logs", inst.Status, inst.MetadataMap())
+	}
+	if len(prov.asked) != 1 {
+		t.Errorf("logs fetched for %v, want only the lost instance", prov.asked)
+	}
+}
+
+func TestResumeQueueLiftsEveryPause(t *testing.T) {
+	mr := miniredis.RunT(t)
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+	ctx := context.Background()
+	now := time.Now()
+	store := redisBackoffStore{rdb: rdb}
+	_ = store.Save(ctx, backoffField(backoffBoot, "q"), persistedBackoff{Failures: 5, Until: now.Add(time.Hour), Suspended: true})
+	_ = store.Save(ctx, backoffField(backoffHost, "q"), persistedBackoff{Failures: 1, Until: now.Add(time.Minute)})
+	_ = store.Save(ctx, backoffField(backoffBoot, "other"), persistedBackoff{Failures: 1, Until: now.Add(time.Hour)})
+
+	pauses, _ := ListPauses(ctx, rdb, now)
+	if len(pauses) != 3 || !pauses[1].Suspended || !strings.Contains(pauses[1].Cause, "suspended") {
+		t.Fatalf("pauses = %+v, want q's boot pause flagged as suspended", pauses)
+	}
+	n, err := ResumeQueue(ctx, rdb, "q")
+	if err != nil || n != 2 {
+		t.Fatalf("ResumeQueue = %d, %v, want 2 pauses lifted", n, err)
+	}
+	if ok, _ := store.Has(ctx, backoffField(backoffBoot, "q")); ok {
+		t.Error("boot pause still stored")
+	}
+	if pauses, _ = ListPauses(ctx, rdb, now); len(pauses) != 1 || pauses[0].Queue != "other" {
+		t.Errorf("pauses after resume = %+v, want only the other queue", pauses)
+	}
+}

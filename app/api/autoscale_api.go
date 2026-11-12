@@ -56,6 +56,27 @@ func AutoscaleStatus(store *autoscale.Store, rdb redis.Cmdable) gin.HandlerFunc 
 	}
 }
 
+// ResumeAutoscaleQueue lifts a queue's provisioning pauses (after repeated failures, or a
+// suspension once max_boot_failures instances never became ready).
+// @Summary Resume provisioning for a queue
+// @Tags autoscale
+// @Produce json
+// @Param queue path string true "Parent queue name"
+// @Success 200 {object} map[string]interface{}
+// @Router /api/autoscale/queues/{queue}/resume [post]
+func ResumeAutoscaleQueue(rdb redis.Cmdable) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		queue := c.Param("queue")
+		n, err := autoscale.ResumeQueue(c.Request.Context(), rdb, queue)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, models.APIErrorResponse{Errors: []string{err.Error()}})
+			return
+		}
+		log.Printf("[AUTOSCALE] queue %q: %d provisioning pause(s) lifted on request", queue, n)
+		c.JSON(http.StatusOK, gin.H{"queue": queue, "resumed": n})
+	}
+}
+
 // InstanceLogs returns an autoscaler instance's logs: fetched live from its provider
 // while the machine exists, otherwise those saved when it was destroyed.
 // @Summary Autoscaler instance logs

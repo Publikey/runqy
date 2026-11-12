@@ -29,15 +29,18 @@ const DefaultBootTimeout = 20 * time.Minute
 // through YAML, the REST API/CLI, and the monitoring UI with a single shared shape.
 // In YAML it is authored as a sibling of `deployment` under each queue (see QueueYAML).
 type AutoscaleConfig struct {
-	Enabled      bool           `yaml:"enabled" json:"enabled"`
-	Provider     string         `yaml:"provider" json:"provider"` // references an autoscale_providers row by name
-	MinWorkers   int            `yaml:"min_workers" json:"min_workers"`
-	MaxWorkers   int            `yaml:"max_workers" json:"max_workers"`
-	PollInterval string         `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"` // Go duration, default 30s
-	BootTimeout  string         `yaml:"boot_timeout,omitempty" json:"boot_timeout,omitempty"`   // Go duration, default 20m
-	ScaleUp      []ScaleTrigger `yaml:"scale_up,omitempty" json:"scale_up,omitempty"`
-	ScaleDown    []ScaleTrigger `yaml:"scale_down,omitempty" json:"scale_down,omitempty"`
-	Instance     *InstanceSpec  `yaml:"instance,omitempty" json:"instance,omitempty"`
+	Enabled      bool   `yaml:"enabled" json:"enabled"`
+	Provider     string `yaml:"provider" json:"provider"` // references an autoscale_providers row by name
+	MinWorkers   int    `yaml:"min_workers" json:"min_workers"`
+	MaxWorkers   int    `yaml:"max_workers" json:"max_workers"`
+	PollInterval string `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"` // Go duration, default 30s
+	BootTimeout  string `yaml:"boot_timeout,omitempty" json:"boot_timeout,omitempty"`   // Go duration, default 20m
+	// MaxBootFailures is how many instances in a row may fail to become ready before
+	// provisioning is suspended for the queue (default 5).
+	MaxBootFailures int            `yaml:"max_boot_failures,omitempty" json:"max_boot_failures,omitempty"`
+	ScaleUp         []ScaleTrigger `yaml:"scale_up,omitempty" json:"scale_up,omitempty"`
+	ScaleDown       []ScaleTrigger `yaml:"scale_down,omitempty" json:"scale_down,omitempty"`
+	Instance        *InstanceSpec  `yaml:"instance,omitempty" json:"instance,omitempty"`
 }
 
 // ScaleTrigger is one scale-up or scale-down rule. The Trigger field selects the type;
@@ -63,6 +66,9 @@ type InstanceSpec struct {
 	MaxPricePerHour float64 `yaml:"max_price_per_hour,omitempty" json:"max_price_per_hour,omitempty"`
 	MinRAMGB        int     `yaml:"min_ram_gb,omitempty" json:"min_ram_gb,omitempty"` // system RAM, not GPU memory
 	MinVCPU         int     `yaml:"min_vcpu,omitempty" json:"min_vcpu,omitempty"`
+	// MinDownloadMbps keeps hosts advertising at least this download speed, for queues
+	// that fetch a lot at boot. It overrides the provider's own setting (Vast.ai only).
+	MinDownloadMbps float64 `yaml:"min_download_mbps,omitempty" json:"min_download_mbps,omitempty"`
 }
 
 // cronParser matches robfig/cron's standard 5-field parser (minute hour dom month dow).
@@ -79,6 +85,18 @@ func (a *AutoscaleConfig) PollIntervalOrDefault() time.Duration {
 		return def
 	}
 	return d
+}
+
+// DefaultMaxBootFailures is how many instances in a row may fail to become ready before
+// the autoscaler stops renting machines for the queue.
+const DefaultMaxBootFailures = 5
+
+// MaxBootFailuresOrDefault returns the configured limit, or DefaultMaxBootFailures.
+func (a *AutoscaleConfig) MaxBootFailuresOrDefault() int {
+	if a == nil || a.MaxBootFailures <= 0 {
+		return DefaultMaxBootFailures
+	}
+	return a.MaxBootFailures
 }
 
 // BootTimeoutOrDefault returns the configured boot timeout, or DefaultBootTimeout when
@@ -125,6 +143,9 @@ func (a *AutoscaleConfig) Validate() error {
 			return fmt.Errorf("autoscale.boot_timeout %q must be a positive duration", a.BootTimeout)
 		}
 	}
+	if a.MaxBootFailures < 0 {
+		return fmt.Errorf("autoscale.max_boot_failures cannot be negative")
+	}
 	for i := range a.ScaleUp {
 		if err := a.ScaleUp[i].validate(true); err != nil {
 			return fmt.Errorf("autoscale.scale_up[%d]: %w", i, err)
@@ -141,6 +162,9 @@ func (a *AutoscaleConfig) Validate() error {
 		}
 		if in.MinVCPU < 0 {
 			return fmt.Errorf("autoscale.instance.min_vcpu cannot be negative")
+		}
+		if in.MinDownloadMbps < 0 {
+			return fmt.Errorf("autoscale.instance.min_download_mbps cannot be negative")
 		}
 	}
 	return nil

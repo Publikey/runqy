@@ -54,3 +54,4 @@ queues:
         max_price_per_hour: 0.60
         min_ram_gb: 32           # system RAM, e.g. to load a model before moving it to the GPU
         min_vcpu: 8
+        # min_download_mbps: 500 # Vast.ai: faster hosts for a queue that downloads a lot at boot

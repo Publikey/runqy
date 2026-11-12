@@ -142,7 +142,8 @@ func (p *vastAIProvider) saveState(ctx context.Context) {
 	}
 }
 
-// badMachineTTL is how long a machine whose container never started is excluded.
+// badMachineTTL is how long a machine is excluded after its container never started or
+// its worker never became ready.
 const badMachineTTL = 24 * time.Hour
 
 func newVastAIProvider(raw json.RawMessage) (Provider, error) {
@@ -210,7 +211,7 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (Prov
 		return Provisioned{}, err
 	}
 
-	offer, err := p.cheapestOffer(ctx, gpuNames, maxPrice, disk, spec.MinRAMGB, spec.MinVCPU)
+	offer, err := p.cheapestOffer(ctx, gpuNames, maxPrice, disk, spec)
 	if err != nil {
 		return Provisioned{}, err
 	}
@@ -279,7 +280,7 @@ type vastOffer struct {
 // the given GPU models (any model when empty). Each model is searched on its own: a single
 // search with gpu_name {"in": [...]} returns a partial set (at most 64 offers, missing the
 // cheapest ones, checked against the live API), so it cannot find the cheapest offer.
-func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, maxPrice float64, disk, minRAMGB, minVCPU int) (vastOffer, error) {
+func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, maxPrice float64, disk int, spec InstanceSpec) (vastOffer, error) {
 	searches := gpuNames
 	if len(searches) == 0 {
 		searches = []string{""} // no GPU filter
@@ -287,7 +288,7 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, m
 	var best *vastOffer
 	var lastErr error
 	for _, name := range searches {
-		offers, err := p.searchOffers(ctx, name, maxPrice, disk, minRAMGB, minVCPU)
+		offers, err := p.searchOffers(ctx, name, maxPrice, disk, spec)
 		if err != nil {
 			lastErr = err // another model may still have offers
 			continue
@@ -303,8 +304,8 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, m
 	if lastErr != nil {
 		return vastOffer{}, lastErr
 	}
-	return vastOffer{}, fmt.Errorf("vastai: no offers match (gpu=%s max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d)",
-		describeGPUs(gpuNames), maxPrice, disk, minRAMGB, minVCPU)
+	return vastOffer{}, fmt.Errorf("vastai: no offers match (gpu=%s max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d min_download_mbps=%g)",
+		describeGPUs(gpuNames), maxPrice, disk, spec.MinRAMGB, spec.MinVCPU, p.minDownloadMbps(spec))
 }
 
 // describeGPUs renders the searched GPU models for error messages.
@@ -316,7 +317,8 @@ func describeGPUs(names []string) string {
 }
 
 // searchOffers runs one marketplace search, cheapest first; gpuName "" means any model.
-func (p *vastAIProvider) searchOffers(ctx context.Context, gpuName string, maxPrice float64, disk, minRAMGB, minVCPU int) ([]vastOffer, error) {
+func (p *vastAIProvider) searchOffers(ctx context.Context, gpuName string, maxPrice float64, disk int, spec InstanceSpec) ([]vastOffer, error) {
+	minRAMGB, minVCPU := spec.MinRAMGB, spec.MinVCPU
 	q := map[string]interface{}{
 		"rentable": map[string]interface{}{"eq": true},
 		"rented":   map[string]interface{}{"eq": false},
@@ -347,11 +349,7 @@ func (p *vastAIProvider) searchOffers(ctx context.Context, gpuName string, maxPr
 	} else if exclude := p.excludeCountries(); len(exclude) > 0 {
 		q["geolocation"] = map[string]interface{}{"notin": exclude}
 	}
-	minDown := p.cfg.MinDownloadMbps
-	if minDown <= 0 {
-		minDown = vastDefaultMinDownloadMbps
-	}
-	q["inet_down"] = map[string]interface{}{"gte": minDown}
+	q["inet_down"] = map[string]interface{}{"gte": p.minDownloadMbps(spec)}
 	if minCUDA := p.cfg.MinCUDAVersion; minCUDA != "none" {
 		if minCUDA == "" {
 			minCUDA = defaultMinCUDAVersion
@@ -376,6 +374,34 @@ func (p *vastAIProvider) searchOffers(ctx context.Context, gpuName string, maxPr
 	return resp.Offers, nil
 }
 
+// minDownloadMbps is the download speed offers must advertise: the queue's own
+// requirement, else the provider's, else the default. The figure comes from the host's
+// speed test, so it is an upper bound on what a given download gets, not a guarantee.
+func (p *vastAIProvider) minDownloadMbps(spec InstanceSpec) float64 {
+	if spec.MinDownloadMbps > 0 {
+		return spec.MinDownloadMbps
+	}
+	if p.cfg.MinDownloadMbps > 0 {
+		return p.cfg.MinDownloadMbps
+	}
+	return vastDefaultMinDownloadMbps
+}
+
+// AvoidHost excludes the machine an instance was placed on, as for a host fault. Call it
+// before Destroy, which forgets the placement.
+func (p *vastAIProvider) AvoidHost(ctx context.Context, instanceID string) {
+	p.mu.Lock()
+	machine := p.placed[instanceID]
+	if machine != "" {
+		p.badMachines[machine] = time.Now().Add(badMachineTTL)
+	}
+	p.mu.Unlock()
+	if machine != "" {
+		log.Printf("[AUTOSCALE] vastai: machine %s avoided for %s (instance %s never became ready)", machine, badMachineTTL, instanceID)
+		p.saveState(ctx)
+	}
+}
+
 // excludedMachines lists machines still within their exclusion window (and forgets
 // expired ones).
 func (p *vastAIProvider) excludedMachines(now time.Time) []string {
@@ -396,8 +422,9 @@ func (p *vastAIProvider) excludedMachines(now time.Time) []string {
 // observe records what an instance did: whether its container ever started, and, when
 // it ends without ever starting, that its machine is bad (host fault: full disk,
 // registry unreachable...). A container that started but whose worker never became
-// ready points at the image or the task code, not the host, so it is not penalised.
-// It reports whether the instance ended as a host fault.
+// ready is not a host fault (the image or the task code may be at fault); the
+// autoscaler still avoids that machine through AvoidHost, since a slow host is a
+// common cause. It reports whether the instance ended as a host fault.
 func (p *vastAIProvider) observe(ctx context.Context, instanceID string, running, ended bool) (hostFault bool) {
 	changed := false
 	defer func() {

@@ -435,6 +435,12 @@ export async function unprotectInstance(id: string): Promise<void> {
 	});
 }
 
+export async function resumeAutoscaleQueue(queue: string): Promise<void> {
+	await fetchJson(`${BASE_URL}/autoscale/queues/${encodeURIComponent(queue)}/resume`, {
+		method: 'POST'
+	});
+}
+
 export async function getAutoscaleInstanceLogs(id: string): Promise<AutoscaleInstanceLogs> {
 	return fetchJson(`${BASE_URL}/autoscale/instances/${encodeURIComponent(id)}/logs`);
 }

@@ -137,8 +137,17 @@ func TestNoWorkersFiresAfterForThenResolves(t *testing.T) {
 
 	col.queues[0].Workers = 1
 	mustEval(t, e, t0.Add(4*time.Minute))
+	mustEval(t, e, t0.Add(8*time.Minute))
+	if len(snd.sent) != 1 {
+		t.Fatalf("resolved before the condition stayed clear for resolve_after (5m): %+v", snd.sent)
+	}
+	mustEval(t, e, t0.Add(9*time.Minute))
 	if len(snd.sent) != 2 || !strings.Contains(snd.sent[1].Subject, "RESOLVED") {
 		t.Fatalf("want resolved email, got %+v", snd.sent)
+	}
+	// The duration is how long the alert really lasted (fired at 2m, clear since 4m).
+	if !strings.Contains(snd.sent[1].Text, "resolved after 2m0s") {
+		t.Errorf("resolved message should not count the resolve_after delay:\n%s", snd.sent[1].Text)
 	}
 	if len(st.states) != 0 {
 		t.Errorf("state not cleared after resolve: %v", st.states)
@@ -178,6 +187,72 @@ func TestConditionFlappingResetsFor(t *testing.T) {
 	}
 }
 
+// A latency hovering around its threshold (the oldest job is picked up, the next one
+// crosses the limit a few minutes later) is one alert, not a firing/resolved pair per swing.
+func TestFlappingConditionSendsOneAlert(t *testing.T) {
+	settings := baseSettings(queueworker.AlertRule{Type: queueworker.AlertLatency, MaxLatency: "20m"})
+	e, col, st, snd := newTestEngine(settings, health.QueueHealth{Name: "q", Pending: 1, Workers: 1, Latency: 21 * time.Minute})
+	mustEval(t, e, t0)
+	for i := 1; i <= 6; i++ { // clear for 2m, back for 1m, three times over
+		col.queues[0].Latency = 19 * time.Minute
+		mustEval(t, e, t0.Add(time.Duration(i*3-2)*time.Minute))
+		col.queues[0].Latency = 21 * time.Minute
+		mustEval(t, e, t0.Add(time.Duration(i*3)*time.Minute))
+	}
+	if len(snd.sent) != 1 {
+		t.Fatalf("flapping sent %d emails, want the single firing one", len(snd.sent))
+	}
+	if cs := st.states[alertKey("q", queueworker.AlertLatency)].ClearSince; !cs.IsZero() {
+		t.Errorf("clear_since = %s after the condition came back, want zero", cs)
+	}
+
+	col.queues[0].Latency = time.Minute
+	mustEval(t, e, t0.Add(20*time.Minute))
+	mustEval(t, e, t0.Add(25*time.Minute))
+	if len(snd.sent) != 2 || !strings.Contains(snd.sent[1].Subject, "RESOLVED") {
+		t.Fatalf("want one resolved email once clear for 5m, got %d", len(snd.sent))
+	}
+	if len(st.states) != 0 {
+		t.Errorf("state not cleared after resolve: %v", st.states)
+	}
+}
+
+func TestResolveAfterZeroResolvesAtOnce(t *testing.T) {
+	settings := baseSettings(queueworker.AlertRule{Type: queueworker.AlertPending, Threshold: 10, ResolveAfter: "0s"})
+	e, col, _, snd := newTestEngine(settings, health.QueueHealth{Name: "q", Pending: 50, Workers: 1})
+	mustEval(t, e, t0)
+	col.queues[0].Pending = 1
+	mustEval(t, e, t0.Add(30*time.Second))
+	if len(snd.sent) != 2 || !strings.Contains(snd.sent[1].Subject, "RESOLVED") {
+		t.Fatalf("want firing then resolved, got %d emails", len(snd.sent))
+	}
+}
+
+// A worker reports unhealthy for a few seconds while it stops or restarts its process:
+// by default the rule waits a minute before alerting.
+func TestWorkerUnhealthyWaitsOneMinuteByDefault(t *testing.T) {
+	q := health.QueueHealth{Name: "q", Workers: 1, UnhealthyWorkers: []string{"w1"}}
+	e, col, st, snd := newTestEngine(baseSettings(queueworker.AlertRule{Type: queueworker.AlertWorkerUnhealthy}), q)
+	mustEval(t, e, t0)
+	col.queues[0].UnhealthyWorkers = nil
+	mustEval(t, e, t0.Add(30*time.Second))
+	if len(snd.sent) != 0 || len(st.states) != 0 {
+		t.Fatalf("a 30s blip alerted: %d emails, state %v", len(snd.sent), st.states)
+	}
+	col.queues[0].UnhealthyWorkers = []string{"w1"}
+	mustEval(t, e, t0.Add(time.Minute))
+	mustEval(t, e, t0.Add(2*time.Minute))
+	if len(snd.sent) != 1 {
+		t.Fatalf("unhealthy for 1m did not alert: %d emails", len(snd.sent))
+	}
+
+	e, _, _, snd = newTestEngine(baseSettings(queueworker.AlertRule{Type: queueworker.AlertWorkerUnhealthy, For: "0s"}), q)
+	mustEval(t, e, t0)
+	if len(snd.sent) != 1 {
+		t.Fatal(`for: "0s" should alert at once`)
+	}
+}
+
 func TestRepeatInterval(t *testing.T) {
 	settings := baseSettings(queueworker.AlertRule{Type: queueworker.AlertLatency, MaxLatency: "10m"})
 	settings.RepeatInterval = "1h"
@@ -191,7 +266,7 @@ func TestRepeatInterval(t *testing.T) {
 }
 
 func TestSendFailureRetriesNextEvaluation(t *testing.T) {
-	settings := baseSettings(queueworker.AlertRule{Type: queueworker.AlertNoWorkers})
+	settings := baseSettings(queueworker.AlertRule{Type: queueworker.AlertNoWorkers, ResolveAfter: "0"})
 	e, col, st, snd := newTestEngine(settings, health.QueueHealth{Name: "q", Pending: 1})
 	snd.err = errors.New("smtp down")
 	if err := e.Evaluate(context.Background(), t0); err == nil {
