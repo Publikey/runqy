@@ -1,0 +1,82 @@
+# Prometheus alert rules for runqy. Thresholds are examples: adjust them to your queues.
+#
+# Metrics, all labelled by queue (full name, e.g. inference.high):
+#   asynq_tasks_enqueued_total{state=...}  tasks per state (pending, active, retry, archived...)
+#   asynq_queue_latency_seconds            age of the oldest pending task
+#   asynq_tasks_processed_total            tasks finished, succeeded and failed
+#   asynq_tasks_failed_total               tasks failed
+#   asynq_queue_paused_total               1 when the queue is paused
+#   runqy_queue_workers                    live workers listening on the queue
+#   runqy_queue_unhealthy_workers          of those, workers whose task process is down
+
+groups:
+  - name: runqy
+    rules:
+      # Tasks are waiting and no live worker listens on the queue.
+      - alert: RunqyNoWorkers
+        expr: >
+          asynq_tasks_enqueued_total{state="pending"} > 0
+          and on(queue) runqy_queue_workers == 0
+          and on(queue) asynq_queue_paused_total == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No worker for {{ $labels.queue }}"
+          description: "Queue {{ $labels.queue }} has {{ $value }} pending tasks and no live worker."
+
+      # The oldest pending task has waited too long.
+      - alert: RunqyHighQueueLatency
+        expr: >
+          asynq_queue_latency_seconds > 300
+          and on(queue) asynq_queue_paused_total == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency on {{ $labels.queue }}"
+          description: "The oldest pending task of {{ $labels.queue }} has waited {{ $value | humanizeDuration }}."
+
+      # Too many tasks waiting.
+      - alert: RunqyHighQueueDepth
+        expr: asynq_tasks_enqueued_total{state="pending"} > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High queue depth on {{ $labels.queue }}"
+          description: "Queue {{ $labels.queue }} has {{ $value }} pending tasks."
+
+      # More than 10% of the finished tasks failed.
+      - alert: RunqyHighErrorRate
+        expr: >
+          rate(asynq_tasks_failed_total[5m]) / rate(asynq_tasks_processed_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate on {{ $labels.queue }}"
+          description: "{{ $value | humanizePercentage }} of the tasks finished on {{ $labels.queue }} failed."
+
+      # Workers are there but nothing gets done.
+      - alert: RunqyNoTasksProcessed
+        expr: >
+          increase(asynq_tasks_processed_total[10m]) == 0
+          and on(queue) asynq_tasks_enqueued_total{state="pending"} > 0
+          and on(queue) asynq_queue_paused_total == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No tasks processed on {{ $labels.queue }}"
+          description: "Queue {{ $labels.queue }} has pending tasks but none finished in 10 minutes."
+
+      # A worker's task process is down or degraded: it takes no task.
+      - alert: RunqyUnhealthyWorker
+        expr: runqy_queue_unhealthy_workers > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unhealthy worker on {{ $labels.queue }}"
+          description: "{{ $value }} worker(s) listening on {{ $labels.queue }} report an unhealthy task process."

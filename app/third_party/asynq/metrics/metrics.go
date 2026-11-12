@@ -157,10 +157,13 @@ func (qmc *QueueMetricsCollector) Collect(ch chan<- prometheus.Metric) {
 			info.Queue,
 		)
 
+		// runqy-worker counts a task either as processed (success) or as failed, where
+		// asynq counts failures in both. The exported counter keeps asynq's meaning
+		// (succeeded and failed), so the usual error rate, failed / processed, holds.
 		ch <- prometheus.MustNewConstMetric(
 			tasksProcessedTotalDesc,
 			prometheus.CounterValue,
-			float64(info.ProcessedTotal),
+			float64(info.ProcessedTotal+info.FailedTotal),
 			info.Queue,
 		)
 

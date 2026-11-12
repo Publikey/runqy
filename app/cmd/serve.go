@@ -287,6 +287,13 @@ func runServe(cmd *cobra.Command, args []string) {
 			log.Fatalf("Failed to register metrics exporter: %v", err)
 		}
 	}
+	// Workers per queue: the asynq exporter only knows about tasks.
+	workerMetrics := health.NewWorkerMetricsCollector(redisAddr.RDB, inspector.Queues)
+	if err := prometheus.Register(workerMetrics); err != nil {
+		if _, ok := err.(prometheus.AlreadyRegisteredError); !ok {
+			log.Fatalf("Failed to register worker metrics exporter: %v", err)
+		}
+	}
 	if debugMode {
 		log.Println("[METRICS] Prometheus metrics exporter registered at /metrics")
 	}
