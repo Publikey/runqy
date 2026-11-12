@@ -75,6 +75,10 @@ func TestExamplesLoadStrictly(t *testing.T) {
 		t.Fatal("no example files found")
 	}
 	for _, f := range files {
+		// examples/monitoring holds Prometheus and Docker Compose files, not queue configs.
+		if filepath.Base(filepath.Dir(f)) == "monitoring" {
+			continue
+		}
 		if _, err := LoadFile(f); err != nil {
 			t.Errorf("%s: %v", f, err)
 		}
