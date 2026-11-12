@@ -127,7 +127,7 @@ func toQueueStateSnapshot(info *asynq.QueueInfo) *queueStateSnapshot {
 		Archived:        info.Archived,
 		Completed:       info.Completed,
 		Processed:       info.Processed,
-		Succeeded:       info.Processed - info.Failed,
+		Succeeded:       info.Processed, // runqy-worker counts successes and failures apart
 		Failed:          info.Failed,
 		Paused:          info.Paused,
 		Timestamp:       info.Timestamp,
@@ -146,7 +146,7 @@ func toDailyStats(s *asynq.DailyStats) *dailyStats {
 	return &dailyStats{
 		Queue:     s.Queue,
 		Processed: s.Processed,
-		Succeeded: s.Processed - s.Failed,
+		Succeeded: s.Processed, // runqy-worker counts successes and failures apart
 		Failed:    s.Failed,
 		Date:      s.Date.Format("2006-01-02"),
 	}

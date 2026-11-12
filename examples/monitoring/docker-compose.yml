@@ -1,0 +1,76 @@
+# runqy + Prometheus + Grafana
+#
+#   docker compose up -d
+#
+#   runqy       http://localhost:3000/monitoring/   (metrics at /metrics)
+#   Prometheus  http://localhost:9090
+#   Grafana     http://localhost:3001               (admin / admin, dashboard "runqy")
+#
+# Change RUNQY_API_KEY and the PostgreSQL password before exposing any of this.
+
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: runqy
+      POSTGRES_PASSWORD: runqy
+      POSTGRES_DB: runqy
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U runqy -h 127.0.0.1"]  # TCP: the init-time server only listens on the socket
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  runqy:
+    image: ghcr.io/publikey/runqy:latest
+    ports:
+      - "3000:3000"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ""
+      DATABASE_HOST: postgres
+      DATABASE_USER: runqy
+      DATABASE_PASSWORD: runqy
+      DATABASE_DBNAME: runqy
+      RUNQY_API_KEY: change-me
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  postgres-data:
+  grafana-data:
