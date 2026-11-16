@@ -121,7 +121,8 @@ type ReloadResponse struct {
 // CreateQueueRequest is the request body for creating a queue
 type CreateQueueRequest struct {
 	Name       string                        `json:"name" binding:"required"`
-	Priority   int                           `json:"priority" binding:"required,min=1"`
+	// 0 = idle-only sub-queue (served only when the worker's other queues are empty)
+	Priority   *int                          `json:"priority" binding:"required,min=0"`
 	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
@@ -445,7 +446,7 @@ func CreateQueueConfig(store *queueworker.Store) gin.HandlerFunc {
 		now := time.Now().Unix()
 		cfg := &queueworker.QueueConfig{
 			Name:       req.Name,
-			Priority:   req.Priority,
+			Priority:   *req.Priority,
 			Deployment: req.Deployment,
 			CreatedAt:  now,
 			UpdatedAt:  now,

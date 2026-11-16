@@ -268,8 +268,8 @@ func TestToQueueAndSubQueues_SetsEnabledTrue(t *testing.T) {
 			StartupCmd: "python main.py",
 		},
 		SubQueues: []SubQueueYAML{
-			{Name: "high", Priority: 10},
-			{Name: "low", Priority: 1},
+			{Name: "high", Priority: intPtr(10)},
+			{Name: "low", Priority: intPtr(1)},
 		},
 	}
 

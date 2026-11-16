@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -666,7 +667,19 @@ func (a *Autoscaler) provisionN(ctx context.Context, parent string, asc *queuewo
 func (a *Autoscaler) provision(ctx context.Context, parent string, asc *queueworker.AutoscaleConfig, prov provider.Provider, providerName string) error {
 	correlationID := "as-" + uuid.NewString()
 
-	spec := provider.InstanceSpec{Queue: parent, Env: a.workerEnv(parent, correlationID)}
+	// Not knowing the sub-queues fails the provisioning (retried with backoff) rather than
+	// risk renting a machine that listens on an idle-only sub-queue.
+	queues := parent
+	if a.queues != nil {
+		q, err := a.queues.GetQueueWithSubQueues(ctx, parent)
+		if err != nil {
+			return fmt.Errorf("read sub-queues: %w", err)
+		}
+		if q != nil {
+			queues = managedQueues(parent, q.SubQueues)
+		}
+	}
+	spec := provider.InstanceSpec{Queue: parent, Env: a.workerEnv(queues, correlationID)}
 	if asc.Instance != nil {
 		spec.GPU = asc.Instance.GPU
 		spec.Image = asc.Instance.Image
@@ -874,25 +887,66 @@ type subQueueLoad struct {
 // parent queue. Pending jobs of a paused sub-queue are left out: no worker will take them,
 // so they must not trigger a scale-up (renting machines for a paused queue wastes money).
 // Their active jobs still count, as machines working on them are busy.
+//
+// An idle-only sub-queue (priority 0) is left out entirely, pending and active: it only
+// uses spare capacity, so it must neither rent a machine nor keep one from being released.
 func (a *Autoscaler) queueStats(ctx context.Context, parent string) queueStatsResult {
 	q, err := a.queues.GetQueueWithSubQueues(ctx, parent)
 	if err != nil || q == nil {
 		return queueStatsResult{}
 	}
-	names := []string{queueworker.NormalizeQueueName(parent)}
-	if len(q.SubQueues) > 0 {
-		names = names[:0]
-		for _, sq := range q.SubQueues {
-			names = append(names, queueworker.BuildFullQueueName(parent, sq.Name))
-		}
-	}
+	names, idleOnly := statQueueNames(parent, q.SubQueues)
 	var infos []*asynq.QueueInfo
 	for _, name := range names {
 		if info, err := a.inspector.GetQueueInfo(name); err == nil {
 			infos = append(infos, info)
 		}
 	}
-	return aggregateQueueStats(infos)
+	out := aggregateQueueStats(infos)
+	for _, name := range idleOnly {
+		out.bySub[name] = subQueueLoad{} // known, but always empty for the triggers
+	}
+	return out
+}
+
+// statQueueNames splits a parent's sub-queues into the full queue names whose load the
+// autoscaler reads and the short names of the idle-only ones it ignores.
+func statQueueNames(parent string, subQueues []queueworker.SubQueue) (names, idleOnly []string) {
+	if len(subQueues) == 0 {
+		return []string{queueworker.NormalizeQueueName(parent)}, nil
+	}
+	for _, sq := range subQueues {
+		if sq.IsIdleOnly() {
+			idleOnly = append(idleOnly, sq.Name)
+			continue
+		}
+		names = append(names, queueworker.BuildFullQueueName(parent, sq.Name))
+	}
+	return names, idleOnly
+}
+
+// managedQueues is the RUNQY_QUEUES value of an instance rented for the parent queue: the
+// parent itself (all its sub-queues), or, when the queue has idle-only sub-queues, the list
+// of the others. Rented machines never serve idle-only work: it would keep them busy and
+// push back their scale-down.
+func managedQueues(parent string, subQueues []queueworker.SubQueue) string {
+	var paid []string
+	idleOnly := false
+	for _, sq := range subQueues {
+		if !sq.Enabled {
+			continue
+		}
+		if sq.IsIdleOnly() {
+			idleOnly = true
+			continue
+		}
+		paid = append(paid, queueworker.BuildFullQueueName(parent, sq.Name))
+	}
+	if !idleOnly || len(paid) == 0 {
+		return parent
+	}
+	sort.Strings(paid)
+	return strings.Join(paid, ",")
 }
 
 // aggregateQueueStats combines sub-queue statistics (see queueStats).
@@ -1005,7 +1059,8 @@ func (a *Autoscaler) checkWorkerEnv(providerType string) error {
 }
 
 // workerEnv builds the env injected into a booting worker so it auto-registers and correlates.
-func (a *Autoscaler) workerEnv(parent, correlationID string) map[string]string {
+// `queues` is the worker's RUNQY_QUEUES (see managedQueues).
+func (a *Autoscaler) workerEnv(queues, correlationID string) map[string]string {
 	serverURL := os.Getenv("RUNQY_PUBLIC_URL")
 	if serverURL == "" {
 		serverURL = "http://localhost:" + a.cfg.HTTPPort
@@ -1017,7 +1072,7 @@ func (a *Autoscaler) workerEnv(parent, correlationID string) map[string]string {
 	return map[string]string{
 		"RUNQY_SERVER_URL":  serverURL,
 		"RUNQY_API_KEY":     apiKey,
-		"RUNQY_QUEUES":      parent,
+		"RUNQY_QUEUES":      queues,
 		"RUNQY_INSTANCE_ID": correlationID,
 	}
 }
