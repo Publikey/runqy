@@ -370,7 +370,7 @@ export interface ScaleTrigger {
 	duration?: string; // schedule scale_up: how long to hold the target
 	timeout?: string;
 	max_latency?: string; // latency: oldest pending job age that triggers a scale-up
-	sub_queues?: string[]; // no_workers / queue_depth / latency: only watch these sub-queues (short names)
+	sub_queues?: string[]; // no_workers / queue_depth / latency / idle: only watch these sub-queues (short names)
 }
 
 export interface AutoscaleInstanceSpec {
@@ -432,6 +432,7 @@ export interface AlertRule {
 	threshold?: number; // pending
 	when_idle?: boolean; // no_workers: also fire when nothing is pending
 	disabled?: boolean; // queue override: turn this rule type off
+	sub_queues?: string[]; // queue override, no_workers / latency / pending: only watch these sub-queues (short names)
 }
 
 export interface QueueAlertsConfig {

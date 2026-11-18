@@ -47,6 +47,11 @@ type AlertRule struct {
 	Threshold    int    `yaml:"threshold,omitempty" json:"threshold,omitempty"`     // pending
 	WhenIdle     bool   `yaml:"when_idle,omitempty" json:"when_idle,omitempty"`     // no_workers: also fire when nothing is pending
 	Disabled     bool   `yaml:"disabled,omitempty" json:"disabled,omitempty"`       // in a queue override: turn this rule type off
+	// SubQueues limits a queue's no_workers / latency / pending rule to the pending jobs of
+	// these sub-queues (short names); empty = the whole queue. It is how a queue leaves an
+	// idle-only (priority 0) sub-queue, whose backlog is expected, out of its alerts. Only
+	// allowed in a queue's own rules.
+	SubQueues []string `yaml:"sub_queues,omitempty" json:"sub_queues,omitempty"`
 }
 
 // ForDuration returns how long the condition must hold before firing. Unset means 0,
@@ -91,6 +96,18 @@ func (r AlertRule) Validate() error {
 	if r.ResolveAfter != "" {
 		if d, err := time.ParseDuration(r.ResolveAfter); err != nil || d < 0 {
 			return fmt.Errorf("rule %q: invalid resolve_after %q", r.Type, r.ResolveAfter)
+		}
+	}
+	if len(r.SubQueues) > 0 {
+		switch r.Type {
+		case AlertNoWorkers, AlertLatency, AlertPending:
+		default:
+			return fmt.Errorf("rule %q: sub_queues only applies to no_workers, latency and pending rules", r.Type)
+		}
+		for _, sq := range r.SubQueues {
+			if strings.TrimSpace(sq) == "" {
+				return fmt.Errorf("rule %q: sub_queues cannot contain an empty name", r.Type)
+			}
 		}
 	}
 	switch r.Type {
@@ -140,6 +157,27 @@ func (q *QueueAlertsConfig) Validate() error {
 	}
 	if err := validateRules(q.Rules); err != nil {
 		return fmt.Errorf("alerts.%w", err)
+	}
+	return nil
+}
+
+// ValidateSubQueues checks that every rule's sub_queues names one of the queue's sub-queues
+// (short names). Only the YAML loader knows all of them at once; a queue without explicit
+// sub-queues has the single sub-queue "default".
+func (q *QueueAlertsConfig) ValidateSubQueues(known []string) error {
+	if q == nil {
+		return nil
+	}
+	ok := make(map[string]bool, len(known))
+	for _, k := range known {
+		ok[k] = true
+	}
+	for i, r := range q.Rules {
+		for _, sq := range r.SubQueues {
+			if !ok[sq] {
+				return fmt.Errorf("alerts.rules[%d]: sub_queues: %q is not a sub-queue of this queue (have %v)", i, sq, known)
+			}
+		}
 	}
 	return nil
 }
@@ -199,6 +237,12 @@ func (s *AlertSettings) Validate() error {
 	}
 	if err := validateRules(s.Rules); err != nil {
 		return fmt.Errorf("alerts.%w", err)
+	}
+	for i, r := range s.Rules {
+		// Global rules apply to every queue, and sub-queue names differ from one to the next.
+		if len(r.SubQueues) > 0 {
+			return fmt.Errorf("alerts.rules[%d]: sub_queues is only allowed in a queue's own alerts block", i)
+		}
 	}
 	if s.RepeatInterval != "" {
 		if d, err := time.ParseDuration(s.RepeatInterval); err != nil || d < 0 {

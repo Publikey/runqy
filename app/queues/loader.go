@@ -229,6 +229,9 @@ func (c *QueueWorkersYAML) Validate() error {
 		if err := q.Alerts.Validate(); err != nil {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}
+		if err := q.Alerts.ValidateSubQueues(subNames); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
 	}
 	if err := c.Alerts.Validate(); err != nil {
 		return err

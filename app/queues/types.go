@@ -112,8 +112,10 @@ func (f *FieldSchema) IsRequired() bool {
 //
 // Priority is required. From 1 up it is the sub-queue's weight in the workers' draw. An
 // explicit 0 makes the sub-queue idle-only: a worker takes its tasks only when every other
-// queue it listens on (priority >= 1) is empty, the autoscaler ignores its load, and the
-// instances the autoscaler rents do not listen on it (see IdleOnlyPriority).
+// queue it listens on (priority >= 1) is empty (see IdleOnlyPriority). Nothing else treats
+// it differently: workers of the parent queue listen on it like on any sub-queue, and it
+// counts for autoscaling and alerts unless their triggers / rules list the sub-queues to
+// watch (`sub_queues`) without it.
 type SubQueueYAML struct {
 	Name     string `yaml:"name"`
 	Priority *int   `yaml:"priority"`

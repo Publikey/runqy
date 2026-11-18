@@ -105,9 +105,11 @@
 	const scaleDownTypes: ScaleTriggerType[] = ['idle', 'schedule'];
 
 	// Triggers that can watch only some sub-queues (empty list = every sub-queue).
-	const watchesSubQueues = (t: ScaleTriggerType) => t === 'no_workers' || t === 'queue_depth' || t === 'latency';
+	const watchesSubQueues = (t: ScaleTriggerType) => t === 'no_workers' || t === 'queue_depth' || t === 'latency' || t === 'idle';
 
 	// "premium, vip" -> ["premium", "vip"]; tolerates full names ("inference.premium").
+	const alertWatchesSubQueues = (t: AlertRule['type']) => t === 'no_workers' || t === 'latency' || t === 'pending';
+
 	function parseSubQueueList(v: string): string[] {
 		const names = v
 			.split(',')
@@ -223,8 +225,8 @@
 				error = 'Subqueue name can only contain letters, numbers, hyphens, and underscores';
 				return;
 			}
-			if (subqueuePriority < 1) {
-				error = 'Priority must be at least 1';
+			if (!(subqueuePriority >= 0)) {
+				error = 'Priority cannot be negative (0 = idle-only)';
 				return;
 			}
 			onsavesubqueue?.(selectedParentQueue, subqueueName.trim(), subqueuePriority);
@@ -249,8 +251,8 @@
 				error = 'Subqueue names can only contain letters, numbers, hyphens, and underscores';
 				return;
 			}
-			if (sq.priority < 1) {
-				error = 'All subqueue priorities must be at least 1';
+			if (!(sq.priority >= 0)) {
+				error = 'Subqueue priorities cannot be negative (0 = idle-only)';
 				return;
 			}
 		}
@@ -407,6 +409,7 @@
 					if (r.type === 'latency') rule.max_latency = r.max_latency?.trim();
 					if (r.type === 'pending') rule.threshold = Number(r.threshold);
 					if (r.type === 'no_workers' && r.when_idle) rule.when_idle = true;
+					if (alertWatchesSubQueues(r.type) && r.sub_queues?.length) rule.sub_queues = r.sub_queues;
 					return rule;
 				})
 			};
@@ -588,10 +591,10 @@
 						</div>
 					</Field>
 					<Field label="Priority" for="{uid}-subprio">
-						<input id="{uid}-subprio" type="number" bind:value={subqueuePriority} min="1" class="input w-full" disabled={loading} />
+						<input id="{uid}-subprio" type="number" bind:value={subqueuePriority} min="0" class="input w-full" disabled={loading} />
 					</Field>
 				</div>
-				<p class="text-ui text-fg-subtle">Higher priority subqueues are processed first.</p>
+				<p class="text-ui text-fg-subtle">Higher priority subqueues are processed first. Priority 0 is idle-only: served when the worker's other queues are empty.</p>
 			</div>
 		{:else}
 			<!-- Queue name + sub-queues -->
@@ -614,7 +617,7 @@
 								<span class="shrink-0 text-ui text-fg-subtle">{queueName || '...'}.</span>
 								<input type="text" bind:value={sq.name} placeholder="high" aria-label="Subqueue name" class="input min-w-0 flex-1" disabled={loading} />
 								<span class="shrink-0 text-xs text-fg-subtle">Priority</span>
-								<input type="number" bind:value={sq.priority} min="1" aria-label="Subqueue priority" class="input w-16 shrink-0" disabled={loading} />
+								<input type="number" bind:value={sq.priority} min="0" aria-label="Subqueue priority" class="input w-16 shrink-0" disabled={loading} />
 								<IconButton icon={X} label="Remove subqueue" danger onclick={() => removeSubQueue(index)} disabled={loading} />
 							</div>
 						{/each}
@@ -835,6 +838,20 @@
 										{:else if trigger.trigger === 'idle'}
 											<Field label="Timeout" for="{uid}-down{index}-timeout" class="w-28">
 												<input id="{uid}-down{index}-timeout" type="text" bind:value={trigger.timeout} placeholder="10m" class="input w-full" disabled={loading} />
+											</Field>
+											<Field label="Sub-queues (optional)" for="{uid}-down{index}-subs" class="flex-1 min-w-[140px]">
+												<input
+													id="{uid}-down{index}-subs"
+													type="text"
+													bind:value={
+														() => (trigger.sub_queues ?? []).join(', '),
+														(v) => (trigger.sub_queues = parseSubQueueList(v))
+													}
+													placeholder="all"
+													title="Only tasks of these sub-queues keep an instance from being scaled down"
+													class="input w-full"
+													disabled={loading}
+												/>
 											</Field>
 										{/if}
 										<div class="flex h-9 items-center">

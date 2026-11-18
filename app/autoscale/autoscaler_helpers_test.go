@@ -3,7 +3,6 @@ package autoscale
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"testing"
 	"time"
 
@@ -121,62 +120,5 @@ func TestUnknownSubQueues(t *testing.T) {
 	}
 	if got := unknownSubQueues(asc, nil); got != nil {
 		t.Errorf("no statistics must not report anything, got %v", got)
-	}
-}
-
-// An idle-only sub-queue (priority 0) is not read for the scaling decision, and rented
-// instances do not listen on it.
-func TestIdleOnlySubQueuesAreInvisibleToAutoscaling(t *testing.T) {
-	subs := []queueworker.SubQueue{
-		{Name: "priority", Priority: 7, Enabled: true},
-		{Name: "normal", Priority: 2, Enabled: true},
-		{Name: "free", Priority: 0, Enabled: true},
-	}
-	names, idleOnly := statQueueNames("images", subs)
-	if !reflect.DeepEqual(names, []string{"images.priority", "images.normal"}) || !reflect.DeepEqual(idleOnly, []string{"free"}) {
-		t.Errorf("statQueueNames = %v, %v", names, idleOnly)
-	}
-	if got := managedQueues("images", subs); got != "images.normal,images.priority" {
-		t.Errorf("managedQueues = %q, want the two paid sub-queues", got)
-	}
-
-	// without an idle-only sub-queue nothing changes: the instance listens on the parent
-	if got := managedQueues("images", subs[:2]); got != "images" {
-		t.Errorf("managedQueues without idle-only = %q, want the parent", got)
-	}
-	if names, idleOnly := statQueueNames("images", nil); !reflect.DeepEqual(names, []string{"images.default"}) || idleOnly != nil {
-		t.Errorf("statQueueNames without sub-queues = %v, %v", names, idleOnly)
-	}
-	// a disabled paid sub-queue is not listened on
-	subs[1].Enabled = false
-	if got := managedQueues("images", subs); got != "images.priority" {
-		t.Errorf("managedQueues with a disabled sub-queue = %q", got)
-	}
-}
-
-// A full idle-only sub-queue asks for no machine: with its load left out, the decision sees
-// an empty queue.
-func TestDecideIgnoresIdleOnlyBacklog(t *testing.T) {
-	asc := &queueworker.AutoscaleConfig{
-		Enabled: true, Provider: "mock", MinWorkers: 0, MaxWorkers: 5,
-		ScaleUp: []queueworker.ScaleTrigger{
-			{Trigger: queueworker.TriggerNoWorkers},
-			{Trigger: queueworker.TriggerQueueDepth, Threshold: 0},
-			{Trigger: queueworker.TriggerLatency, MaxLatency: "1s"},
-		},
-	}
-	// what queueStats builds when only the idle-only sub-queue is backlogged
-	stats := aggregateQueueStats([]*asynq.QueueInfo{
-		{Queue: "images.priority"}, {Queue: "images.normal"},
-	})
-	stats.bySub["free"] = subQueueLoad{}
-	snap := queueSnapshot{now: time.Now(), window: 30 * time.Second, pending: stats.pending,
-		active: stats.active, latency: stats.latency, subQueues: stats.bySub}
-	if plan := decide(asc, snap); plan.provision != 0 {
-		t.Errorf("provision = %d, want 0", plan.provision)
-	}
-	asc.ScaleUp = []queueworker.ScaleTrigger{{Trigger: queueworker.TriggerQueueDepth, Threshold: 0, SubQueues: []string{"free"}}}
-	if plan := decide(asc, snap); plan.provision != 0 {
-		t.Errorf("trigger naming the idle-only sub-queue: provision = %d, want 0", plan.provision)
 	}
 }

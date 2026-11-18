@@ -54,7 +54,10 @@ type ScaleTrigger struct {
 	Timeout    string `yaml:"timeout,omitempty" json:"timeout,omitempty"`         // idle (Go duration)
 	MaxLatency string `yaml:"max_latency,omitempty" json:"max_latency,omitempty"` // latency (Go duration)
 	// SubQueues limits no_workers, queue_depth and latency to these sub-queues (short
-	// names, e.g. ["premium"]). Empty means every sub-queue of the parent.
+	// names, e.g. ["premium"]). Empty means every sub-queue of the parent. On idle, only
+	// tasks of these sub-queues keep an instance from being scaled down (it is drained, so
+	// a task of another sub-queue it is running still finishes); this needs a worker that
+	// reports its activity per sub-queue, older ones count every task.
 	SubQueues []string `yaml:"sub_queues,omitempty" json:"sub_queues,omitempty"`
 }
 
@@ -188,6 +191,13 @@ func (a *AutoscaleConfig) ValidateSubQueues(known []string) error {
 			}
 		}
 	}
+	for i := range a.ScaleDown {
+		for _, sq := range a.ScaleDown[i].SubQueues {
+			if !ok[sq] {
+				return fmt.Errorf("autoscale.scale_down[%d]: sub_queues: %q is not a sub-queue of this queue (have %v)", i, sq, known)
+			}
+		}
+	}
 	return nil
 }
 
@@ -196,9 +206,9 @@ func (a *AutoscaleConfig) ValidateSubQueues(known []string) error {
 func (t *ScaleTrigger) validate(scaleUp bool) error {
 	if len(t.SubQueues) > 0 {
 		switch t.Trigger {
-		case TriggerNoWorkers, TriggerQueueDepth, TriggerLatency:
+		case TriggerNoWorkers, TriggerQueueDepth, TriggerLatency, TriggerIdle:
 		default:
-			return fmt.Errorf("sub_queues is only valid on no_workers, queue_depth and latency triggers")
+			return fmt.Errorf("sub_queues is only valid on no_workers, queue_depth, latency and idle triggers")
 		}
 		seen := make(map[string]bool, len(t.SubQueues))
 		for _, sq := range t.SubQueues {

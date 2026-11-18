@@ -41,6 +41,15 @@
 		rules = rules.filter((_, i) => i !== index);
 	}
 
+	function parseSubQueueList(v: string): string[] {
+		const names = v
+			.split(',')
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.map((s) => s.substring(s.lastIndexOf('.') + 1));
+		return [...new Set(names)];
+	}
+
 	function hintFor(type: AlertRuleType): string {
 		return ruleTypes.find((t) => t.value === type)?.hint ?? '';
 	}
@@ -71,6 +80,19 @@
 						{:else if rule.type === 'pending'}
 							<Field label="Threshold" for="{id}-threshold" class="w-28">
 								<input id="{id}-threshold" type="number" bind:value={rule.threshold} min="1" class="input" {disabled} />
+							</Field>
+						{/if}
+						{#if override && (rule.type === 'no_workers' || rule.type === 'latency' || rule.type === 'pending')}
+							<Field label="Sub-queues (optional)" for="{id}-subs" class="flex-1 min-w-36">
+								<input
+									id="{id}-subs"
+									type="text"
+									bind:value={() => (rule.sub_queues ?? []).join(', '), (v) => (rule.sub_queues = parseSubQueueList(v))}
+									placeholder="all"
+									title="Only count the pending jobs of these sub-queues (short names, comma-separated)"
+									class="input"
+									{disabled}
+								/>
 							</Field>
 						{/if}
 						{#if rule.type !== 'autoscale_failure'}

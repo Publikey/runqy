@@ -45,6 +45,8 @@ queues:
       scale_down:
         - trigger: idle          # destroy a worker idle for 5m (busy workers are never destroyed)
           timeout: "5m"
+          # sub_queues: [premium] # only tasks of these sub-queues keep a worker alive (e.g. leave a
+          #                       # priority 0 one out); a task of another one still finishes first
         - trigger: schedule      # back to min_workers every night
           cron: "0 22 * * *"
       instance:

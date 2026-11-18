@@ -52,6 +52,7 @@ queues:
           max_latency: 2m
         - type: pending          # queue-only rule
           threshold: 500
+          # sub_queues: [high]   # only count these sub-queues (e.g. leave a priority 0 one out)
         - type: worker_unhealthy # turned off for this queue
           disabled: true
 
