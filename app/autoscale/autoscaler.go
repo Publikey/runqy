@@ -330,8 +330,9 @@ func (a *Autoscaler) evaluateQueue(ctx context.Context, parent string, queue *qu
 		subQueues:    stats.bySub,
 		totalWorkers: countLiveWorkers(workers, parent),
 	}
+	idleWatch := idleWatchedQueues(parent, asc)
 	for _, inst := range live {
-		snap.instances = append(snap.instances, a.viewInstance(ctx, inst, byInstance[inst.InstanceID], stats.active, now))
+		snap.instances = append(snap.instances, a.viewInstance(ctx, inst, byInstance[inst.InstanceID], stats.active, idleWatch, now))
 	}
 
 	plan := decide(asc, snap)
@@ -390,6 +391,40 @@ func (a *Autoscaler) scaleDown(ctx context.Context, prov provider.Provider, pare
 	}
 }
 
+// watchedActivity returns the worker's in-flight task count and last task time, limited
+// to the given full sub-queue names when there are any and the worker reports its
+// activity per sub-queue (older workers: every task counts).
+func (hb *workerHeartbeat) watchedActivity(watch []string) (active int, lastTaskAt int64) {
+	if len(watch) == 0 || hb.byQueue == nil {
+		return hb.active, hb.lastTaskAt
+	}
+	for _, q := range watch {
+		qa := hb.byQueue[q]
+		active += qa.Active
+		if qa.LastTaskAt > lastTaskAt {
+			lastTaskAt = qa.LastTaskAt
+		}
+	}
+	return active, lastTaskAt
+}
+
+// idleWatchedQueues returns the full sub-queue names the queue's idle trigger watches, or
+// nil when it watches every sub-queue.
+func idleWatchedQueues(parent string, asc *queueworker.AutoscaleConfig) []string {
+	for i := range asc.ScaleDown {
+		t := &asc.ScaleDown[i]
+		if t.Trigger != queueworker.TriggerIdle || len(t.SubQueues) == 0 {
+			continue
+		}
+		out := make([]string, 0, len(t.SubQueues))
+		for _, sq := range t.SubQueues {
+			out = append(out, queueworker.BuildFullQueueName(parent, sq))
+		}
+		return out
+	}
+	return nil
+}
+
 // sendControl publishes a command on a worker's control channel (no-op without Redis,
 // as in unit tests).
 func (a *Autoscaler) sendControl(ctx context.Context, workerID, action string) error {
@@ -402,7 +437,12 @@ func (a *Autoscaler) sendControl(ctx context.Context, workerID, action string) e
 
 // viewInstance builds the decision view of a live instance from its row and its worker's
 // heartbeat, and persists the activity clock.
-func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *workerHeartbeat, queueActive int, now time.Time) instanceView {
+//
+// idleWatch lists the full sub-queue names the queue's idle trigger watches (nil = all).
+// When set, and the worker reports its activity per sub-queue, only tasks of those
+// sub-queues make the instance busy and reset its idle clock: an instance working on the
+// others can be scaled down. It is drained first, so its in-flight task still finishes.
+func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *workerHeartbeat, queueActive int, idleWatch []string, now time.Time) instanceView {
 	fresh := hb != nil && now.Unix()-hb.lastBeat <= workerStaleThreshold
 	ready := fresh && hb.status != workerStatusBootstrapping
 	iv := instanceView{
@@ -413,9 +453,10 @@ func (a *Autoscaler) viewInstance(ctx context.Context, inst *Instance, hb *worke
 	switch {
 	case fresh && hb.active >= 0:
 		// Worker reports its own activity: idleness is measured per instance.
-		iv.busy = hb.active > 0
-		if hb.lastTaskAt > 0 {
-			if t := time.Unix(hb.lastTaskAt, 0); t.After(iv.lastActivity) {
+		active, lastTaskAt := hb.watchedActivity(idleWatch)
+		iv.busy = active > 0
+		if lastTaskAt > 0 {
+			if t := time.Unix(lastTaskAt, 0); t.After(iv.lastActivity) {
 				iv.lastActivity = t
 				_ = a.instances.MarkJobActivity(ctx, inst.InstanceID, t)
 			}
@@ -826,7 +867,7 @@ func (a *Autoscaler) accrueCost(ctx context.Context, live []*Instance, elapsed t
 func (a *Autoscaler) warnUnknownSubQueues(parent string, asc *queueworker.AutoscaleConfig, bySub map[string]subQueueLoad) {
 	msg := ""
 	if missing := unknownSubQueues(asc, bySub); len(missing) > 0 {
-		msg = fmt.Sprintf("scale_up triggers watch sub-queues that do not exist: %s (those triggers never fire)", strings.Join(missing, ", "))
+		msg = fmt.Sprintf("triggers watch sub-queues that do not exist: %s (they count as always empty)", strings.Join(missing, ", "))
 	}
 	if a.subWarned == nil {
 		a.subWarned = make(map[string]string)
@@ -844,7 +885,7 @@ func unknownSubQueues(asc *queueworker.AutoscaleConfig, bySub map[string]subQueu
 	}
 	var missing []string
 	seen := map[string]bool{}
-	for _, t := range asc.ScaleUp {
+	for _, t := range append(append([]queueworker.ScaleTrigger(nil), asc.ScaleUp...), asc.ScaleDown...) {
 		for _, name := range t.SubQueues {
 			if _, ok := bySub[name]; !ok && !seen[name] {
 				seen[name] = true
@@ -922,8 +963,9 @@ type workerHeartbeat struct {
 	status     string
 	protected  bool
 	lastBeat   int64
-	active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
-	lastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
+	active     int                             // in-flight tasks; -1 when the worker does not report it (older workers)
+	lastTaskAt int64                           // unix seconds of last task start/finish; 0 if none or not reported
+	byQueue    map[string]health.QueueActivity // per full sub-queue name; nil for older workers
 	control    control.WorkerFields
 }
 
@@ -944,6 +986,7 @@ func (a *Autoscaler) listWorkers(ctx context.Context) ([]workerHeartbeat, error)
 			lastBeat:   w.LastBeat,
 			active:     w.Active,
 			lastTaskAt: w.LastTaskAt,
+			byQueue:    w.ByQueue,
 			control:    w.Control,
 		}
 	}

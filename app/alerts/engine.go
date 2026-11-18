@@ -236,17 +236,23 @@ func evaluateConditions(settings *queueworker.AlertSettings, queues []health.Que
 
 // checkRule evaluates one state rule; ok is false for event-only rules.
 func checkRule(rule queueworker.AlertRule, q health.QueueHealth) (active bool, msg string, ok bool) {
+	// The rule looks at the whole queue, or only at the sub-queues it lists.
+	pending, latency := q.Load(rule.SubQueues)
+	scope := ""
+	if len(rule.SubQueues) > 0 {
+		scope = " in " + strings.Join(rule.SubQueues, ", ")
+	}
 	switch rule.Type {
 	case queueworker.AlertNoWorkers:
-		active = q.Workers == 0 && (q.Pending > 0 || rule.WhenIdle)
-		return active, fmt.Sprintf("no live worker is serving the queue (%d job(s) pending)", q.Pending), true
+		active = q.Workers == 0 && (pending > 0 || rule.WhenIdle)
+		return active, fmt.Sprintf("no live worker is serving the queue (%d job(s) pending%s)", pending, scope), true
 	case queueworker.AlertLatency:
 		max := rule.MaxLatencyDuration()
-		active = q.Pending > 0 && max > 0 && q.Latency > max
-		return active, fmt.Sprintf("oldest pending job has waited %s (threshold %s)", roundDuration(q.Latency), max), true
+		active = pending > 0 && max > 0 && latency > max
+		return active, fmt.Sprintf("oldest pending job%s has waited %s (threshold %s)", scope, roundDuration(latency), max), true
 	case queueworker.AlertPending:
-		active = rule.Threshold > 0 && q.Pending > rule.Threshold
-		return active, fmt.Sprintf("%d jobs pending (threshold %d)", q.Pending, rule.Threshold), true
+		active = rule.Threshold > 0 && pending > rule.Threshold
+		return active, fmt.Sprintf("%d jobs pending%s (threshold %d)", pending, scope, rule.Threshold), true
 	case queueworker.AlertWorkerUnhealthy:
 		active = len(q.UnhealthyWorkers) > 0
 		return active, fmt.Sprintf("%d unhealthy worker(s): %s", len(q.UnhealthyWorkers), strings.Join(q.UnhealthyWorkers, ", ")), true

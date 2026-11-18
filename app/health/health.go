@@ -5,6 +5,7 @@ package health
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -31,7 +32,16 @@ type Worker struct {
 	LastBeat   int64 // unix seconds
 	Active     int   // in-flight tasks; -1 when the worker does not report it (older workers)
 	LastTaskAt int64 // unix seconds of last task start/finish; 0 if none or not reported
-	Control    control.WorkerFields
+	// ByQueue is the same activity per full sub-queue name ("activity" field); nil when
+	// the worker does not report it (older workers).
+	ByQueue map[string]QueueActivity
+	Control control.WorkerFields
+}
+
+// QueueActivity is a worker's activity on one sub-queue.
+type QueueActivity struct {
+	Active     int   `json:"active"`       // in-flight tasks of this sub-queue
+	LastTaskAt int64 `json:"last_task_at"` // unix seconds of its last task start/finish; 0 if none
 }
 
 // Fresh reports whether the worker heartbeated within StaleAfter of now.
@@ -58,6 +68,12 @@ func ParseWorker(id string, data map[string]string) Worker {
 	}
 	if t, err := strconv.ParseInt(data["last_task_at"], 10, 64); err == nil {
 		w.LastTaskAt = t
+	}
+	if raw := data["activity"]; raw != "" {
+		var byQueue map[string]QueueActivity
+		if err := json.Unmarshal([]byte(raw), &byQueue); err == nil && byQueue != nil {
+			w.ByQueue = byQueue
+		}
 	}
 	w.Control = control.ParseWorkerFields(data)
 	return w
@@ -103,10 +119,33 @@ type QueueHealth struct {
 	Pending          int                           `json:"pending"`
 	Active           int                           `json:"active"`
 	Latency          time.Duration                 `json:"latency"` // oldest pending job across sub-queues
+	BySub            map[string]SubQueueLoad       `json:"-"`       // per sub-queue load, by short name
 	Paused           bool                          `json:"paused"`  // every sub-queue is paused
 	Workers          int                           `json:"workers"` // live workers serving the queue
 	UnhealthyWorkers []string                      `json:"unhealthy_workers,omitempty"`
 	Deployment       *queueworker.DeploymentConfig `json:"-"`
+}
+
+// SubQueueLoad is the pending load of one sub-queue.
+type SubQueueLoad struct {
+	Pending int
+	Latency time.Duration
+}
+
+// Load returns the pending count and oldest-pending age a rule looks at: the whole queue,
+// or only the listed sub-queues (short names). An unknown sub-queue counts as empty.
+func (q QueueHealth) Load(subQueues []string) (pending int, latency time.Duration) {
+	if len(subQueues) == 0 {
+		return q.Pending, q.Latency
+	}
+	for _, name := range subQueues {
+		l := q.BySub[name]
+		pending += l.Pending
+		if l.Latency > latency {
+			latency = l.Latency
+		}
+	}
+	return pending, latency
 }
 
 // QueueSource lists the configured queues.
@@ -169,6 +208,11 @@ func (c *Collector) Collect(ctx context.Context, now time.Time) ([]QueueHealth, 
 				pausedAll = false // queue not created in Redis yet: nothing pending
 				continue
 			}
+			short := full[strings.LastIndex(full, ".")+1:]
+			if qh.BySub == nil {
+				qh.BySub = map[string]SubQueueLoad{}
+			}
+			qh.BySub[short] = SubQueueLoad{Pending: info.Pending, Latency: info.Latency}
 			qh.Pending += info.Pending
 			qh.Active += info.Active
 			if info.Latency > qh.Latency {

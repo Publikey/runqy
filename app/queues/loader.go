@@ -183,8 +183,11 @@ func (c *QueueWorkersYAML) Validate() error {
 			if err := ValidateQueueName(sq.Name); err != nil {
 				return fmt.Errorf("queue '%s': sub_queues[%d]: %w", queueName, i, err)
 			}
-			if sq.Priority == 0 {
+			if sq.Priority == nil {
 				return fmt.Errorf("queue '%s': sub_queues[%d].priority is required", queueName, i)
+			}
+			if *sq.Priority < 0 {
+				return fmt.Errorf("queue '%s': sub_queues[%d].priority cannot be negative (0 = idle-only)", queueName, i)
 			}
 		}
 
@@ -224,6 +227,9 @@ func (c *QueueWorkersYAML) Validate() error {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}
 		if err := q.Alerts.Validate(); err != nil {
+			return fmt.Errorf("queue '%s': %w", queueName, err)
+		}
+		if err := q.Alerts.ValidateSubQueues(subNames); err != nil {
 			return fmt.Errorf("queue '%s': %w", queueName, err)
 		}
 	}
@@ -272,7 +278,7 @@ func (q *QueueYAML) ToQueueAndSubQueues(baseName string) (*Queue, []SubQueue) {
 		for _, sq := range q.SubQueues {
 			subQueues = append(subQueues, SubQueue{
 				Name:     sq.Name,
-				Priority: sq.Priority,
+				Priority: subQueuePriority(sq),
 				Enabled:  true,
 			})
 		}
@@ -320,7 +326,7 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 		for _, sq := range q.SubQueues {
 			cfg := &QueueConfig{
 				Name:     BuildFullQueueName(baseName, sq.Name),
-				Priority: sq.Priority,
+				Priority: subQueuePriority(sq),
 
 				Deployment: deployment,
 			}
@@ -338,4 +344,13 @@ func (q *QueueYAML) ToQueueConfigs(baseName string) []*QueueConfig {
 	}
 
 	return configs
+}
+
+// subQueuePriority returns the sub-queue's priority; a missing one (rejected by Validate)
+// keeps the historical default of 1 rather than silently becoming idle-only.
+func subQueuePriority(sq SubQueueYAML) int {
+	if sq.Priority == nil {
+		return 1
+	}
+	return *sq.Priority
 }

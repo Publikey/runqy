@@ -20,7 +20,7 @@ type QueueConfigListResponse struct {
 // CreateQueueConfigRequest is the request body for creating a queue config
 type CreateQueueConfigRequest struct {
 	Name       string                       `json:"name"`
-	Priority   int                          `json:"priority"`
+	Priority   *int                         `json:"priority"` // required; 0 = idle-only sub-queue
 	Deployment *queueworker.DeploymentConfig `json:"deployment,omitempty"`
 }
 
@@ -138,14 +138,14 @@ func newCreateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 			return
 		}
 
-		log.Printf("[QUEUE-CONFIG] Create request: name=%s, priority=%d, hasDeployment=%v", req.Name, req.Priority, req.Deployment != nil)
+		log.Printf("[QUEUE-CONFIG] Create request: name=%s, hasDeployment=%v", req.Name, req.Deployment != nil)
 
 		if req.Name == "" {
 			writeJSONError(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		if req.Priority < 1 {
-			writeJSONError(w, "priority must be at least 1", http.StatusBadRequest)
+		if req.Priority == nil || *req.Priority < 0 {
+			writeJSONError(w, "priority is required and cannot be negative (0 = idle-only)", http.StatusBadRequest)
 			return
 		}
 
@@ -186,7 +186,7 @@ func newCreateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 		now := time.Now().Unix()
 		cfg := &queueworker.QueueConfig{
 			Name:       req.Name,
-			Priority:   req.Priority,
+			Priority:   *req.Priority,
 			Deployment: req.Deployment,
 			CreatedAt:  now,
 			UpdatedAt:  now,
@@ -209,7 +209,7 @@ func newCreateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 			message = "Queue updated successfully"
 		}
 
-		log.Printf("[QUEUE-CONFIG] %s: %s (priority=%d)", message, req.Name, req.Priority)
+		log.Printf("[QUEUE-CONFIG] %s: %s (priority=%d)", message, req.Name, *req.Priority)
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -263,14 +263,18 @@ func newUpdateQueueConfigHandlerFunc(store *queueworker.Store) http.HandlerFunc 
 		// Update the config
 		cfg := &queueworker.QueueConfig{
 			Name:       name,
-			Priority:   req.Priority,
+			Priority:   existing.Priority,
 			Deployment: req.Deployment,
 			CreatedAt:  existing.CreatedAt,
 			UpdatedAt:  time.Now().Unix(),
 		}
 
-		if cfg.Priority < 1 {
-			cfg.Priority = existing.Priority
+		if req.Priority != nil {
+			if *req.Priority < 0 {
+				writeJSONError(w, "priority cannot be negative (0 = idle-only)", http.StatusBadRequest)
+				return
+			}
+			cfg.Priority = *req.Priority
 		}
 
 		if err := store.Save(ctx, cfg); err != nil {

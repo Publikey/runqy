@@ -108,11 +108,24 @@ func (f *FieldSchema) IsRequired() bool {
 	return *f.Required
 }
 
-// SubQueueYAML represents a sub-queue with its own name and priority
+// SubQueueYAML represents a sub-queue with its own name and priority.
+//
+// Priority is required. From 1 up it is the sub-queue's weight in the workers' draw. An
+// explicit 0 makes the sub-queue idle-only: a worker takes its tasks only when every other
+// queue it listens on (priority >= 1) is empty (see IdleOnlyPriority). Nothing else treats
+// it differently: workers of the parent queue listen on it like on any sub-queue, and it
+// counts for autoscaling and alerts unless their triggers / rules list the sub-queues to
+// watch (`sub_queues`) without it.
 type SubQueueYAML struct {
 	Name     string `yaml:"name"`
-	Priority int    `yaml:"priority"`
+	Priority *int   `yaml:"priority"`
 }
+
+// IdleOnlyPriority is the priority of an idle-only sub-queue: served by spare capacity only.
+const IdleOnlyPriority = 0
+
+// IsIdleOnly reports whether the sub-queue is idle-only (priority 0).
+func (sq SubQueue) IsIdleOnly() bool { return sq.Priority <= IdleOnlyPriority }
 
 // LimitsConfig holds per-queue task lifecycle overrides (resolved at enqueue and stamped onto
 // each task). Empty/nil fields fall back to the server-global defaults. Durations are Go
