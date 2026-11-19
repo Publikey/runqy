@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestVastAIFactoryValidation(t *testing.T) {
@@ -36,6 +37,8 @@ type fakeVast struct {
 	offers    map[string]string        // gpu_name eq value -> offers JSON (default: two 4090 offers)
 	create    map[string]interface{}
 	createURL string
+	rentCalls []string        // every PUT /asks/{id}/ path, in order
+	goneAsks  map[string]bool // offer ids the marketplace lists but refuses to rent
 	deleted   []string
 	instances map[string]string // id -> label
 	status    map[string]string // id -> actual_status
@@ -63,6 +66,12 @@ func (f *fakeVast) handler(t *testing.T) http.HandlerFunc {
 			}
 			w.Write([]byte(`{"offers":[{"id":98765,"machine_id":54116,"dph_total":0.31,"gpu_name":"RTX 4090"},{"id":11111,"machine_id":777,"dph_total":0.45,"gpu_name":"RTX 4090"}]}`))
 		case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/asks/"):
+			f.rentCalls = append(f.rentCalls, r.URL.Path)
+			if id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/asks/"), "/"); f.goneAsks[id] {
+				w.WriteHeader(http.StatusBadRequest)
+				fmt.Fprintf(w, `{"success":false,"error":"invalid_args","msg":"error 404/3603: no_such_ask  Instance type by id %s is not available.","ask_id":%s}`, id, id)
+				return
+			}
 			f.createURL = r.URL.Path
 			b, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(b, &f.create)
@@ -542,5 +551,73 @@ func TestVastAIAvoidHostExcludesMachine(t *testing.T) {
 	}
 	if fmt.Sprint(f.search["machine_id"]) != fmt.Sprint(map[string]interface{}{"notin": []interface{}{"54116"}}) {
 		t.Fatalf("machine_id filter = %v, want notin [54116]", f.search["machine_id"])
+	}
+}
+
+// The search index lags behind rentals: the cheapest offer can be listed but already
+// taken. Provision moves on to the next offer and does not come back to the dead one.
+func TestVastAISkipsOffersThatAreGone(t *testing.T) {
+	f, p := newFakeVast(t)
+	f.goneAsks = map[string]bool{"98765": true}
+	ctx := context.Background()
+	spec := InstanceSpec{Queue: "q", Image: "img"}
+
+	rented, err := p.Provision(ctx, spec)
+	if err != nil {
+		t.Fatalf("provision failed although a second offer was rentable: %v", err)
+	}
+	if fmt.Sprint(f.rentCalls) != "[/asks/98765/ /asks/11111/]" {
+		t.Fatalf("rent calls = %v, want the cheapest offer then the next one", f.rentCalls)
+	}
+	if rented.PricePerHour != 0.45 {
+		t.Errorf("price = %v, want that of the offer actually rented (0.45)", rented.PricePerHour)
+	}
+
+	// The next provisioning does not try the dead offer again.
+	f.rentCalls = nil
+	if _, err := p.Provision(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(f.rentCalls) != "[/asks/11111/]" {
+		t.Fatalf("rent calls = %v, want the dead offer skipped", f.rentCalls)
+	}
+
+	// Once the skip expires the offer is considered again.
+	vp := p.(*vastAIProvider)
+	vp.mu.Lock()
+	vp.staleAsks["98765"] = time.Now().Add(-time.Second)
+	vp.mu.Unlock()
+	f.goneAsks, f.rentCalls = nil, nil
+	if _, err := p.Provision(ctx, spec); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(f.rentCalls) != "[/asks/98765/]" {
+		t.Fatalf("rent calls = %v, want the cheapest offer again after the skip expired", f.rentCalls)
+	}
+}
+
+func TestVastAIAllOffersGone(t *testing.T) {
+	f, p := newFakeVast(t)
+	f.goneAsks = map[string]bool{"98765": true, "11111": true}
+
+	_, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"})
+	if err == nil || !strings.Contains(err.Error(), "no_such_ask") {
+		t.Fatalf("err = %v, want the marketplace's no_such_ask error", err)
+	}
+	if len(f.rentCalls) != 2 {
+		t.Fatalf("rent calls = %v, want each offer tried once", f.rentCalls)
+	}
+}
+
+// Any other rental error is returned at once: only a vanished offer is worth another try.
+func TestVastAIOtherRentErrorsAreNotRetried(t *testing.T) {
+	f, p := newFakeVast(t)
+	p.(*vastAIProvider).cfg.APIKey = "wrong"
+
+	if _, err := p.Provision(context.Background(), InstanceSpec{Queue: "q", Image: "img"}); err == nil {
+		t.Fatal("want an error with a wrong API key")
+	}
+	if len(f.rentCalls) != 0 {
+		t.Fatalf("rent calls = %v, want none", f.rentCalls)
 	}
 }

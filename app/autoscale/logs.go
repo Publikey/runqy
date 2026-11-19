@@ -10,12 +10,17 @@ import (
 )
 
 const (
-	// logsTail is how many lines are requested from the provider.
-	logsTail = 200
+	// logsTail is how many lines are requested from the provider. A single Python
+	// traceback through a deep model stack is over a hundred lines, often printed twice:
+	// a short tail shows the error but not what led to it.
+	logsTail = 1000
 	// maxSavedLogBytes bounds the logs kept in an instance's metadata (the end is kept).
-	maxSavedLogBytes = 16 << 10
-	// logsTimeout bounds a provider log fetch (Vast.ai prepares the file asynchronously).
-	logsTimeout = 20 * time.Second
+	// Every instance row is read when the status is listed, so this stays moderate.
+	maxSavedLogBytes = 64 << 10
+	// logsTimeout bounds a provider log fetch (Vast.ai prepares the file asynchronously,
+	// sometimes for more than 20 seconds). The machine is destroyed right after, so a
+	// slow capture delays the teardown by at most this long.
+	logsTimeout = 45 * time.Second
 )
 
 // ErrLogsUnsupported is returned when the instance's provider cannot return logs.

@@ -74,6 +74,10 @@ type vastAIProvider struct {
 	started     map[string]bool      // instance id -> its container reached "running"
 	badMachines map[string]time.Time // machine id -> excluded until
 	state       StateStore           // optional: persists the three maps above
+
+	// Offers the marketplace still lists but refuses to rent ("no_such_ask"): skipped
+	// for a few minutes, in memory only (they are gone long before a restart matters).
+	staleAsks map[string]time.Time // offer id -> skipped until
 }
 
 // vastState is what the provider persists through its StateStore.
@@ -146,6 +150,15 @@ func (p *vastAIProvider) saveState(ctx context.Context) {
 // its worker never became ready.
 const badMachineTTL = 24 * time.Hour
 
+// staleAskTTL is how long an offer is skipped after the marketplace refused to rent it.
+// The search index lags behind rentals, so the cheapest offer can stay listed for a
+// while after someone else took it.
+const staleAskTTL = 10 * time.Minute
+
+// maxRentAttempts bounds how many offers one Provision call tries when the cheapest
+// ones turn out to be gone.
+const maxRentAttempts = 3
+
 func newVastAIProvider(raw json.RawMessage) (Provider, error) {
 	var cfg vastConfig
 	if len(raw) > 0 {
@@ -165,6 +178,7 @@ func newVastAIProvider(raw json.RawMessage) (Provider, error) {
 		placed:      map[string]string{},
 		started:     map[string]bool{},
 		badMachines: map[string]time.Time{},
+		staleAsks:   map[string]time.Time{},
 	}, nil
 }
 
@@ -211,11 +225,41 @@ func (p *vastAIProvider) Provision(ctx context.Context, spec InstanceSpec) (Prov
 		return Provisioned{}, err
 	}
 
-	offer, err := p.cheapestOffer(ctx, gpuNames, maxPrice, disk, spec)
-	if err != nil {
-		return Provisioned{}, err
+	// The cheapest offer is sometimes already gone: skip it and try the next one, instead
+	// of failing the scale-up and picking the same dead offer again on the next attempt.
+	var lastErr error
+	for attempt := 0; attempt < maxRentAttempts; attempt++ {
+		offer, err := p.cheapestOffer(ctx, gpuNames, maxPrice, disk, spec)
+		if err != nil {
+			if lastErr != nil {
+				return Provisioned{}, lastErr // nothing else to rent: report why the best offer failed
+			}
+			return Provisioned{}, err
+		}
+		rented, err := p.rent(ctx, offer, spec, disk, env)
+		if err == nil {
+			return rented, nil
+		}
+		if !isStaleAsk(err) {
+			return Provisioned{}, err
+		}
+		log.Printf("[AUTOSCALE] vastai: offer %s (%s, $%.3f/h) is no longer available, skipping it for %s", offer.ID, offer.GPUName, offer.DPHTotal, staleAskTTL)
+		p.mu.Lock()
+		p.staleAsks[offer.ID.String()] = time.Now().Add(staleAskTTL)
+		p.mu.Unlock()
+		lastErr = err
 	}
+	return Provisioned{}, lastErr
+}
 
+// isStaleAsk reports whether a rental failed because the offer no longer exists.
+func isStaleAsk(err error) bool {
+	he, ok := err.(*httpError)
+	return ok && strings.Contains(he.body, "no_such_ask")
+}
+
+// rent creates an instance from one offer.
+func (p *vastAIProvider) rent(ctx context.Context, offer vastOffer, spec InstanceSpec, disk int, env string) (Provisioned, error) {
 	body := map[string]interface{}{
 		"image":        spec.Image,
 		"disk":         disk,
@@ -293,9 +337,16 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, m
 			lastErr = err // another model may still have offers
 			continue
 		}
-		if len(offers) > 0 && (best == nil || offers[0].DPHTotal < best.DPHTotal) {
-			o := offers[0]
-			best = &o
+		// Offers come cheapest first: take the first one not known to be gone.
+		for i := range offers {
+			if p.isStale(offers[i].ID.String()) {
+				continue
+			}
+			if best == nil || offers[i].DPHTotal < best.DPHTotal {
+				o := offers[i]
+				best = &o
+			}
+			break
 		}
 	}
 	if best != nil {
@@ -306,6 +357,21 @@ func (p *vastAIProvider) cheapestOffer(ctx context.Context, gpuNames []string, m
 	}
 	return vastOffer{}, fmt.Errorf("vastai: no offers match (gpu=%s max_price=%.2f disk=%d min_ram_gb=%d min_vcpu=%d min_download_mbps=%g)",
 		describeGPUs(gpuNames), maxPrice, disk, spec.MinRAMGB, spec.MinVCPU, p.minDownloadMbps(spec))
+}
+
+// isStale reports whether an offer was refused recently (and forgets expired entries).
+func (p *vastAIProvider) isStale(askID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	until, ok := p.staleAsks[askID]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(p.staleAsks, askID)
+		return false
+	}
+	return true
 }
 
 // describeGPUs renders the searched GPU models for error messages.
