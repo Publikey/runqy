@@ -13,9 +13,10 @@ import (
 
 // Vast.ai serves logs asynchronously: PUT /instances/request_logs/{id}/ returns a
 // pre-signed result_url, and the file appears there a moment later (the official CLI
-// polls it 30 times, 0.3 s apart).
+// polls it 30 times, 0.3 s apart). In production the file has taken longer than 15 s
+// to appear, so this waits up to 30 s; the caller's context bounds the whole fetch.
 const (
-	vastLogsPollAttempts = 30
+	vastLogsPollAttempts = 60
 	vastLogsPollInterval = 500 * time.Millisecond
 	vastLogsMaxBytes     = 1 << 20
 )
