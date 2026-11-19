@@ -96,6 +96,14 @@ type Options struct {
 	//
 	// This field is optional. Used by database info handler to avoid os.Getenv.
 	Config *config.Config
+
+	// Version, GitCommit and BuildDate identify the running server build,
+	// shown in the dashboard.
+	//
+	// These fields are optional.
+	Version   string
+	GitCommit string
+	BuildDate string
 }
 
 // HTTPHandler is a http.Handler for asynqmon application.
@@ -286,6 +294,7 @@ func muxRouter(opts Options, rc redis.UniversalClient, inspector *asynq.Inspecto
 
 	// System environment variables (read-only, secrets masked).
 	api.HandleFunc("/system/env", newSystemEnvHandlerFunc(opts.Config)).Methods("GET")
+	api.HandleFunc("/system/version", newSystemVersionHandlerFunc(opts)).Methods("GET")
 
 	// Playground: manual task enqueue from the dashboard. Requires a plain
 	// *redis.Client (EnqueueGenericTask stamps task-hash fields directly).
