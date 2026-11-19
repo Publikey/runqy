@@ -344,6 +344,9 @@ func runServe(cmd *cobra.Command, args []string) {
 			ControlAPI:             controlAPI,
 			PrometheusAddress:      cfg.PrometheusAddress,
 			Config:                 cfg,
+			Version:                Version,
+			GitCommit:              GitCommit,
+			BuildDate:              BuildDate,
 		})
 		if monErr != nil {
 			log.Fatalf("Failed to initialize monitoring UI: %v", monErr)

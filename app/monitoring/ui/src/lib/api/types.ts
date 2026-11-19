@@ -206,6 +206,12 @@ export interface SystemEnvInfo {
 	vars: EnvVar[];
 }
 
+export interface SystemVersionInfo {
+	version: string;
+	commit?: string;
+	build_date?: string;
+}
+
 // Metrics types (Prometheus data)
 export interface PrometheusResult {
 	status: string;

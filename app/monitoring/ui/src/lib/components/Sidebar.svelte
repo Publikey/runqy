@@ -25,10 +25,41 @@
 	import { settings } from '$lib/stores/settings';
 	import { authStore } from '$lib/stores/auth';
 	import { Logo, LiveIndicator } from '$lib/components/ui';
+	import { onMount } from 'svelte';
+	import { getSystemVersion } from '$lib/api/client';
+	import type { SystemVersionInfo } from '$lib/api/types';
 
 	let { mobileOpen = false }: { mobileOpen?: boolean } = $props();
 
 	const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
+	// Server build, shown under the logo. Release numbers get a "v" prefix;
+	// "dev" and branch names are shown as they are.
+	let serverVersion = $state<SystemVersionInfo | null>(null);
+	let versionLabel = $derived.by(() => {
+		const v = serverVersion?.version;
+		if (!v) return '';
+		return /^\d/.test(v) ? `v${v}` : v;
+	});
+	let versionTitle = $derived(
+		[
+			`runqy server ${versionLabel}`,
+			serverVersion?.commit && serverVersion.commit !== 'unknown' ? `commit ${serverVersion.commit}` : '',
+			serverVersion?.build_date && serverVersion.build_date !== 'unknown'
+				? `built ${serverVersion.build_date}`
+				: ''
+		]
+			.filter(Boolean)
+			.join(' · ')
+	);
+
+	onMount(() => {
+		getSystemVersion()
+			.then((v) => (serverVersion = v))
+			.catch(() => {
+				// Older server without the endpoint: show nothing.
+			});
+	});
 
 	async function handleLogout() {
 		await authStore.logout();
@@ -89,9 +120,16 @@
 	<!-- Brand + collapse -->
 	<div class="flex h-14 shrink-0 items-center gap-2 {iconOnly ? 'justify-center px-2' : 'justify-between pl-4 pr-2.5'}">
 		{#if !iconOnly}
-			<a href="{base}/" class="rounded-md" aria-label="runqy dashboard">
-				<Logo size={22} wordmark />
-			</a>
+			<div class="flex min-w-0 flex-col">
+				<a href="{base}/" class="rounded-md" aria-label="runqy dashboard">
+					<Logo size={22} wordmark />
+				</a>
+				{#if versionLabel}
+					<span class="truncate pl-8 text-2xs leading-none text-fg-faint" title={versionTitle}>
+						{versionLabel}
+					</span>
+				{/if}
+			</div>
 		{/if}
 		<button
 			type="button"

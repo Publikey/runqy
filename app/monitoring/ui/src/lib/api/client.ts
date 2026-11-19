@@ -13,6 +13,7 @@ import type {
 	DailyStats,
 	DatabaseInfo,
 	SystemEnvInfo,
+	SystemVersionInfo,
 	VaultSummary,
 	VaultDetail,
 	MetricsResponse,
@@ -249,6 +250,11 @@ export async function getDatabaseInfo(): Promise<DatabaseInfo> {
 // System environment variables (read-only, secrets masked)
 export async function getSystemEnv(): Promise<SystemEnvInfo> {
 	return fetchJson(`${BASE_URL}/system/env`);
+}
+
+// Build of the running runqy server
+export async function getSystemVersion(): Promise<SystemVersionInfo> {
+	return fetchJson(`${BASE_URL}/system/version`);
 }
 
 // Stats API
